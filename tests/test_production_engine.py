@@ -362,6 +362,77 @@ def test_faction_blueprints_get_no_research_baseline_at_all(tree):
     assert (material_mult, time_mult) == (1.0, 1.0)
 
 
+# ------------------------------------------------------- owned-BPO ME/TE
+def _own_bpo(blueprint_type_id: int, me: int, te: int, runs: int = -1, quantity: int = 1):
+    """One owned blueprint row, as production/esi_sync.py would have written it.
+    runs = -1 is ESI's Original marker; a copy carries a real run count and
+    quantity -2 instead."""
+    storage.replace_blueprints(
+        "character_blueprints",
+        [(500 + blueprint_type_id, blueprint_type_id, 60003760, "Hangar", quantity, me, te, runs)],
+    )
+
+
+def test_a_researched_owned_bpo_replaces_the_perfect_research_assumption(tree):
+    """Tech I's flat baseline assumes ME10/TE20. Once an ESI sync has recorded
+    the BPO you actually own, its real research level wins."""
+    _own_bpo(SHIP_BP, me=4, te=8)
+
+    material_mult, time_mult, _rate = engine._activity_mods("Tech I", SHIP, _cfg(), {}, SHIP_BP)
+
+    assert (material_mult, time_mult) == pytest.approx((0.96, 0.92))
+
+
+def test_without_a_synced_blueprint_the_flat_baseline_still_applies(tree):
+    material_mult, time_mult, _rate = engine._activity_mods("Tech I", SHIP, _cfg(), {}, SHIP_BP)
+
+    assert (material_mult, time_mult) == pytest.approx((0.90, 0.80))
+
+
+def test_owned_bpo_me_is_ignored_without_a_blueprint_id(tree):
+    """The blueprint_id argument is what makes the lookup possible at all - a
+    call site with none to hand keeps the flat baseline."""
+    _own_bpo(SHIP_BP, me=0, te=0)
+
+    material_mult, _time_mult, _rate = engine._activity_mods("Tech I", SHIP, _cfg(), {})
+
+    assert material_mult == pytest.approx(0.90)
+
+
+def test_a_reaction_never_uses_owned_bpo_research(tree):
+    """A real EVE mechanic, not a simplification: reaction formulas have no
+    research at all, so an owned row must not change anything."""
+    _own_bpo(SHIP_BP, me=0, te=0)
+
+    material_mult, _time_mult, _rate = engine._activity_mods("Reaction", SHIP, _cfg(), {}, SHIP_BP)
+
+    assert material_mult == pytest.approx(ACTIVITY_MODS["Reaction"].material_multiplier)
+
+
+def test_an_unresearched_owned_bpo_raises_the_real_build_cost(tree):
+    """The end-to-end proof that this reaches a real number: the same component
+    costs more to build once the ME0 BPO you actually own replaces the assumed
+    perfectly-researched one, because 100 minerals are consumed instead of 90."""
+    baseline = engine._unit_cost(COMPONENT, _cfg(), HOME, {}, {}, {}, {}, COST_INDICES, ADJUSTED)
+    assert baseline == pytest.approx(_component_build_cost())
+
+    _own_bpo(COMPONENT_BP, me=0, te=0)
+    owned = engine._unit_cost(COMPONENT, _cfg(), HOME, {}, {}, {}, {}, COST_INDICES, ADJUSTED)
+
+    # Only the material half moves - the job fee is priced off ME-0 quantities
+    # either way, so it is unchanged.
+    assert owned == pytest.approx(_component_build_cost() + 10 * 5.0)
+
+
+def test_a_blueprint_copy_never_overrides_the_baseline(tree):
+    """A BPC's ME/TE was set by whoever copied it, not by your own research."""
+    _own_bpo(COMPONENT_BP, me=0, te=0, runs=30, quantity=-2)
+
+    cost = engine._unit_cost(COMPONENT, _cfg(), HOME, {}, {}, {}, {}, COST_INDICES, ADJUSTED)
+
+    assert cost == pytest.approx(_component_build_cost())
+
+
 # ------------------------------------------------------------------- job cost
 def test_job_cost_rate_adds_tax_and_surcharge_on_top_of_the_scaled_index(tree):
     """EVE's real formula is index x structure_bonus + facility_tax + SCC

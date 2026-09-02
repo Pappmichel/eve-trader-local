@@ -55,7 +55,7 @@ What exists:
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
   `refresh-shortlist`, `check-unlisted-stock`, `check-undercut`,
-  `reconcile-trades`, `pipeline`.
+  `reconcile-trades`, `sync-esi`, `pipeline`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
@@ -111,6 +111,8 @@ eve-trader-local refresh-shortlist          # recompute live Profit/Day for ever
 eve-trader-local check-unlisted-stock       # stock at the structure with no sell order on it
 eve-trader-local check-undercut             # your own listings a competitor has beaten on price
 eve-trader-local reconcile-trades           # match realized buy/sell pairs, compute P&L
+eve-trader-local auth --role producer       # authorize an industry character (assets/blueprints/jobs)
+eve-trader-local sync-esi                   # refresh what your producers own: assets, BPOs, jobs
 eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile
 eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
 ```

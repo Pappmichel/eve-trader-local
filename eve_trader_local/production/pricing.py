@@ -25,9 +25,12 @@ from ..errors import ActionError
 from ..esi_client import ESIClient, ESIError, OrderStats
 from ..goonmetrics_client import CurrentPrice, GoonmetricsClient
 from .config import PRODUCTION_CONFIG, ProductionConfig
+# Defined by esi_sync, which owns producer-character registration - same
+# direction as the parent repo, where pricing.py reaches into esi_sync for the
+# producer role rather than keeping its own copy of the prefix.
+from .esi_sync import PRODUCER_ROLE_PREFIX  # noqa: F401 - re-exported for callers
 
 JITA_MARKET = "jita"
-PRODUCER_ROLE_PREFIX = "producer"
 
 
 def _goonmetrics_prices(market: str, type_ids: list[int],

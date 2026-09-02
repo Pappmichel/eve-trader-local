@@ -5,10 +5,12 @@ selling it would leave.
 
 ME/TE stacks in two independently-stacking layers (see constants.py):
 1. The blueprint/BPC's own research level:
-   - Tech I: a flat "perfect BPO research" (ME10/TE20, constants.ACTIVITY_MODS)
-     baseline. The parent additionally prefers your *actual* owned BPO's real
-     ME/TE where you own the blueprint; that needs ESI-synced character/corp
-     blueprint data, which this repo has no equivalent of yet - see SYNC.md.
+   - Tech I: your *actual* owned BPO's researched ME/TE where you own the
+     blueprint (storage.get_owned_bpo_best_me_te via _owned_bpo_mods, best
+     across every owned Original - a BPC's ME/TE was fixed by whoever copied
+     it, so copies don't count), falling back to a flat "perfect BPO research"
+     (ME10/TE20, constants.ACTIVITY_MODS) baseline when you don't own it or
+     haven't run production/esi_sync.py yet.
    - Reaction: flat base (constants.ACTIVITY_MODS), no research at all - a real
      EVE mechanic (reactions have no BPO research), not a simplification.
    - Faction/Storyline/Officer/Deadspace: flat 1.00/1.00, also a real mechanic -
@@ -292,28 +294,58 @@ def _job_cost_rate(activity: str, type_id: int, cfg: ProductionConfig,
 
 
 # ------------------------------------------------------------ ME/TE stacking
+def _owned_bpo_mods(blueprint_id: Optional[int]) -> Optional[tuple[float, float]]:
+    """Real (material_multiplier, time_multiplier) from an owned BPO's actual
+    researched ME/TE (storage.get_owned_bpo_best_me_te, populated by
+    production/esi_sync.py), or None when you don't own `blueprint_id` - in
+    which case _activity_mods falls back to the flat perfect-research baseline.
+
+    Only meaningful for Tech I: Reaction has no BPO research at all, and Tech
+    II/III take their ME/TE from the decryptor the BPC was invented with
+    (_tech_ii_mods), never from a BPO's own stat."""
+    if blueprint_id is None:
+        return None
+    best = storage.get_owned_bpo_best_me_te(blueprint_id)
+    if best is None:
+        return None
+    me, te = best
+    return (1 - me / 100, 1 - te / 100)
+
+
 def _activity_mods(activity: str, type_id: int, cfg: ProductionConfig,
-                   cost_indices: CostIndices) -> tuple[float, float, float]:
+                   cost_indices: CostIndices,
+                   blueprint_id: Optional[int] = None) -> tuple[float, float, float]:
     """(material_multiplier, time_multiplier, job_cost_rate) for every activity
     except Tech II/III, with your structure/rig bonus stacked on top of the
     blueprint's own research baseline and a live system-cost-index-derived job
     cost rate. Tech II doesn't use this for ME/TE - see _tech_ii_mods, which
     applies the same structure/rig multiplier to its per-item decryptor result.
 
-    Tech I's baseline assumes a perfectly researched BPO (ME10/TE20); the
-    parent prefers your real owned BPO's ME/TE where you own it, which needs
-    ESI-synced blueprint data this repo doesn't have yet. Reaction and the four
-    meta-group activities never consult owned-BPO data even in the parent:
-    reactions have no BPO research at all, and Faction/Storyline/Officer/
-    Deadspace blueprints are fixed at ME0/TE0 and can't be researched - their
-    flat ACTIVITY_MODS entry is the one correct value, not a fallback."""
+    For Tech I this prefers your actual owned BPO's researched ME/TE
+    (_owned_bpo_mods, which needs `blueprint_id`) over the flat perfect-
+    research (ME10/TE20) baseline in ACTIVITY_MODS - a caller holding a
+    blueprint_id should always pass it; it stays optional only for the odd call
+    site that has none to hand.
+
+    Reaction and the four meta-group activities never consult owned-BPO data at
+    all: reactions have no BPO research, and Faction/Storyline/Officer/
+    Deadspace blueprints are fixed at ME0/TE0 and cannot be researched - their
+    flat ACTIVITY_MODS entry is the one correct value, not a fallback to
+    override with owned data the way Tech I's baseline is."""
     base = ACTIVITY_MODS[activity]
     structure_profile = _structure_profile(activity, type_id)
     structure_type, rig_tier = _structure_rig(structure_profile, cfg)
     security_multiplier = _security_multiplier_for(structure_profile, cfg)
     _, me_mult, te_mult = structure_rig_multiplier(structure_type, rig_tier, security_multiplier)
     job_cost_rate = _job_cost_rate(activity, type_id, cfg, cost_indices)
-    return base.material_multiplier * me_mult, base.time_multiplier * te_mult, job_cost_rate
+
+    base_material_mult, base_time_mult = base.material_multiplier, base.time_multiplier
+    if activity == "Tech I":
+        owned = _owned_bpo_mods(blueprint_id)
+        if owned is not None:
+            base_material_mult, base_time_mult = owned
+
+    return base_material_mult * me_mult, base_time_mult * te_mult, job_cost_rate
 
 
 T2Mods = tuple[float, float, Optional[str], Optional[InventionResult]]
@@ -395,7 +427,8 @@ def _material_mult_for(type_id: int, activity: str, bp: tuple[int, int, float],
         material_mult, _, decryptor_name, _ = _tech_ii_mods(
             type_id, blueprint_id, activity_id, cfg, home, jita, selected_decryptors, t2_memo)
         return material_mult, _job_cost_rate("Tech II", type_id, cfg, cost_indices), decryptor_name
-    material_mult, _, job_cost_rate = _activity_mods(activity, type_id, cfg, cost_indices)
+    material_mult, _, job_cost_rate = _activity_mods(activity, type_id, cfg, cost_indices,
+                                                     blueprint_id)
     return material_mult, job_cost_rate, None
 
 

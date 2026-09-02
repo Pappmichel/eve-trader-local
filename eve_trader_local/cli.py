@@ -10,6 +10,7 @@
     eve-trader-local refresh-shortlist
     eve-trader-local check-unlisted-stock / check-undercut
     eve-trader-local reconcile-trades
+    eve-trader-local sync-esi
     eve-trader-local pipeline [--rebuild-universe]
     eve-trader-local check-update / update
 
@@ -28,6 +29,8 @@ from . import actions, config, sde, storage, updater
 from .auth import TokenManager
 from .errors import ActionError
 from .paths import config_path, db_path
+from .production import actions as production_actions
+from .production import esi_sync
 
 
 def cmd_init_db(args: argparse.Namespace) -> None:
@@ -36,7 +39,13 @@ def cmd_init_db(args: argparse.Namespace) -> None:
 
 
 def cmd_auth(args: argparse.Namespace) -> None:
-    record = TokenManager().login(args.role)
+    # A producer character is authorized for a different set of scopes than a
+    # buyer/seller (assets, blueprints, industry jobs - see production/
+    # esi_sync.py), and EVE SSO grants exactly what the login asks for, so the
+    # role has to choose the scope list here rather than after the fact.
+    scopes = (esi_sync.PRODUCTION_SCOPES
+              if args.role == esi_sync.PRODUCER_ROLE_PREFIX else None)
+    record = TokenManager().login(args.role, scopes)
     print(f"Authorized {record.character_name} ({record.character_id}) as '{record.role}'.")
 
 
@@ -194,6 +203,19 @@ def cmd_reconcile_trades(args: argparse.Namespace) -> None:
         print(f"  {item:<40} {profit:>15,.0f} ISK")
 
 
+def cmd_sync_esi(args: argparse.Namespace) -> None:
+    print("Syncing producer assets, blueprints and industry jobs from ESI...")
+    result = production_actions.do_sync_esi()
+    for owner, summary in list(result["characters"].items()) + list(result["corporations"].items()):
+        if isinstance(summary, dict):
+            extra = summary.get("corp")
+            print(f"  {owner:<32} {summary['assets']:>7,} assets  "
+                  f"{summary['blueprints']:>6,} blueprints  {summary['industry_jobs']:>5,} jobs"
+                  + (f"  [{extra}]" if extra else ""))
+        else:
+            print(f"  {owner:<32} {summary}")
+
+
 def cmd_pipeline(args: argparse.Namespace) -> None:
     results = actions.do_pipeline(safe=args.safe, rebuild_universe=args.rebuild_universe)
     for step, result in results.items():
@@ -221,7 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-db", help="create the SQLite database/tables (idempotent)").set_defaults(func=cmd_init_db)
 
     p_auth = sub.add_parser("auth", help="run the interactive EVE SSO login for a role")
-    p_auth.add_argument("--role", required=True, help="role prefix, e.g. buyer / seller")
+    p_auth.add_argument("--role", required=True, help="role prefix: buyer / seller / producer")
     p_auth.set_defaults(func=cmd_auth)
 
     sub.add_parser("whoami", help="list authorized characters").set_defaults(func=cmd_whoami)
@@ -260,6 +282,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "reconcile-trades", help="match Jita buys against structure sells for realized profit"
     ).set_defaults(func=cmd_reconcile_trades)
+
+    sub.add_parser(
+        "sync-esi", help="refresh owned assets/blueprints/industry jobs for every producer character"
+    ).set_defaults(func=cmd_sync_esi)
 
     p_pipeline = sub.add_parser("pipeline", help="run the daily workflow (each step isolated)")
     p_pipeline.add_argument("--safe", dest="safe", action="store_true", default=True,

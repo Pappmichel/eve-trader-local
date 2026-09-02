@@ -317,6 +317,118 @@ CREATE TABLE IF NOT EXISTS shortlist_skip_streak (
     skip_since TEXT NOT NULL
 );
 
+-- ------------------------------------------- Production: ESI-synced ownership
+-- What a producer character (and their corp) actually owns right now: assets,
+-- blueprints with their real ME/TE, and industry jobs in progress. All six are
+-- "current snapshot" tables like candidate_universe/realized_trades - every
+-- sync replaces them wholesale, so a sold blueprint or a delivered job
+-- disappears instead of lingering forever (see production/esi_sync.py).
+--
+-- location_id is the item's *immediate* parent, which may itself be a
+-- container, a ship, or a corp Office rather than a station/structure -
+-- resolved_location_id is that chain walked all the way up to the outermost
+-- station/structure, computed once at sync time (see _resolve_locations) so
+-- every read filters on it directly. Resolving only one level, the parent
+-- repo's original bug, made stock inside a container inside a corp hangar
+-- read as simply absent.
+
+CREATE TABLE IF NOT EXISTS character_assets (
+    item_id              INTEGER PRIMARY KEY,
+    type_id              INTEGER,
+    location_id          INTEGER,
+    location_flag        TEXT,
+    quantity             INTEGER,
+    is_blueprint_copy    INTEGER,
+    owner_name           TEXT,
+    resolved_location_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_assets_type_resolved_location
+    ON character_assets (type_id, resolved_location_id);
+
+CREATE TABLE IF NOT EXISTS corp_assets (
+    item_id              INTEGER PRIMARY KEY,
+    type_id              INTEGER,
+    location_id          INTEGER,
+    location_flag        TEXT,
+    quantity             INTEGER,
+    is_blueprint_copy    INTEGER,
+    owner_name           TEXT,
+    resolved_location_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_corp_assets_type_resolved_location
+    ON corp_assets (type_id, resolved_location_id);
+
+CREATE TABLE IF NOT EXISTS character_industry_jobs (
+    job_id             INTEGER PRIMARY KEY,
+    activity_id        INTEGER,
+    blueprint_type_id  INTEGER,
+    product_type_id    INTEGER,
+    runs               INTEGER,
+    output_location_id INTEGER,
+    status             TEXT,
+    end_date           TEXT,
+    start_date         TEXT,
+    installer_id       INTEGER,
+    installer_name     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_industry_jobs_product_status
+    ON character_industry_jobs (product_type_id, status);
+
+CREATE TABLE IF NOT EXISTS corp_industry_jobs (
+    job_id             INTEGER PRIMARY KEY,
+    activity_id        INTEGER,
+    blueprint_type_id  INTEGER,
+    product_type_id    INTEGER,
+    runs               INTEGER,
+    output_location_id INTEGER,
+    status             TEXT,
+    end_date           TEXT,
+    start_date         TEXT,
+    installer_id       INTEGER,
+    installer_name     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_corp_industry_jobs_product_status
+    ON corp_industry_jobs (product_type_id, status);
+
+-- ESI's blueprint model overloads two columns with sentinels: runs = -1 marks
+-- an Original (a BPO, infinitely reusable), and quantity = -2 marks a copy
+-- (a BPC). Only a BPO's ME/TE reflects *your* research - a BPC's was fixed by
+-- whoever copied it - which is why get_owned_bpo_best_me_te filters on
+-- runs = -1.
+CREATE TABLE IF NOT EXISTS character_blueprints (
+    item_id              INTEGER PRIMARY KEY,
+    type_id              INTEGER,
+    location_id          INTEGER,
+    location_flag        TEXT,
+    quantity             INTEGER,
+    material_efficiency  INTEGER,
+    time_efficiency      INTEGER,
+    runs                 INTEGER,
+    resolved_location_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_character_blueprints_type_runs
+    ON character_blueprints (type_id, runs);
+
+CREATE TABLE IF NOT EXISTS corp_blueprints (
+    item_id              INTEGER PRIMARY KEY,
+    type_id              INTEGER,
+    location_id          INTEGER,
+    location_flag        TEXT,
+    quantity             INTEGER,
+    material_efficiency  INTEGER,
+    time_efficiency      INTEGER,
+    runs                 INTEGER,
+    resolved_location_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_corp_blueprints_type_runs
+    ON corp_blueprints (type_id, runs);
+
 -- Single row (id = 1): when the SDE cache was last replaced, and the ETag
 -- Fuzzwork served for the dump at that moment - compared against a fresh
 -- HEAD request to tell whether a newer dump exists without downloading it.
@@ -1137,3 +1249,187 @@ def latest_realized_trades(path: Optional[Path] = None) -> list[RealizedTrade]:
                           sell_unit_price=r["sell_unit_price"], matched_qty=r["matched_qty"],
                           realized_profit=r["realized_profit"], margin=r["margin"])
             for r in rows]
+
+
+# ------------------------------------------- Production: ESI-synced ownership
+def _resolve_locations(rows: Sequence[tuple], location_index: int = 2) -> list[int]:
+    """For each row, walks its own location_id (at `location_index`) up through
+    however many nested containers (ship cargo, corp Office, station container,
+    ...) it is parented under, to the outermost station/structure id.
+
+    `rows` supplies its own parent map (item_id at index 0 -> location_id at
+    `location_index`) - correct as long as every container a row could be
+    nested under is itself present in `rows`, true for assets (containers are
+    ordinary assets in the same per-owner table) but not for blueprints, whose
+    immediate container lives in the *asset* table instead (see
+    replace_blueprints, which builds its parent map from there).
+
+    Capped at 10 hops as a defensive bound against a cyclical edge case, not a
+    realistic EVE nesting depth."""
+    parent_of = {row[0]: row[location_index] for row in rows}
+    resolved = []
+    for row in rows:
+        root = row[location_index]
+        hops = 0
+        while root in parent_of and hops < 10:
+            root = parent_of[root]
+            hops += 1
+        resolved.append(root)
+    return resolved
+
+
+_ASSET_TABLES = ("character_assets", "corp_assets")
+_BLUEPRINT_TABLES = ("character_blueprints", "corp_blueprints")
+_JOB_TABLES = ("character_industry_jobs", "corp_industry_jobs")
+
+
+def replace_assets(table: str, rows: Sequence[tuple], path: Optional[Path] = None) -> None:
+    """`rows`: (item_id, type_id, location_id, location_flag, quantity,
+    is_blueprint_copy, owner_name). resolved_location_id is computed here, not
+    by the caller, so every caller gets it just by going through this one
+    function - see _resolve_locations."""
+    if table not in _ASSET_TABLES:
+        raise ValueError(f"unknown asset table {table!r}")
+    resolved = _resolve_locations(rows)
+    with connect(path) as conn:
+        conn.execute(f"DELETE FROM {table}")
+        conn.executemany(
+            f"INSERT INTO {table} (item_id, type_id, location_id, location_flag, quantity, "
+            "is_blueprint_copy, owner_name, resolved_location_id) VALUES (?,?,?,?,?,?,?,?)",
+            [tuple(row) + (root,) for row, root in zip(rows, resolved)],
+        )
+
+
+def replace_industry_jobs(table: str, rows: Sequence[tuple], path: Optional[Path] = None) -> None:
+    """`rows`: (job_id, activity_id, blueprint_type_id, product_type_id, runs,
+    output_location_id, status, end_date, start_date, installer_id,
+    installer_name)."""
+    if table not in _JOB_TABLES:
+        raise ValueError(f"unknown industry job table {table!r}")
+    with connect(path) as conn:
+        conn.execute(f"DELETE FROM {table}")
+        conn.executemany(
+            f"INSERT INTO {table} (job_id, activity_id, blueprint_type_id, product_type_id, runs, "
+            "output_location_id, status, end_date, start_date, installer_id, installer_name) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def replace_blueprints(table: str, rows: Sequence[tuple], path: Optional[Path] = None) -> None:
+    """`rows`: (item_id, type_id, location_id, location_flag, quantity,
+    material_efficiency, time_efficiency, runs).
+
+    resolved_location_id is resolved against the *matching asset table*
+    (character_assets for character_blueprints, corp_assets for corp_blueprints)
+    rather than against `rows` itself - a blueprint's immediate container is
+    always a regular asset, never another blueprint. This depends on that asset
+    table already being written for the same sync; production/esi_sync.py calls
+    replace_assets before replace_blueprints for each of character/corp. If the
+    asset table is empty (this function called standalone, as in tests) every
+    row simply resolves to its own unwrapped location_id."""
+    if table not in _BLUEPRINT_TABLES:
+        raise ValueError(f"unknown blueprint table {table!r}")
+    asset_table = "character_assets" if table == "character_blueprints" else "corp_assets"
+    with connect(path) as conn:
+        parent_of = dict(conn.execute(f"SELECT item_id, location_id FROM {asset_table}").fetchall())
+        conn.execute(f"DELETE FROM {table}")
+        resolved_rows = []
+        for row in rows:
+            root = row[2]  # location_id
+            hops = 0
+            while root in parent_of and hops < 10:
+                root = parent_of[root]
+                hops += 1
+            resolved_rows.append(tuple(row) + (root,))
+        conn.executemany(
+            f"INSERT INTO {table} (item_id, type_id, location_id, location_flag, quantity, "
+            "material_efficiency, time_efficiency, runs, resolved_location_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            resolved_rows,
+        )
+
+
+# Hangar divisions an item can sit in that don't count as usable stock: Asset
+# Safety needs a paid retrieval trip first, and the various delivery/market
+# flags are items in transit or already sold, not material you can start a job
+# with today.
+NON_STOCK_LOCATION_FLAGS = ("AssetSafety", "Deliveries", "CorpDeliveries", "CorpMarket")
+
+
+def esi_stock_at_location(type_id: int, location_id: Optional[int],
+                          path: Optional[Path] = None) -> float:
+    """Owned quantity of `type_id` across character + corp assets, optionally
+    filtered to one station/structure (None = everywhere, which is what a setup
+    with no home structure id configured wants). Excludes
+    NON_STOCK_LOCATION_FLAGS.
+
+    Filters on resolved_location_id, not the raw location_id column - see
+    replace_assets."""
+    flags = ",".join("?" * len(NON_STOCK_LOCATION_FLAGS))
+    total = 0.0
+    with connect(path) as conn:
+        for table in _ASSET_TABLES:
+            sql = (f"SELECT COALESCE(SUM(quantity), 0) FROM {table} WHERE type_id = ? "
+                   f"AND (location_flag IS NULL OR location_flag NOT IN ({flags}))")
+            params: tuple = (type_id, *NON_STOCK_LOCATION_FLAGS)
+            if location_id is not None:
+                sql += " AND resolved_location_id = ?"
+                params = params + (location_id,)
+            total += conn.execute(sql, params).fetchone()[0]
+    return total
+
+
+def esi_incoming_industry_qty(product_type_id: int,
+                              path: Optional[Path] = None) -> dict[str, float]:
+    """{'runs': outstanding job runs, 'jobs': job count} for `product_type_id`
+    across character + corp industry jobs. Converting runs to an output
+    quantity needs the blueprint's product qty/run (get_blueprint_for_product),
+    which is the caller's job, not this one's.
+
+    'ready' counts alongside 'active'/'paused': a finished-but-not-yet-
+    delivered job's output already exists, so treating it as nothing incoming
+    (the parent repo's original bug) understates supply and plans a rebuild of
+    something already sitting there."""
+    runs = 0.0
+    jobs = 0
+    with connect(path) as conn:
+        for table in _JOB_TABLES:
+            row = conn.execute(
+                f"SELECT COALESCE(SUM(runs), 0), COUNT(*) FROM {table} "
+                "WHERE product_type_id = ? AND status IN ('active', 'paused', 'ready')",
+                (product_type_id,),
+            ).fetchone()
+            runs += row[0]
+            jobs += row[1]
+    return {"runs": runs, "jobs": jobs}
+
+
+def get_owned_bpo_best_me_te(blueprint_type_id: int,
+                             path: Optional[Path] = None) -> Optional[tuple[int, int]]:
+    """Best (highest) ME and TE, independently, across every owned *Original*
+    of `blueprint_type_id` - character and corp blueprints together. None when
+    you don't own that BPO at all.
+
+    runs = -1 is ESI's Original marker (see the character_blueprints schema
+    comment): a BPC's ME/TE was fixed by whoever copied it, not by your own
+    research, so copies must not be considered here. Used by
+    production/engine.py's _owned_bpo_mods to price Tech I builds off your real
+    research level instead of the flat perfect-research assumption."""
+    best_me: Optional[int] = None
+    best_te: Optional[int] = None
+    with connect(path) as conn:
+        for table in _BLUEPRINT_TABLES:
+            row = conn.execute(
+                f"SELECT MAX(material_efficiency), MAX(time_efficiency) FROM {table} "
+                "WHERE type_id = ? AND runs = -1",
+                (blueprint_type_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            if row[0] is not None:
+                best_me = row[0] if best_me is None else max(best_me, row[0])
+            if row[1] is not None:
+                best_te = row[1] if best_te is None else max(best_te, row[1])
+    if best_me is None or best_te is None:
+        return None
+    return (best_me, best_te)
