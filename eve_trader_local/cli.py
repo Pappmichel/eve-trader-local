@@ -3,6 +3,7 @@
     eve-trader-local init-db
     eve-trader-local auth --role buyer
     eve-trader-local whoami
+    eve-trader-local check-update / update
 
 This is not the intended long-term interface (a native GUI is - see README);
 it exists so storage + config + auth can be proven to work together before
@@ -14,7 +15,7 @@ import argparse
 import sys
 import time
 
-from . import config, storage
+from . import config, storage, updater
 from .auth import TokenManager
 from .errors import ActionError
 from .paths import config_path, db_path
@@ -49,6 +50,41 @@ def cmd_config(args: argparse.Namespace) -> None:
         print(f"  {key} = {value!r}")
 
 
+def cmd_check_update(args: argparse.Namespace) -> None:
+    print(updater.check_for_update().summary())
+
+
+def cmd_update(args: argparse.Namespace) -> None:
+    status = updater.check_for_update()
+    if status.error:
+        # Not fatal on its own: the actual comparison the update relies on is
+        # git's, not the API's, so offer to continue rather than stopping here.
+        print(status.summary())
+    elif not status.update_available:
+        print(status.summary())
+        return
+
+    installed = updater.preflight()
+    print(f"Repository: {updater.repo_root()}")
+    print(f"Installed:  {installed}")
+    if status.latest_sha:
+        print(f"Available:  {status.latest_sha}")
+    print(
+        "\nThis will run `git reset --hard origin/main` in that directory, "
+        "discarding anything not committed there, and reinstall dependencies."
+    )
+    if input("Continue? [y/N] ").strip().lower() not in ("y", "yes"):
+        print("Aborted; nothing was changed.")
+        return
+
+    result = updater.apply_update()
+    if result.previous_sha == result.new_sha:
+        print("Already up to date; nothing was changed.")
+        return
+    print(f"Updated {result.previous_sha[:8]} -> {result.new_sha[:8]} and reinstalled dependencies.")
+    print("Restart eve-trader-local to run the new version.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="eve-trader-local", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -61,6 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("whoami", help="list authorized characters").set_defaults(func=cmd_whoami)
     sub.add_parser("config", help="show the resolved configuration").set_defaults(func=cmd_config)
+    sub.add_parser(
+        "check-update", help="check GitHub for a newer commit (read-only)"
+    ).set_defaults(func=cmd_check_update)
+    sub.add_parser(
+        "update", help="update this checkout to origin/main and reinstall dependencies"
+    ).set_defaults(func=cmd_update)
     return parser
 
 

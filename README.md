@@ -72,7 +72,17 @@ eve-trader-local init-db            # create the SQLite file (idempotent)
 eve-trader-local auth --role buyer  # opens a browser, stores the token
 eve-trader-local whoami             # list authorized characters
 eve-trader-local config             # show the resolved configuration
+eve-trader-local check-update       # is there a newer commit on origin/main?
+eve-trader-local update             # fetch + reset --hard + reinstall deps
 ```
+
+`update` is manual and confirmed interactively, and refuses to run unless the
+checkout is exactly a clean install (on `main`, no uncommitted or untracked
+changes, an `origin` pointing at this repository) — it ends in
+`git reset --hard`, which would otherwise destroy local work. Your database and
+`config.yaml` are never touched: they live outside the checkout by default
+(see below), and if you have pointed `EVE_TRADER_LOCAL_DATA_DIR` inside it, the
+update refuses unless git actually ignores them.
 
 Authorizing twice under the same role registers a *second* character rather
 than overwriting the first — tokens are keyed `<role>:<character_id>`.
