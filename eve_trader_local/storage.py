@@ -11,6 +11,7 @@ Tables, ported from the parent's Postgres schema minus tenant scoping:
   esi_sync_state <- esi_sync_state    (when each scope last synced)
   settings      <- tenant_settings    (config overrides, keyed by scope)
   sde_*         <- sde_*              (Fuzzwork SDE cache, see sde.py)
+  type_packaged_volume <- type_packaged_volume  (ESI-only per-type constant)
 
 The sde_* tables carried no tenant_id even in the parent (they are CCP's own
 static data, identical for everyone and refreshed globally), so they port
@@ -154,6 +155,16 @@ CREATE TABLE IF NOT EXISTS sde_type_materials (
 );
 
 CREATE INDEX IF NOT EXISTS idx_sde_type_materials_by_type ON sde_type_materials (type_id);
+
+-- type_id -> packaged (repackaged/cargo) volume, as answered by ESI. Not part
+-- of the SDE dump at all - only ESI exposes it - so this is a cache of a live
+-- lookup, not a replace_sde_data target, and it deliberately survives an SDE
+-- refresh (a type's packaged volume is a static game constant; re-fetching it
+-- per refresh would be hundreds of pointless ESI round-trips).
+CREATE TABLE IF NOT EXISTS type_packaged_volume (
+    type_id         INTEGER PRIMARY KEY,
+    packaged_volume REAL NOT NULL
+);
 
 -- Single row (id = 1): when the SDE cache was last replaced, and the ETag
 -- Fuzzwork served for the dump at that moment - compared against a fresh
@@ -362,6 +373,37 @@ def get_sde_type(type_id: int, path: Optional[Path] = None) -> Optional[tuple]:
     with connect(path) as conn:
         row = conn.execute("SELECT * FROM sde_types WHERE type_id = ?", (type_id,)).fetchone()
     return tuple(row) if row else None
+
+
+def get_type_category(type_id: int, path: Optional[Path] = None) -> Optional[int]:
+    """The SDE category_id for a type (via its group), or None if either the
+    type or its group is missing from the cache. Category - not group - is
+    what distinguishes a ship/module from everything else (see
+    esi_client.resolve_effective_volume)."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT g.category_id FROM sde_types t "
+            "JOIN sde_groups g ON g.group_id = t.group_id WHERE t.type_id = ?",
+            (type_id,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def get_cached_packaged_volume(type_id: int, path: Optional[Path] = None) -> Optional[float]:
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT packaged_volume FROM type_packaged_volume WHERE type_id = ?", (type_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_cached_packaged_volume(type_id: int, volume: float, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO type_packaged_volume (type_id, packaged_volume) VALUES (?, ?) "
+            "ON CONFLICT (type_id) DO UPDATE SET packaged_volume = excluded.packaged_volume",
+            (type_id, volume),
+        )
 
 
 def search_sde_types(query: str, limit: int = 20,
