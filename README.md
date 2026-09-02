@@ -20,11 +20,20 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production/Doctrine/Ore&Minerals not started
+## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine/Ore&Minerals not started
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
 reconciliation all run for real from the CLI, not just as isolated modules.
+
+The **Production** tool (Tech I/II/Reaction manufacturing planning) has its
+SDE-driven classification, buy-vs-build cost/margin math, invention math,
+producer ESI sync (blueprints/assets/industry jobs, including real owned-BPO
+ME/TE), and build-candidate discovery all ported and runnable from the CLI.
+Still missing: the stock-aware planner (needs manual stock-target data
+entry — a separate future step) and the web-only logistics/distribution
+views.
+
 What exists:
 
 - `storage.py` — SQLite persistence for everything below: OAuth tokens, ESI
@@ -51,11 +60,15 @@ What exists:
   (`do_pipeline`, `do_build_universe`, `do_find_new_candidates`,
   `do_refresh_and_prune_candidates`, `do_check_undercut`, `do_reconcile_trades`,
   …), each step isolated so one failure doesn't block the others.
+- `production/` — `constants.py`, `engine.py` (classification, buy-vs-build
+  cost/margin, build-candidate discovery), `pricing.py`, `invention.py`,
+  `esi_sync.py` (producer character blueprints/assets/industry jobs),
+  `models.py`, `config.py` (`ProductionConfig`) and `actions.py`.
 - `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
   `refresh-shortlist`, `check-unlisted-stock`, `check-undercut`,
-  `reconcile-trades`, `sync-esi`, `pipeline`.
+  `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
@@ -65,9 +78,11 @@ Explicitly **not** done yet:
 - Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test
   and a working end-to-end proof, not the intended interface — see
   `ROADMAP.md` for the planned menu/tab navigation model.
-- Production, Doctrine and Ore & Minerals — none of their business logic has
-  been ported (the parent's `production/*`, `doctrine/*`, `refining/*`).
-  Trading was ported first as the simplest complete pipeline.
+- Production's stock-aware planner and logistics/distribution views (need
+  manual stock-target data entry and per-category structure assignments —
+  web-UI-shaped concepts with no local equivalent yet), and the whole
+  Doctrine and Ore & Minerals tools (the parent's `doctrine/*`, `refining/*`)
+  — none of their business logic has been ported.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
