@@ -20,31 +20,54 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: foundation layer only
+## Status: Trading pipeline works end to end (CLI); Production/Doctrine/Ore&Minerals not started
 
-This is a first foundational commit. **There are no trading or production
-features here yet.** What exists:
+The **Trading** tool (buy in Jita, sell at your own structure) is fully
+ported and wired up — discovery, backtesting, shortlist, order checks and
+reconciliation all run for real from the CLI, not just as isolated modules.
+What exists:
 
-- `storage.py` — SQLite persistence: OAuth tokens, ESI sync timestamps, config
-  overrides. No `tenant_id` column anywhere; there is a test asserting that.
+- `storage.py` — SQLite persistence for everything below: OAuth tokens, ESI
+  sync timestamps, config overrides, the SDE cache, candidate universe,
+  shortlist + snapshots, realized trades, new-candidate search state. No
+  `tenant_id` column anywhere; there is a test asserting that.
 - `config.py` — dataclass config, layered defaults → `config.yaml` → stored
   overrides, with type/range validation that runs *before* anything is applied.
 - `auth.py` — EVE SSO OAuth2 (authorization code + PKCE), ported nearly
   unchanged from the parent repo, storing tokens locally.
 - `sde.py` — the EVE Static Data Export importer: downloads CCP's SDE as CSV
-  from [Fuzzwork](https://www.fuzzwork.co.uk/dump/latest/csv/) and caches it in
-  SQLite. Ported from the parent's `production/sde.py`. This is the data layer
-  only — nothing reads it yet.
-- `cli.py` — `init-db`, `auth`, `whoami`, `config`, `refresh-sde`,
-  `sde-status`: enough to prove the layers work together.
+  from [Fuzzwork](https://www.fuzzwork.co.uk/dump/latest/csv/) and caches it
+  in SQLite.
+- `esi_client.py` / `goonmetrics_client.py` — the full ESI HTTP layer (retry/
+  backoff, error-budget handling, order-book stats) and Goonmetrics current
+  prices + region price-history, ported from the parent.
+- `candidate_discovery.py`, `history_backtest.py`, `shortlist.py`,
+  `trade_reconciliation.py`, `own_orders.py` — the Trading business logic:
+  finding importable items, backtesting them against price history, scoring
+  a live shortlist (Profit/Day computed correctly — see `SYNC.md` for the
+  two historical bugs this deliberately avoids reintroducing), catching
+  undercuts/unlisted stock, and matching realized buy/sell pairs.
+- `actions.py` — the orchestration layer wiring all of the above together
+  (`do_pipeline`, `do_build_universe`, `do_find_new_candidates`,
+  `do_refresh_and_prune_candidates`, `do_check_undercut`, `do_reconcile_trades`,
+  …), each step isolated so one failure doesn't block the others.
+- `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
+  `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
+  `build-universe`, `find-candidates`, `add-to-shortlist`,
+  `refresh-shortlist`, `check-unlisted-stock`, `check-undercut`,
+  `reconcile-trades`, `pipeline`.
+
+See `SYNC.md` for exactly what was ported from each parent-repo module, what
+was deliberately left out, and why.
 
 Explicitly **not** done yet:
 
-- Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test, not
-  the intended interface.
-- Any business logic — no shortlist, no candidate discovery, no build-vs-buy,
-  no ESI market client. None of the parent's `engine.py` / `pricing.py` /
-  `shortlist.py` has been ported.
+- Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test
+  and a working end-to-end proof, not the intended interface — see
+  `ROADMAP.md` for the planned menu/tab navigation model.
+- Production, Doctrine and Ore & Minerals — none of their business logic has
+  been ported (the parent's `production/*`, `doctrine/*`, `refining/*`).
+  Trading was ported first as the simplest complete pipeline.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
@@ -80,6 +103,16 @@ eve-trader-local refresh-sde        # download the EVE Static Data Export
 eve-trader-local sde-status         # when was it refreshed; is a newer dump out?
 eve-trader-local check-update       # is there a newer commit on origin/main?
 eve-trader-local update             # fetch + reset --hard + reinstall deps
+
+eve-trader-local build-universe             # crawl ESI's market-group tree via SDE (occasional setup step)
+eve-trader-local find-candidates --safe     # backtest candidates against Goonmetrics price history
+eve-trader-local add-to-shortlist           # add the latest search's finds to the tracked shortlist
+eve-trader-local refresh-shortlist          # recompute live Profit/Day for every shortlist item
+eve-trader-local check-unlisted-stock       # stock at the structure with no sell order on it
+eve-trader-local check-undercut             # your own listings a competitor has beaten on price
+eve-trader-local reconcile-trades           # match realized buy/sell pairs, compute P&L
+eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile
+eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
 ```
 
 `update` is manual and confirmed interactively, and refuses to run unless the
