@@ -14,6 +14,7 @@ Tables, ported from the parent's Postgres schema minus tenant scoping:
   type_packaged_volume <- type_packaged_volume  (ESI-only per-type constant)
   candidate_universe / focused_candidates <- same names (see
                                              candidate_discovery.py)
+  shortlist / shortlist_snapshot <- same names (see shortlist.py)
 
 The sde_* tables carried no tenant_id even in the parent (they are CCP's own
 static data, identical for everyone and refreshed globally), so they port
@@ -31,7 +32,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
-from .models import Candidate
+from .models import Candidate, ShortlistItem, ShortlistRow
 from .paths import db_path
 
 SCHEMA = """
@@ -193,6 +194,47 @@ CREATE TABLE IF NOT EXISTS focused_candidates (
     market_group_path TEXT,
     meta_level        INTEGER
 );
+
+-- ---------------------------------------------------------- shortlist
+-- Two tables with deliberately different shapes (the parent repo's own
+-- split): `shortlist` is the live membership list, keyed by item_id so an
+-- upsert edits the one row in place; `shortlist_snapshot` is append-only
+-- history, one full set of evaluated rows per run_ts, so past runs stay
+-- readable after an item's economics change or it gets deactivated.
+CREATE TABLE IF NOT EXISTS shortlist (
+    item_id    INTEGER PRIMARY KEY,
+    item       TEXT NOT NULL,
+    category   TEXT,
+    volume_m3  REAL,
+    active     INTEGER DEFAULT 1,
+    meta_level INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS shortlist_snapshot (
+    run_ts               TEXT,
+    item_id              INTEGER,
+    item                 TEXT,
+    category             TEXT,
+    landed_cost          REAL,
+    net_sell             REAL,
+    sell_volume          REAL,
+    own_orders_remaining REAL,
+    profit_per_unit      REAL,
+    margin               REAL,
+    profit_per_m3        REAL,
+    decision             TEXT,
+    active               INTEGER,
+    volume_m3            REAL,
+    jita_sell            REAL,
+    import_cost          REAL,
+    meta_level           INTEGER,
+    avg_daily_volume     REAL
+);
+-- The parent needed an explicit DOUBLE PRECISION widening for the six
+-- ISK-denominated columns above (Postgres REAL is single precision, ~7
+-- significant digits - not enough for a capital hull's landed cost).
+-- SQLite's REAL is already a 64-bit IEEE double, so there is nothing to
+-- widen here; the same column names are kept for readability.
 
 -- Single row (id = 1): when the SDE cache was last replaced, and the ETag
 -- Fuzzwork served for the dump at that moment - compared against a fresh
@@ -547,3 +589,110 @@ def get_candidate_universe_built_at(path: Optional[Path] = None) -> Optional[str
     with connect(path) as conn:
         row = conn.execute("SELECT MAX(run_ts) FROM candidate_universe").fetchone()
     return row[0] if row and row[0] else None
+
+
+# ------------------------------------------------------------------ shortlist
+# Shortlist *membership* is genuinely persisted state (unlike a candidate
+# search, which is a stateless computation over its inputs), but it lives
+# here rather than in shortlist.py - the parent's shortlist.py imports no
+# storage at all, and this repo already keeps every table read/write in this
+# one module. shortlist.py stays a pure, network-free, storage-free
+# computation over values handed to it.
+def upsert_shortlist(items: Sequence[ShortlistItem], path: Optional[Path] = None) -> None:
+    """Adds or updates shortlist entries by item_id. `meta_level` is
+    COALESCEd rather than overwritten: a caller adding an item from a source
+    that doesn't know its meta level must not blank out one already
+    backfilled from ESI."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO shortlist (item_id, item, category, volume_m3, active, meta_level) "
+            "VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(item_id) DO UPDATE SET item=excluded.item, category=excluded.category, "
+            "volume_m3=excluded.volume_m3, active=excluded.active, "
+            "meta_level=COALESCE(excluded.meta_level, shortlist.meta_level)",
+            [(i.item_id, i.item, i.category, i.volume_m3, int(i.active), i.meta_level) for i in items],
+        )
+
+
+def load_shortlist(path: Optional[Path] = None) -> list[ShortlistItem]:
+    """Every shortlist entry, active or not - callers that only want the
+    active ones filter themselves. An inactive item is still fully priced by
+    shortlist.evaluate_shortlist_item (only its `decision` short-circuits),
+    so it has to come back from here too."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT item_id, item, category, volume_m3, active, meta_level FROM shortlist"
+        ).fetchall()
+    return [ShortlistItem(item=r["item"], item_id=r["item_id"], category=r["category"],
+                          volume_m3=r["volume_m3"], active=bool(r["active"]),
+                          meta_level=r["meta_level"]) for r in rows]
+
+
+def deactivate_shortlist_items(item_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    """Sets active=0 - deliberately not a DELETE, so the item's
+    shortlist_snapshot history survives and it can be reactivated later."""
+    if not item_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany("UPDATE shortlist SET active = 0 WHERE item_id = ?", [(i,) for i in item_ids])
+
+
+def activate_shortlist_items(item_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    """The reactivation counterpart. Needed because shortlist._decision
+    short-circuits to "Inactive" without ever re-checking the real numbers -
+    without this, an item deactivated once would stay inactive forever even
+    after its economics recovered (a real bug in the parent repo, its GitHub
+    issue #35)."""
+    if not item_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany("UPDATE shortlist SET active = 1 WHERE item_id = ?", [(i,) for i in item_ids])
+
+
+def update_shortlist_meta_levels(meta_levels: dict[int, int], path: Optional[Path] = None) -> None:
+    """Backfills meta_level for shortlist items that don't have one cached
+    yet (it comes from a dogma-attribute lookup, not from whatever added the
+    item)."""
+    if not meta_levels:
+        return
+    with connect(path) as conn:
+        conn.executemany("UPDATE shortlist SET meta_level = ? WHERE item_id = ?",
+                         [(level, item_id) for item_id, level in meta_levels.items()])
+
+
+def save_shortlist_snapshot(rows: Sequence[ShortlistRow], run_ts: str,
+                            path: Optional[Path] = None) -> None:
+    """Appends one evaluation run's rows. Append-only on purpose - the
+    snapshot is the record of what the numbers looked like at that moment."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO shortlist_snapshot (run_ts, item_id, item, category, landed_cost, net_sell, "
+            "sell_volume, own_orders_remaining, profit_per_unit, margin, profit_per_m3, decision, active, "
+            "volume_m3, jita_sell, import_cost, meta_level, avg_daily_volume) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(run_ts, r.item_id, r.item, r.category, r.landed_cost, r.net_sell, r.sell_volume,
+              r.own_orders_remaining, r.profit_per_unit, r.margin, r.profit_per_m3, r.decision,
+              int(r.active), r.volume_m3, r.jita_sell, r.import_cost, r.meta_level,
+              r.avg_daily_volume) for r in rows],
+        )
+
+
+def latest_shortlist_snapshot(path: Optional[Path] = None) -> list[ShortlistRow]:
+    """The most recent run's rows, as ShortlistRow objects (the parent hands
+    its web layer a pandas DataFrame here; same reasoning as
+    load_candidate_universe - no pandas here, and every caller wants the
+    dataclass). Empty list if no run has been saved yet."""
+    with connect(path) as conn:
+        run_ts = conn.execute("SELECT MAX(run_ts) FROM shortlist_snapshot").fetchone()[0]
+        if not run_ts:
+            return []
+        rows = conn.execute("SELECT * FROM shortlist_snapshot WHERE run_ts = ?", (run_ts,)).fetchall()
+    return [ShortlistRow(item=r["item"], category=r["category"], landed_cost=r["landed_cost"],
+                         net_sell=r["net_sell"], sell_volume=r["sell_volume"],
+                         own_orders_remaining=r["own_orders_remaining"],
+                         profit_per_unit=r["profit_per_unit"], margin=r["margin"],
+                         profit_per_m3=r["profit_per_m3"], decision=r["decision"],
+                         active=bool(r["active"]), item_id=r["item_id"], volume_m3=r["volume_m3"],
+                         jita_sell=r["jita_sell"], import_cost=r["import_cost"],
+                         meta_level=r["meta_level"], avg_daily_volume=r["avg_daily_volume"])
+            for r in rows]

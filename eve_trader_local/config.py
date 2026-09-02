@@ -113,7 +113,11 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "lookback_days": (0, None),
     "chunk_size": (1, None),
     "safe_mode_max_ids": (1, None),
+    # Both margin/profit thresholds are bounded at 0 only, deliberately not
+    # at 1: a required margin above 100% is a legitimate, intentional setting
+    # in this domain, not a typo an upper bound should reject.
     "min_margin_threshold": (0, None),
+    "min_profit_threshold": (0, None),
     "min_hit_rate": (0, 1),
     "min_avg_movement": (0, None),
 }
@@ -179,6 +183,14 @@ class TradingConfig:
     # the parent repo against the in-game sell-order breakdown.
     structure_sell_haircut: float = 0.9463
     jita_buy_broker_fee: float = 0.0147
+
+    # -- Shortlist decision bar --
+    # An item has to clear *both* to be marked "Import" (see
+    # shortlist._decision); below either one it's "Skip".
+    min_profit_threshold: float = 0.0        # Minimum absolute profit per unit
+    # (min_margin_threshold, further down under candidate discovery, is the
+    # other half of that bar - the same field serves both the live shortlist
+    # decision and the historical backtest's per-day profitability test.)
 
     # -- Characters --
     # Display only. The real identity behind each role comes from whichever

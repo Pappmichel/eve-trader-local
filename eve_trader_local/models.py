@@ -4,10 +4,11 @@ No storage/config imports here on purpose - these are the values passed
 between candidate discovery, backtesting and the shortlist, and they have to
 stay free of any dependency on where those values came from.
 
-`Candidate` and `NewCandidateResult` exist so far: the parent eve-trader's
-models.py also carries ShortlistItem/ShortlistRow/RealizedTrade/... which
-belong to shortlist.py/trade_reconciliation.py, neither of which is ported
-here yet (see SYNC.md) - each arrives with its own module.
+`Candidate`, `NewCandidateResult`, `ShortlistItem` and `ShortlistRow` exist
+so far: the parent eve-trader's models.py also carries RealizedTrade/
+UnlistedStockRow/UndercutRow, which belong to trade_reconciliation.py/
+own_orders.py, neither of which is ported here yet (see SYNC.md) - each
+arrives with its own module.
 """
 from __future__ import annotations
 
@@ -45,3 +46,56 @@ class NewCandidateResult:
     recommendation: str
     add: bool
     meta_level: Optional[int] = None
+
+
+@dataclass
+class ShortlistItem:
+    """One shortlist entry: a candidate item actively tracked for import.
+    The persisted membership list (storage.load_shortlist/upsert_shortlist),
+    as opposed to ShortlistRow below, which is what one evaluation pass
+    computes from it."""
+    item: str
+    item_id: int
+    category: str
+    volume_m3: float
+    active: bool = True
+    meta_level: Optional[int] = None
+
+
+@dataclass
+class ShortlistRow:
+    """One fully evaluated shortlist item - see shortlist.py's module
+    docstring for the formula behind each field."""
+    item: str
+    category: str
+    landed_cost: Optional[float]
+    net_sell: Optional[float]
+    # Currently-listed sell-order quantity at the structure: order-book
+    # *depth* right now, NOT actual daily traded volume (see
+    # esi_client.OrderStats). Shown to the user as "Listed Qty" and nothing
+    # more - it must never be multiplied into a "Profit / Day" figure, which
+    # is exactly the bug GitHub issue #51 fixed in the parent repo: a single
+    # seller parking a large batch of a never-actually-sold item inflated
+    # that figure purely from the listed quantity.
+    sell_volume: Optional[float]
+    own_orders_remaining: float
+    profit_per_unit: Optional[float]
+    margin: Optional[float]
+    profit_per_m3: Optional[float]
+    decision: str
+    active: bool
+    item_id: int
+    volume_m3: float
+    jita_sell: Optional[float]
+    import_cost: Optional[float]
+    meta_level: Optional[int] = None
+    # Real average daily *market-wide* traded quantity, from Goonmetrics
+    # region history for cfg.reference_region_id (see
+    # shortlist.average_market_daily_volume). Deliberately neither
+    # sell_volume/order-book depth (issue #51) nor this trader's own
+    # realized sales (issue #100 - #51's own realized-sales version left
+    # this empty for every not-yet-sold-by-me candidate, which is most of
+    # what a shortlist exists to evaluate). None means Goonmetrics has no
+    # history for this item in that region - never estimated from something
+    # else.
+    avg_daily_volume: Optional[float] = None
