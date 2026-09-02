@@ -58,8 +58,13 @@ from real market prices) - never the ME-reduced quantity at market prices.
 Deliberately not ported yet (each needs machinery this repo doesn't have -
 see SYNC.md): the stock-aware planner (`plan_production`/`_expand_all`/
 `_base_runs`, which net demand against ESI-derived assets and manual stock),
-build-candidate discovery, the logistics/distribution helpers, and the bought-
-blueprint-copy cost term `_unit_cost` folds in from a manual BPC cost table.
+the logistics/distribution helpers, and the bought-blueprint-copy cost term
+`_unit_cost` folds in from a manual BPC cost table.
+
+`discover_build_candidates` (below) is the one piece of the parent's
+build-candidate-discovery/planner pairing that IS ported here - it needs
+none of the stock-target machinery above, only the cost/margin core this
+module already has.
 """
 from __future__ import annotations
 
@@ -67,6 +72,7 @@ import math
 from typing import Iterable, Optional
 
 from .. import storage
+from ..config import TRADING_CONFIG
 from . import invention, pricing
 from .config import PRODUCTION_CONFIG, ProductionConfig
 from .constants import (
@@ -668,3 +674,143 @@ def build_material_tree(type_id: int, quantity: float, cfg: ProductionConfig, ho
             material_id, _material_qty(base_qty, material_mult, runs), cfg, home, jita,
             selected_decryptors, t2_memo, depth + 1))
     return node
+
+
+# --------------------------------------------------------- build-candidate scan
+# A margin this high on a *scanned* candidate (as opposed to one you've
+# deliberately configured as a stock target) is far more likely a stale/
+# synthetic price slipping past the home-quote sanity check below than a real
+# opportunity - confirmed against the parent repo's own discovery scan, kept
+# here as the same fixed backstop rather than a config field (nobody would
+# ever legitimately want to raise it).
+MAX_PLAUSIBLE_BUILD_MARGIN = 3.0  # 300%
+
+
+def discover_build_candidates(cfg: ProductionConfig = PRODUCTION_CONFIG, top_n: int = 200,
+                              client: Optional["GoonmetricsClient"] = None) -> list[dict]:
+    """Production's equivalent of Trading's candidate discovery
+    (candidate_discovery.py): scans every published, market-listed SDE item
+    with a real Manufacturing/Reaction/Invention recipe (classify_activity)
+    and flags the ones where building clearly beats buying right now, gated
+    by cfg.min_margin - the same buy-vs-build margin check a configured stock
+    target would need to pass (margin_home, since there is no stock-aware
+    planner or per-target Jita routing here yet - see SYNC.md). Unlike the
+    parent repo, there is no existing-stock-target exclusion: this repo has
+    no stock-target table to exclude against yet, so every recipe-backed item
+    is a candidate.
+
+    Every candidate is priced from one shared home/Jita price fetch and one
+    cost_memo/t2_memo pair for the whole scan - a material common to many
+    candidates (a base mineral, a common component) is only ever priced
+    once, not once per candidate that uses it.
+
+    Confirmed by the parent repo's own live testing: margin alone isn't a
+    useful ranking - a huge margin on an item nobody actually buys is
+    worthless, the same "profitability alone isn't enough" reasoning
+    Trading's min_avg_movement gate already encodes. So every margin-
+    qualifying candidate gets a batched Goonmetrics history lookup
+    (TRADING_CONFIG.reference_region_id - the home structure's own region,
+    the same constant Trading's shortlist/history_backtest already use for
+    "is this worth it at all" questions) for its recent daily "movement" -
+    ESI's own daily traded-unit count, not an ISK value (confirmed against
+    the parent's own live ESI history check). potential_daily_profit =
+    daily_movement (units/day) x profit_per_unit, where profit_per_unit =
+    margin x build_cost. Results are ranked by this, not raw margin - a
+    modest-margin, liquid item correctly outranks a huge-margin item nobody's
+    actually trading, and cfg.min_daily_profit gates out candidates below a
+    configured floor (0.0 by default: no floor).
+
+    potential_daily_profit is a theoretical ceiling - "if this item's entire
+    day of home-structure market turnover were captured" - not a claim about
+    what one builder could personally sell in a day. A tiny-volume,
+    huge-per-unit item (a capital hull, a faction module) can still show an
+    enormous number; that's the mathematically correct answer to "what's the
+    whole market worth", not a bug to cap or filter (see CLAUDE.md's
+    "Theoretical ceiling" section in the parent repo, and this repo's own
+    Trading Profit/Day column, which follows the identical principle).
+
+    Deliberately home-structure only, never Jita - same reasoning as the
+    parent: production here is for the local home market, freighting
+    finished goods to Jita to sell isn't part of this tool's business model.
+
+    Not cached: the parent's TTL cache + per-tenant keying exists to serve
+    concurrent web requests across tenants, neither of which applies to a
+    single local user driving this from the CLI - a fresh scan on every call
+    is simpler and correct here."""
+    return _scan_build_candidates(cfg, client)[:top_n]
+
+
+def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsClient"]) -> list[dict]:
+    """The actual (slow - walks every published, market-listed SDE item) scan
+    behind discover_build_candidates - split out purely to mirror the
+    parent's own function split (see that module's own reasoning for why:
+    holding a cache lock across the whole scan without deep indentation),
+    even though nothing here currently needs a lock of its own."""
+    cost_memo: dict[int, Optional[float]] = {}
+    t2_memo: dict[int, T2Mods] = {}
+    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists yet - see SYNC.md
+
+    sde_rows = storage.load_sde_types_with_market_group()
+    buildable = [(type_id, type_name, meta_level, activity, bp)
+                 for type_id, type_name, _volume, _market_group_id, meta_level, _category_id in sde_rows
+                 for activity, bp in [classify_activity(type_id)] if bp is not None]
+
+    # Bounded, price-agnostic universe to price up front - see pricing.
+    # home_prices/jita_prices' own docstrings for why this can't just be
+    # "everything" now that both are ESI-first (Jita has no bulk-region
+    # endpoint at all, one call per type_id).
+    priced_type_ids = list(structural_material_closure(t[0] for t in buildable))
+    home = pricing.home_prices(priced_type_ids, cfg)
+    jita = pricing.jita_prices(priced_type_ids)
+
+    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
+    esi_client = ESIClient()
+    cost_indices: CostIndices = {
+        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
+        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+    }
+    try:
+        adjusted_prices = esi_client.get_adjusted_prices()
+    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
+        adjusted_prices = {}
+
+    results = []
+    for type_id, type_name, meta_level, activity, _bp in buildable:
+        home_quote = home.get(type_id)
+        if home_quote is None or home_quote.buy <= 0 or home_quote.buy == home_quote.sell:
+            # buy == sell (exactly) is the signature of a market with no real
+            # order book on one side - a synthetic/fallback price, not a
+            # genuine live quote (confirmed live in the parent repo: a
+            # module showed buy=sell to the ISK, which a real independent
+            # buy-side and sell-side order book essentially never produces
+            # by coincidence).
+            continue
+        build_cost = _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors,
+                                t2_memo, cost_indices, adjusted_prices)
+        margin = margin_home(type_id, build_cost, home, cfg)
+        if margin is None or margin < cfg.min_margin or margin > MAX_PLAUSIBLE_BUILD_MARGIN:
+            continue
+        results.append({
+            "type_id": type_id, "type_name": type_name, "activity": activity,
+            "build_cost": build_cost, "margin": margin, "meta_level": meta_level,
+        })
+
+    if results:
+        if client is None:
+            # Lazy import, same "keeps this dependency lazy until actually
+            # needed" reasoning as the ESIClient import above.
+            from ..goonmetrics_client import GoonmetricsClient
+            client = GoonmetricsClient()
+        movement_by_type: dict[int, list[float]] = {}
+        for point in client.price_history_chunked(TRADING_CONFIG.reference_region_id,
+                                                    [r["type_id"] for r in results]):
+            movement_by_type.setdefault(point.type_id, []).append(point.movement)
+        for r in results:
+            days = movement_by_type.get(r["type_id"])
+            daily_movement = sum(days) / len(days) if days else 0.0
+            r["daily_movement"] = daily_movement
+            r["potential_daily_profit"] = daily_movement * r["margin"] * r["build_cost"]
+        results = [r for r in results if r["potential_daily_profit"] >= cfg.min_daily_profit]
+
+    results.sort(key=lambda r: r.get("potential_daily_profit", 0.0), reverse=True)
+    return results

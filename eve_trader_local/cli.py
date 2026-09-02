@@ -11,6 +11,7 @@
     eve-trader-local check-unlisted-stock / check-undercut
     eve-trader-local reconcile-trades
     eve-trader-local sync-esi
+    eve-trader-local discover-build-candidates
     eve-trader-local pipeline [--rebuild-universe]
     eve-trader-local check-update / update
 
@@ -216,6 +217,19 @@ def cmd_sync_esi(args: argparse.Namespace) -> None:
             print(f"  {owner:<32} {summary}")
 
 
+def cmd_discover_build_candidates(args: argparse.Namespace) -> None:
+    print("Scanning the SDE for build-vs-buy opportunities (this can take a while)...")
+    rows = production_actions.do_discover_build_candidates(top_n=args.top_n)["rows"]
+    if not rows:
+        print("No build candidates cleared the configured margin/profit thresholds.")
+        return
+    print(f"{len(rows)} candidate(s), top by potential daily profit (whole-market turnover, "
+          "not one builder's):")
+    for r in rows[:10]:
+        print(f"  {r.type_name:<40} {r.activity:<10} margin {r.margin * 100:6.1f}%   "
+              f"{r.potential_daily_profit:>15,.0f} ISK/day")
+
+
 def cmd_pipeline(args: argparse.Namespace) -> None:
     results = actions.do_pipeline(safe=args.safe, rebuild_universe=args.rebuild_universe)
     for step, result in results.items():
@@ -286,6 +300,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "sync-esi", help="refresh owned assets/blueprints/industry jobs for every producer character"
     ).set_defaults(func=cmd_sync_esi)
+
+    p_discover = sub.add_parser(
+        "discover-build-candidates", help="scan the SDE for build-vs-buy opportunities"
+    )
+    p_discover.add_argument("--top-n", dest="top_n", type=int, default=200,
+                            help="max rows to return, already ranked (default 200)")
+    p_discover.set_defaults(func=cmd_discover_build_candidates)
 
     p_pipeline = sub.add_parser("pipeline", help="run the daily workflow (each step isolated)")
     p_pipeline.add_argument("--safe", dest="safe", action="store_true", default=True,

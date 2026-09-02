@@ -39,3 +39,19 @@ class InventionResult:
     te: int                                      # resulting BPC's time efficiency
     material_savings_per_run: float              # (me/100) * reducible_material_cost_per_run
     net_cost_per_run: Optional[float]            # expected_cost_per_run - material_savings_per_run
+
+
+@dataclass
+class BuildCandidate:
+    """One manufacturable SDE item where building clearly beats buying right
+    now - see engine.discover_build_candidates. Ranked by
+    potential_daily_profit, not margin - see that function's docstring for
+    why margin alone isn't a useful ranking."""
+    type_id: int
+    type_name: str
+    activity: str
+    build_cost: float
+    margin: float
+    daily_movement: float
+    potential_daily_profit: float
+    meta_level: Optional[int]

@@ -141,6 +141,10 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "encryption_skill_level": (0, 5),
     "datacore_skill_1_level": (0, 5),
     "datacore_skill_2_level": (0, 5),
+    # Same "bounded at 0 only" reasoning as min_margin_threshold above - a
+    # required build margin above 100% is a legitimate setting here too.
+    "min_margin": (0, None),
+    "min_daily_profit": (0, None),
 }
 
 

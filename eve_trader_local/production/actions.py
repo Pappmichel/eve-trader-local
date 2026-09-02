@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from .. import storage
 from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, OAuthConfig
-from . import esi_sync
+from ..errors import ActionError
+from . import engine, esi_sync
+from .config import PRODUCTION_CONFIG, ProductionConfig
+from .models import BuildCandidate
 
 SYNC_SCOPE = "production"
 
@@ -47,3 +50,14 @@ def do_sync_esi(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
 
 def do_get_esi_sync_time() -> dict:
     return {"synced_at": storage.get_esi_sync_time(SYNC_SCOPE)}
+
+
+def do_discover_build_candidates(top_n: int = 200, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Scans every manufacturable, market-listed SDE item for ones where
+    building clearly beats buying right now - see engine.
+    discover_build_candidates. Needs the SDE cache populated (refresh-sde)
+    to find anything at all."""
+    if not storage.sde_row_counts().get("sde_types"):
+        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+    candidates = engine.discover_build_candidates(cfg, top_n=top_n)
+    return {"rows": [BuildCandidate(**c) for c in candidates]}

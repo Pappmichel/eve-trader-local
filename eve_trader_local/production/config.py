@@ -100,6 +100,21 @@ class ProductionConfig:
     datacore_skill_1_level: int = 4
     datacore_skill_2_level: int = 4
 
+    # -- Build-candidate discovery (engine.discover_build_candidates) --
+    # A build clearing this margin still isn't necessarily worth surfacing -
+    # see min_daily_profit below, which is the real ranking gate. 15% matches
+    # the parent's own stock-target planner default (min_margin there): the
+    # same "is this worth building at all" threshold, just applied here to
+    # everything, not only configured stock targets.
+    min_margin: float = 0.15
+    # Gates discover_build_candidates on potential_daily_profit (margin x
+    # build_cost x real market-wide daily movement, never just margin alone -
+    # see that function's own docstring) rather than admitting every
+    # margin-qualifying item regardless of how rarely it actually trades. 0.0
+    # (the default) means "no floor" - every margin-qualifying candidate is
+    # kept.
+    min_daily_profit: float = 0.0
+
 
 _STRUCTURE_TYPE_FIELDS = ("reaction_structure_type", "component_structure_type",
                           "manufacturing_structure_type")

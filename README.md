@@ -113,6 +113,7 @@ eve-trader-local check-undercut             # your own listings a competitor has
 eve-trader-local reconcile-trades           # match realized buy/sell pairs, compute P&L
 eve-trader-local auth --role producer       # authorize an industry character (assets/blueprints/jobs)
 eve-trader-local sync-esi                   # refresh what your producers own: assets, BPOs, jobs
+eve-trader-local discover-build-candidates  # scan the SDE for build-vs-buy opportunities
 eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile
 eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
 ```
