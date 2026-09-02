@@ -112,6 +112,10 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "jita_buy_broker_fee": (0, 1),
     "lookback_days": (0, None),
     "chunk_size": (1, None),
+    "safe_mode_max_ids": (1, None),
+    "min_margin_threshold": (0, None),
+    "min_hit_rate": (0, 1),
+    "min_avg_movement": (0, None),
 }
 
 
@@ -190,6 +194,22 @@ class TradingConfig:
 
     # -- Candidate discovery --
     chunk_size: int = 25                       # type_ids per Goonmetrics price-history request
+    safe_mode_max_ids: int = 500               # Cap on candidates evaluated per "safe" search run
+    min_margin_threshold: float = 0.05         # Margin a day must clear to count as a profitable one
+    min_hit_rate: float = 0.30                 # Minimum share of profitable days to recommend a candidate
+    # Minimum average daily reference-region "movement" (Goonmetrics' daily
+    # unit-quantity-traded liquidity figure - literally ESI's own
+    # /markets/{region_id}/history/ `volume` field re-served verbatim,
+    # confirmed live in the parent repo field-by-field against ESI) an item
+    # must clear to be recommended, even when margin and hit-rate are both
+    # fine: profitability alone isn't enough, an item also needs *some* real
+    # trading activity behind it. Defaults to 0.0, a no-op beyond the floor
+    # that already exists implicitly (score = avg_profit_m3 x log(1+avg_move)
+    # x hit_rate is already 0, and so already excluded, for exactly-zero
+    # movement) - raise it once you've seen real avg_sell_movement values for
+    # good candidates and know what "enough" looks like. It's a config field
+    # so that's a config change, not a code change.
+    min_avg_movement: float = 0.0
 
     # Market-group top-level path prefixes to hard-exclude from candidate
     # discovery entirely. Confirmed one-by-one in the parent repo with the
