@@ -189,6 +189,10 @@ class TradingConfig:
 
     # -- API endpoints --
     esi_base: str = "https://esi.evetech.net/latest"
+    # gnf.lt's rehosting of the Goonmetrics current-price API - the failsafe
+    # price source used when a structure's real order book is unreachable
+    # (see goonmetrics_client.py).
+    goonmetrics_appraise_base: str = "https://appraise.gnf.lt"
 
 
 @dataclass
