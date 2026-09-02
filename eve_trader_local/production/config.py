@@ -38,6 +38,39 @@ class ProductionConfig:
     # ISK/m3 to move goods from Jita to the home structure. Only Jita-sourced
     # material is charged this - anything already at home needs no hauling.
     haul_cost_per_m3: float = 900.0
+    # Sell-side costs subtracted from a sale before the build margin is
+    # computed (engine.margin_home/margin_jita): SCC surcharge 0.5% +
+    # broker's fee 1.5% + sales tax 3.37%, confirmed against the in-game
+    # sell-order breakdown in the parent repo.
+    market_fees: float = 0.0537
+    # Job-fee facility tax, *additive* on top of the system cost index rather
+    # than folded into it - EVE's real formula is
+    # `EIV * (cost_index * structure_bonus + facility_tax + SCC_surcharge)`
+    # (see engine._job_cost_rate). 0.25% is the fixed NPC-station rate; an
+    # Upwell structure's owner sets their own, so override this when building
+    # somewhere with a non-default facility tax.
+    facility_tax_rate: float = 0.0025
+
+    # -- Where the jobs actually run, for the live system cost index (see
+    # engine._job_cost_rate): reactions and the rig-covered component groups
+    # share one system, everything else uses the other. Unset is a fully
+    # supported state - pricing.system_cost_indices_for returns {} and the job
+    # cost falls back to the flat ACTIVITY_MODS rate rather than erroring. The
+    # parent additionally carries *_system_name fields that a web-only
+    # Settings action resolves into these ids; here the id is set directly.
+    component_system_id: Optional[int] = None
+    manufacturing_system_id: Optional[int] = None
+
+    # Manual escape hatch, highest priority of all (see engine._job_cost_rate):
+    # a value here replaces the looked-up index entirely, so it works even with
+    # no system configured at all. Three fields, not two, because the
+    # "component" profile feeds two genuinely different rates (Reaction jobs
+    # vs. Tech I/II component-group jobs) - the "manufacturing" profile's own
+    # reaction rate is never read by any code path, so an override for it
+    # would be dead weight. None means "use the computed value".
+    reaction_cost_index_override: Optional[float] = None
+    component_cost_index_override: Optional[float] = None
+    manufacturing_cost_index_override: Optional[float] = None
 
     # -- Home market/structure --
     # No sane default across installs; both are fully supported as unset -

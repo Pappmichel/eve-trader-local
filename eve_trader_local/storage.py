@@ -540,6 +540,21 @@ def get_type_category(type_id: int, path: Optional[Path] = None) -> Optional[int
     return row[0] if row else None
 
 
+def get_system_security(system_id: Optional[int], path: Optional[Path] = None) -> Optional[float]:
+    """Static per-system security status from the local SDE cache (it never
+    changes in-game, so there is no reason to ask ESI for it) - used to scale
+    a structure's rig ME/TE bonus, see production/constants.py's
+    rig_security_multiplier. None for an unset or unknown system, which that
+    function treats as "no rig bonus at all" rather than guessing a value."""
+    if system_id is None:
+        return None
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT security FROM sde_solar_systems WHERE solar_system_id = ?", (system_id,)
+        ).fetchone()
+    return row[0] if row else None
+
+
 def get_cached_packaged_volume(type_id: int, path: Optional[Path] = None) -> Optional[float]:
     with connect(path) as conn:
         row = conn.execute(

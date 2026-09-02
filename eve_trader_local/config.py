@@ -128,6 +128,14 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     # ones that genuinely can't live here).
     "haul_cost_per_m3": (0, None),
     "home_location_id": (1, None),
+    "market_fees": (0, 1),
+    "facility_tax_rate": (0, 1),
+    "component_system_id": (1, None),
+    "manufacturing_system_id": (1, None),
+    # A cost index is a fraction of EIV, never a multiplier above it.
+    "reaction_cost_index_override": (0, 1),
+    "component_cost_index_override": (0, 1),
+    "manufacturing_cost_index_override": (0, 1),
     # Capped at 5 because EVE's own skill levels only ever run 0-5 - a hard
     # game rule, not an app-specific policy choice.
     "encryption_skill_level": (0, 5),
