@@ -4,9 +4,9 @@ config.yaml -> overrides stored in SQLite, validated before applied). The
 stored-override scope key is "production", matching the parent repo.
 
 Only the fields the ported Production code actually reads live here - the
-parent's ProductionConfig also carries invention skill levels, build-candidate
-thresholds, logistics locations and per-category cost-index overrides, none of
-which have a consumer in this repo yet (see SYNC.md).
+parent's ProductionConfig also carries build-candidate thresholds, logistics
+locations and per-category cost-index overrides, none of which have a consumer
+in this repo yet (see SYNC.md).
 
 Layering: the shared config.py must never import this module. It stays free of
 any Production concept, which is why the enum-style structure/rig checks below
@@ -56,6 +56,16 @@ class ProductionConfig:
     component_rig_tier: str = "No Rig"
     manufacturing_structure_type: str = "Citadel (no bonuses)"
     manufacturing_rig_tier: str = "No Rig"
+
+    # -- Invention skills (invention.skill_multiplier) --
+    # EVE's real invention formula reads three separate trained skills off the
+    # inventing character: the encryption method skill, plus the two
+    # datacore/science skills the blueprint in question needs. Levels only ever
+    # run 0-5 (range-checked in the shared config.py). 4 is a deliberately
+    # ordinary "trained but not perfect" default, not an optimistic one.
+    encryption_skill_level: int = 4
+    datacore_skill_1_level: int = 4
+    datacore_skill_2_level: int = 4
 
 
 _STRUCTURE_TYPE_FIELDS = ("reaction_structure_type", "component_structure_type",

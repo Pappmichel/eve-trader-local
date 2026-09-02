@@ -128,6 +128,11 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     # ones that genuinely can't live here).
     "haul_cost_per_m3": (0, None),
     "home_location_id": (1, None),
+    # Capped at 5 because EVE's own skill levels only ever run 0-5 - a hard
+    # game rule, not an app-specific policy choice.
+    "encryption_skill_level": (0, 5),
+    "datacore_skill_1_level": (0, 5),
+    "datacore_skill_2_level": (0, 5),
 }
 
 

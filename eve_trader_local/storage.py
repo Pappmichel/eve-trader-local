@@ -621,6 +621,71 @@ def find_invention_recipe_candidates_by_product_type_id(
     return tuple(row[0] for row in rows)
 
 
+def get_blueprint_materials(blueprint_type_id: int, activity_id: int,
+                            path: Optional[Path] = None) -> list[tuple[int, float]]:
+    """[(material_type_id, quantity), ...] for ONE run at ME 0, before any
+    reduction - applying a blueprint's/decryptor's own ME is the caller's
+    job."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT material_type_id, quantity FROM sde_blueprint_materials "
+            "WHERE blueprint_type_id = ? AND activity_id = ?",
+            (blueprint_type_id, activity_id),
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def get_invention_recipe(t1_blueprint_type_id: int,
+                         path: Optional[Path] = None) -> Optional[dict]:
+    """The full invention (activity 8) job definition for
+    `t1_blueprint_type_id` - the invention *source*, which is a genuine T1
+    blueprint for Tech II and a Sleeper relic for Tech III (see
+    constants.ANCIENT_RELIC_CATEGORY_ID). None if it invents nothing at all.
+
+    Keys: product_type_id (the invented blueprint), base_runs (the resulting
+    BPC's run count before any decryptor bonus), base_probability (None when
+    the SDE has the recipe but no probability row - callers must treat that as
+    "can't estimate", never as 0), job_time, and datacores
+    ([(material_type_id, quantity), ...]: activity 8's "materials" are the
+    datacores one attempt consumes).
+
+    Not cached, same reasoning as get_sde_type. The parent repo memoises this
+    one specifically because its production planner re-queries the same
+    blueprint once per decryptor candidate (~12x per item, thousands of times
+    per run); no such planner exists here yet, and a cache would need explicit
+    invalidation on every SDE refresh."""
+    with connect(path) as conn:
+        product = conn.execute(
+            "SELECT product_type_id, quantity FROM sde_blueprint_products "
+            "WHERE blueprint_type_id = ? AND activity_id = 8",
+            (t1_blueprint_type_id,),
+        ).fetchone()
+        if product is None:
+            return None
+        product_type_id, base_runs = product
+        prob = conn.execute(
+            "SELECT probability FROM sde_invention_probability "
+            "WHERE t1_blueprint_type_id = ? AND product_type_id = ?",
+            (t1_blueprint_type_id, product_type_id),
+        ).fetchone()
+        time_row = conn.execute(
+            "SELECT time FROM sde_blueprint_time WHERE blueprint_type_id = ? AND activity_id = 8",
+            (t1_blueprint_type_id,),
+        ).fetchone()
+        materials = conn.execute(
+            "SELECT material_type_id, quantity FROM sde_blueprint_materials "
+            "WHERE blueprint_type_id = ? AND activity_id = 8",
+            (t1_blueprint_type_id,),
+        ).fetchall()
+    return {
+        "product_type_id": product_type_id,
+        "base_runs": base_runs,
+        "base_probability": prob[0] if prob else None,
+        "job_time": time_row[0] if time_row else None,
+        "datacores": [tuple(r) for r in materials],
+    }
+
+
 def search_sde_types(query: str, limit: int = 20,
                      path: Optional[Path] = None) -> list[tuple[int, str]]:
     """Substring name lookup over published types. An exact (case-insensitive)
