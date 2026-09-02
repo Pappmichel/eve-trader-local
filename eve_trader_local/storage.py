@@ -15,6 +15,7 @@ Tables, ported from the parent's Postgres schema minus tenant scoping:
   candidate_universe / focused_candidates <- same names (see
                                              candidate_discovery.py)
   shortlist / shortlist_snapshot <- same names (see shortlist.py)
+  realized_trades <- same name (see trade_reconciliation.py)
 
 The sde_* tables carried no tenant_id even in the parent (they are CCP's own
 static data, identical for everyone and refreshed globally), so they port
@@ -32,7 +33,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
-from .models import Candidate, ShortlistItem, ShortlistRow
+from .models import Candidate, RealizedTrade, ShortlistItem, ShortlistRow
 from .paths import db_path
 
 SCHEMA = """
@@ -235,6 +236,28 @@ CREATE TABLE IF NOT EXISTS shortlist_snapshot (
 -- significant digits - not enough for a capital hull's landed cost).
 -- SQLite's REAL is already a 64-bit IEEE double, so there is nothing to
 -- widen here; the same column names are kept for readability.
+
+-- ------------------------------------------------- realized trade history
+-- One row per FIFO-matched buy/sell pair from the last reconciliation run
+-- (see trade_reconciliation.py). Replaced wholesale every run, not appended:
+-- a run re-matches the entire lookback window from scratch, so older runs'
+-- rows are both near-fully redundant and unreachable (every read filters to
+-- MAX(run_ts)). The parent repo learned this the hard way - a naked INSERT
+-- there had bloated the table to ~19.8k rows across only 13 runs.
+CREATE TABLE IF NOT EXISTS realized_trades (
+    run_ts          TEXT,
+    type_id         INTEGER,
+    item            TEXT,
+    buy_date        TEXT,
+    buy_qty         INTEGER,
+    buy_unit_price  REAL,
+    sell_date       TEXT,
+    sell_qty        INTEGER,
+    sell_unit_price REAL,
+    matched_qty     INTEGER,
+    realized_profit REAL,
+    margin          REAL
+);
 
 -- Single row (id = 1): when the SDE cache was last replaced, and the ETag
 -- Fuzzwork served for the dump at that moment - compared against a fresh
@@ -695,4 +718,58 @@ def latest_shortlist_snapshot(path: Optional[Path] = None) -> list[ShortlistRow]
                          active=bool(r["active"]), item_id=r["item_id"], volume_m3=r["volume_m3"],
                          jita_sell=r["jita_sell"], import_cost=r["import_cost"],
                          meta_level=r["meta_level"], avg_daily_volume=r["avg_daily_volume"])
+            for r in rows]
+
+
+# ------------------------------------------------- realized trade history
+def get_station_ids_in_region(region_id: int,
+                              path: Optional[Path] = None) -> frozenset[int]:
+    """Every NPC station_id in `region_id`, from the SDE cache. Used by
+    trade_reconciliation to decide whether a wallet transaction happened in
+    the buy hub's region at all - wallet transactions carry only a
+    station/structure location_id, never a region_id, so there is nothing to
+    filter on without this lookup. Region-wide, not Jita's own solar system:
+    a trader can legitimately buy from any station in The Forge (confirmed
+    with the user in the parent repo). Empty until the SDE cache has been
+    refreshed."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT s.station_id FROM sde_stations s "
+            "JOIN sde_solar_systems sys ON sys.solar_system_id = s.solar_system_id "
+            "WHERE sys.region_id = ?", (region_id,),
+        ).fetchall()
+    return frozenset(r[0] for r in rows)
+
+
+def save_realized_trades(trades: Sequence[RealizedTrade], run_ts: str,
+                         path: Optional[Path] = None) -> None:
+    """Replaces the whole table with one run's matched pairs - see the
+    realized_trades schema comment for why this is not an append."""
+    with connect(path) as conn:
+        conn.execute("DELETE FROM realized_trades")
+        conn.executemany(
+            "INSERT INTO realized_trades (run_ts, type_id, item, buy_date, buy_qty, buy_unit_price, "
+            "sell_date, sell_qty, sell_unit_price, matched_qty, realized_profit, margin) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(run_ts, t.type_id, t.item, t.buy_date, t.buy_qty, t.buy_unit_price,
+              t.sell_date, t.sell_qty, t.sell_unit_price, t.matched_qty,
+              t.realized_profit, t.margin) for t in trades],
+        )
+
+
+def latest_realized_trades(path: Optional[Path] = None) -> list[RealizedTrade]:
+    """The most recent run's matched pairs, as RealizedTrade objects (same
+    reasoning as latest_shortlist_snapshot - the parent hands its web layer a
+    pandas DataFrame here; no pandas here, and every caller wants the
+    dataclass). Empty list if reconciliation has never run."""
+    with connect(path) as conn:
+        run_ts = conn.execute("SELECT MAX(run_ts) FROM realized_trades").fetchone()[0]
+        if not run_ts:
+            return []
+        rows = conn.execute("SELECT * FROM realized_trades WHERE run_ts = ?", (run_ts,)).fetchall()
+    return [RealizedTrade(type_id=r["type_id"], item=r["item"], buy_date=r["buy_date"],
+                          buy_qty=r["buy_qty"], buy_unit_price=r["buy_unit_price"],
+                          sell_date=r["sell_date"], sell_qty=r["sell_qty"],
+                          sell_unit_price=r["sell_unit_price"], matched_qty=r["matched_qty"],
+                          realized_profit=r["realized_profit"], margin=r["margin"])
             for r in rows]

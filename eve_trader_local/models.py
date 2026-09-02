@@ -4,11 +4,10 @@ No storage/config imports here on purpose - these are the values passed
 between candidate discovery, backtesting and the shortlist, and they have to
 stay free of any dependency on where those values came from.
 
-`Candidate`, `NewCandidateResult`, `ShortlistItem` and `ShortlistRow` exist
-so far: the parent eve-trader's models.py also carries RealizedTrade/
-UnlistedStockRow/UndercutRow, which belong to trade_reconciliation.py/
-own_orders.py, neither of which is ported here yet (see SYNC.md) - each
-arrives with its own module.
+`Candidate`, `NewCandidateResult`, `ShortlistItem`, `ShortlistRow` and
+`RealizedTrade` exist so far: the parent eve-trader's models.py also carries
+UnlistedStockRow/UndercutRow, which belong to own_orders.py, not ported here
+yet (see SYNC.md) - each arrives with its own module.
 """
 from __future__ import annotations
 
@@ -99,3 +98,23 @@ class ShortlistRow:
     # history for this item in that region - never estimated from something
     # else.
     avg_daily_volume: Optional[float] = None
+
+
+@dataclass
+class RealizedTrade:
+    """One FIFO-matched buy (Jita) / sell (structure) pair for the same
+    type_id - see trade_reconciliation.py. buy_qty/sell_qty are the *whole*
+    transactions either side of the match; `matched_qty` is how much of them
+    this particular pairing consumed, and the only quantity any figure
+    derived from this row may use (one transaction can span several rows)."""
+    type_id: int
+    item: str
+    buy_date: str
+    buy_qty: int
+    buy_unit_price: float
+    sell_date: str
+    sell_qty: int
+    sell_unit_price: float
+    matched_qty: int
+    realized_profit: float
+    margin: float
