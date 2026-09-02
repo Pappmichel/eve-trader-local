@@ -1,0 +1,24 @@
+# Secrets / personal config
+.env
+config.yaml
+
+# Runtime data (the real DB lives outside the checkout by default, but keep
+# this here for anyone pointing EVE_TRADER_LOCAL_DATA_DIR at ./data)
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Editors / tooling
+.idea/
+.vscode/
+.claude/

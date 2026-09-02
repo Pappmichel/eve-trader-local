@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eve-trader-local"
+version = "0.1.0"
+description = "Local-first, server-less variant of eve-trader: embedded SQLite, single user, EVE SSO login."
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+eve-trader-local = "eve_trader_local.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["eve_trader_local*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

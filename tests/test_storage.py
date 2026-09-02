@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from eve_trader_local import storage
+
+
+def test_init_db_is_idempotent(db):
+    storage.init_db()
+    storage.init_db()
+    with storage.connect() as conn:
+        names = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"tokens", "esi_sync_state", "settings"} <= names
+
+
+def test_wal_mode_enabled(db):
+    with storage.connect() as conn:
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"
+
+
+def test_connect_rolls_back_on_exception(db):
+    with pytest.raises(RuntimeError):
+        with storage.connect() as conn:
+            conn.execute("INSERT INTO settings (scope, overrides) VALUES ('trading', '{}')")
+            raise RuntimeError("boom")
+    assert storage.load_settings("trading") == {}
+
+
+# ------------------------------------------------------------------- tokens
+RECORD = {
+    "role": "buyer:42",
+    "character_id": 42,
+    "character_name": "Some Pilot",
+    "access_token": "at",
+    "refresh_token": "rt",
+    "expires_at": 1700000000.0,
+    "scopes": "esi-markets.read_character_orders.v1",
+}
+
+
+def test_token_round_trip(db):
+    storage.save_token("buyer:42", RECORD)
+    assert storage.load_all_tokens() == {"buyer:42": RECORD}
+
+
+def test_save_token_upserts_same_role(db):
+    storage.save_token("buyer:42", RECORD)
+    storage.save_token("buyer:42", {**RECORD, "access_token": "at2"})
+    stored = storage.load_all_tokens()
+    assert len(stored) == 1
+    assert stored["buyer:42"]["access_token"] == "at2"
+
+
+def test_tokens_for_different_roles_coexist(db):
+    storage.save_token("buyer:42", RECORD)
+    storage.save_token("seller:43", {**RECORD, "role": "seller:43", "character_id": 43})
+    assert set(storage.load_all_tokens()) == {"buyer:42", "seller:43"}
+
+
+def test_delete_token_is_idempotent(db):
+    storage.save_token("buyer:42", RECORD)
+    storage.delete_token("buyer:42")
+    storage.delete_token("buyer:42")  # no row left - must not raise
+    assert storage.load_all_tokens() == {}
+
+
+# ----------------------------------------------------------- esi sync state
+def test_sync_time_missing_is_none(db):
+    assert storage.get_esi_sync_time("trading") is None
+
+
+def test_sync_time_round_trip_and_overwrite(db):
+    storage.set_esi_sync_time("trading", "2026-01-01T00:00:00")
+    storage.set_esi_sync_time("trading", "2026-01-02T00:00:00")
+    storage.set_esi_sync_time("production", "2026-01-03T00:00:00")
+    assert storage.get_esi_sync_time("trading") == "2026-01-02T00:00:00"
+    assert storage.get_esi_sync_time("production") == "2026-01-03T00:00:00"
+
+
+# ----------------------------------------------------------------- settings
+def test_settings_missing_is_empty_dict(db):
+    assert storage.load_settings("trading") == {}
+
+
+def test_settings_merge_preserves_unrelated_keys(db):
+    storage.save_settings("trading", {"structure_id": 123, "lookback_days": 7})
+    storage.save_settings("trading", {"lookback_days": 14})
+    assert storage.load_settings("trading") == {"structure_id": 123, "lookback_days": 14}
+
+
+def test_settings_scopes_are_independent(db):
+    storage.save_settings("trading", {"lookback_days": 7})
+    storage.save_settings("other", {"lookback_days": 99})
+    assert storage.load_settings("trading") == {"lookback_days": 7}
+
+
+def test_no_tenant_columns_anywhere(db):
+    """The point of this repo: single-user, so nothing carries a tenant id."""
+    with storage.connect() as conn:
+        for table in ("tokens", "esi_sync_state", "settings"):
+            cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+            assert not any("tenant" in c for c in cols), (table, cols)
+
+
+def test_explicit_path_argument_is_honoured(tmp_path):
+    other = tmp_path / "other.sqlite3"
+    storage.init_db(other)
+    storage.save_token("buyer:1", RECORD, path=other)
+    assert storage.load_all_tokens(path=other) == {"buyer:1": RECORD}
+    assert other.exists()
+    with pytest.raises(sqlite3.OperationalError):
+        # A file that was never init_db'd has no tables - proves the path
+        # argument really is what selected the database above.
+        storage.load_all_tokens(path=tmp_path / "empty.sqlite3")
