@@ -741,6 +741,21 @@ def get_station_ids_in_region(region_id: int,
     return frozenset(r[0] for r in rows)
 
 
+def get_station_ids_in_system(system_id: int,
+                              path: Optional[Path] = None) -> frozenset[int]:
+    """Every NPC station_id in one solar system, from the SDE cache - lets a
+    caller ask "is this asset's location_id a Jita station" without a live
+    ESI lookup per station. Narrower than get_station_ids_in_region on
+    purpose: own_orders.fetch_buyer_already_covered asks about Jita itself
+    (stock already sitting in the buy hub), not about the whole Forge.
+    Empty until the SDE cache has been refreshed."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT station_id FROM sde_stations WHERE solar_system_id = ?", (system_id,)
+        ).fetchall()
+    return frozenset(r[0] for r in rows)
+
+
 def save_realized_trades(trades: Sequence[RealizedTrade], run_ts: str,
                          path: Optional[Path] = None) -> None:
     """Replaces the whole table with one run's matched pairs - see the

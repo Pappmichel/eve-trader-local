@@ -4,10 +4,9 @@ No storage/config imports here on purpose - these are the values passed
 between candidate discovery, backtesting and the shortlist, and they have to
 stay free of any dependency on where those values came from.
 
-`Candidate`, `NewCandidateResult`, `ShortlistItem`, `ShortlistRow` and
-`RealizedTrade` exist so far: the parent eve-trader's models.py also carries
-UnlistedStockRow/UndercutRow, which belong to own_orders.py, not ported here
-yet (see SYNC.md) - each arrives with its own module.
+Each dataclass arrives with the module it belongs to (see SYNC.md); the
+parent eve-trader's models.py carries further ones, for tools this repo
+hasn't ported.
 """
 from __future__ import annotations
 
@@ -118,3 +117,31 @@ class RealizedTrade:
     matched_qty: int
     realized_profit: float
     margin: float
+
+
+@dataclass
+class UnlistedStockRow:
+    """Stock physically sitting at the structure that isn't covered by an
+    open sell order - see own_orders.fetch_seller_stock_without_order, whose
+    dicts the display layer turns into these. sell_volume/margin mirror
+    ShortlistRow's own fields (same shortlist.evaluate_shortlist_item
+    formula) - None when the item has no Jita/structure order-book data at
+    all (e.g. never priced through the shortlist)."""
+    type_id: int
+    item: str
+    asset_quantity: float
+    sell_order_remaining: float
+    unlisted_quantity: float
+    sell_volume: Optional[float] = None
+    margin: Optional[float] = None
+
+
+@dataclass
+class UndercutRow:
+    """One of the seller's own sell orders currently beaten by a cheaper
+    competing order at the same structure - see own_orders.check_undercut."""
+    type_id: int
+    item: str
+    my_price: float
+    competitor_price: float
+    difference: float

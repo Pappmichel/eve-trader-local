@@ -37,6 +37,21 @@ USER_AGENT = (
 
 METALEVEL_ATTRIBUTE_ID = 633  # EVE SDE dogma attribute "metaLevel" (0=Tech I, 5=Tech II, ...)
 
+# location_flag values that share a hangar's location_id in ESI's asset model
+# but are NOT usable stock sitting in that hangar:
+# - AssetSafety: recovered after a structure was unanchored/lost - requires a
+#   separate retrieval trip/fee, not physically at this location right now.
+# - Deliveries / CorpDeliveries: tied up in a pending contract, not free stock.
+# - CorpMarket: listed on the corp's buyback/market system, not hangar stock.
+# Confirmed as a real, previously-hit bug class for ESI asset tools (jeveassets
+# changelog: "Asset safety is not an unknown location" needed its own fix).
+# Without this filter anything counting "stock at a location" silently
+# over-counts by including quantities that aren't actually available.
+# Lives here rather than in storage.py (where the parent repo keeps it): it
+# describes ESI's asset payload, and this repo has no persisted asset table
+# for it to sit next to - see SYNC.md.
+NON_STOCK_LOCATION_FLAGS = ("AssetSafety", "Deliveries", "CorpDeliveries", "CorpMarket")
+
 
 class ESIError(ActionError):
     """An ESI call failed in a way the user should be told about (HTTP error,
