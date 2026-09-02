@@ -31,8 +31,12 @@ features here yet.** What exists:
   overrides, with type/range validation that runs *before* anything is applied.
 - `auth.py` — EVE SSO OAuth2 (authorization code + PKCE), ported nearly
   unchanged from the parent repo, storing tokens locally.
-- `cli.py` — `init-db`, `auth`, `whoami`, `config`: enough to prove the three
-  layers work together.
+- `sde.py` — the EVE Static Data Export importer: downloads CCP's SDE as CSV
+  from [Fuzzwork](https://www.fuzzwork.co.uk/dump/latest/csv/) and caches it in
+  SQLite. Ported from the parent's `production/sde.py`. This is the data layer
+  only — nothing reads it yet.
+- `cli.py` — `init-db`, `auth`, `whoami`, `config`, `refresh-sde`,
+  `sde-status`: enough to prove the layers work together.
 
 Explicitly **not** done yet:
 
@@ -72,6 +76,8 @@ eve-trader-local init-db            # create the SQLite file (idempotent)
 eve-trader-local auth --role buyer  # opens a browser, stores the token
 eve-trader-local whoami             # list authorized characters
 eve-trader-local config             # show the resolved configuration
+eve-trader-local refresh-sde        # download the EVE Static Data Export
+eve-trader-local sde-status         # when was it refreshed; is a newer dump out?
 eve-trader-local check-update       # is there a newer commit on origin/main?
 eve-trader-local update             # fetch + reset --hard + reinstall deps
 ```
@@ -83,6 +89,14 @@ changes, an `origin` pointing at this repository) — it ends in
 `config.yaml` are never touched: they live outside the checkout by default
 (see below), and if you have pointed `EVE_TRADER_LOCAL_DATA_DIR` inside it, the
 update refuses unless git actually ignores them.
+
+`refresh-sde` is a completely separate update cycle from `update` — CCP patches
+the Static Data Export a few times a year, on a schedule unrelated to this
+app's own code. It downloads ~19MB directly from Fuzzwork (a public third
+party; nothing this project hosts) and replaces the cached tables wholesale in
+one transaction, so a failed download leaves the previous cache intact.
+`sde-status` answers "is there a newer dump?" with a single HEAD request
+instead.
 
 Authorizing twice under the same role registers a *second* character rather
 than overwriting the first — tokens are keyed `<role>:<character_id>`.

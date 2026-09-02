@@ -22,6 +22,7 @@ candidate.
 | File here | File in eve-trader | What's shared | Status |
 |---|---|---|---|
 | `eve_trader_local/auth.py` | `eve_trader/auth.py` | EVE SSO authorization-code+PKCE flow: state/PKCE generation, loopback callback handling, refresh logic | Ported 2026-09-02. Storage calls adapted here (no tenant scoping), locking removed (single-process, no shared thread pool to guard) — port algorithm changes only, not the storage glue. |
+| `eve_trader_local/sde.py` | `eve_trader/production/sde.py` | Fuzzwork CSV fetch/parse: the file list, `_fetch_csv`'s retry-with-backoff, `_dump_etag`'s ETag freshness check, every row-shaping rule (the `_RELEVANT_ACTIVITIES` filter, the slot-defining dogma effect IDs, `metaGroupID`/`portionSize` handling) | Ported 2026-09-02, near-verbatim. **Data layer only.** Deliberately left out: the parent's `production/constants.py` import (the four activity IDs are inlined), `ProductionConfig.fuzzwork_csv_base` (a module constant here — no Production config exists yet), and most of the parent's `storage.py` SDE *read* helpers (`load_sde_*`, `get_type_category`, `get_blueprint_*`, `find_invention_recipe_candidates_*`, `get_type_slot`, `get_type_materials`, …) — those exist to serve Production/Doctrine/Refining business logic that isn't ported here yet; port each one when the feature that needs it arrives. Only `sde_row_counts`, `get_sde_type` and `search_sde_types` came over, to make `refresh-sde`/`sde-status` verifiable by a human. The parent's `lru_cache` memoisation on those reads was dropped with them (nothing here calls them in a hot loop, and a cache would need invalidation on every refresh). |
 
 ## Candidates — port from eve-trader when a real local feature needs it
 
@@ -44,7 +45,6 @@ storage/`TRADING_CONFIG` wiring:
 | `eve_trader/production/engine.py` | `classify_activity`, `potential_daily_profit`/`daily_movement`, `ACTIVITY_MODS` |
 | `eve_trader/production/pricing.py` | Buy-vs-build pricing |
 | `eve_trader/production/invention.py` | Invention math |
-| `eve_trader/production/sde.py` | SDE refresh/parsing |
 | `eve_trader/production/constants.py` | Structure/rig-tier enums |
 | `eve_trader/refining/engine.py`, `pricing.py`, `reprocessing.py`, `optimizer.py`, `paste_parser.py` | Ore/mineral/reprocessing math |
 | `eve_trader/doctrine/engine.py`, `parser.py`, `validation.py` | Fitting parsing/validation logic |

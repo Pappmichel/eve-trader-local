@@ -3,6 +3,7 @@
     eve-trader-local init-db
     eve-trader-local auth --role buyer
     eve-trader-local whoami
+    eve-trader-local refresh-sde / sde-status
     eve-trader-local check-update / update
 
 This is not the intended long-term interface (a native GUI is - see README);
@@ -15,7 +16,7 @@ import argparse
 import sys
 import time
 
-from . import config, storage, updater
+from . import config, sde, storage, updater
 from .auth import TokenManager
 from .errors import ActionError
 from .paths import config_path, db_path
@@ -85,6 +86,31 @@ def cmd_update(args: argparse.Namespace) -> None:
     print("Restart eve-trader-local to run the new version.")
 
 
+def cmd_refresh_sde(args: argparse.Namespace) -> None:
+    print("Downloading the Static Data Export from Fuzzwork (this takes a minute)...")
+    counts = sde.refresh_sde()
+    width = max(len(t) for t in counts)
+    for table, count in counts.items():
+        print(f"  {table:<{width}}  {count:>9,}")
+    print("SDE refreshed.")
+
+
+def cmd_sde_status(args: argparse.Namespace) -> None:
+    status = sde.check_for_newer_sde()
+    if status["local_refreshed_at"] is None:
+        print("SDE has never been refreshed on this machine. Run: eve-trader-local refresh-sde")
+    else:
+        print(f"Last refreshed: {status['local_refreshed_at']}")
+        counts = storage.sde_row_counts()
+        print(f"Cached rows:    {sum(counts.values()):,} across {len(counts)} tables")
+    if not status["remote_check_succeeded"]:
+        print("Could not reach Fuzzwork to check for a newer dump.")
+    elif status["newer_sde_available"]:
+        print("A newer SDE dump is available. Run: eve-trader-local refresh-sde")
+    elif status["local_refreshed_at"] is not None:
+        print("Fuzzwork's current dump matches the cached one.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="eve-trader-local", description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -97,6 +123,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("whoami", help="list authorized characters").set_defaults(func=cmd_whoami)
     sub.add_parser("config", help="show the resolved configuration").set_defaults(func=cmd_config)
+    sub.add_parser(
+        "refresh-sde", help="download the current EVE Static Data Export from Fuzzwork"
+    ).set_defaults(func=cmd_refresh_sde)
+    sub.add_parser(
+        "sde-status", help="show when the SDE was last refreshed and whether a newer dump exists"
+    ).set_defaults(func=cmd_sde_status)
     sub.add_parser(
         "check-update", help="check GitHub for a newer commit (read-only)"
     ).set_defaults(func=cmd_check_update)
