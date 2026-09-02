@@ -122,6 +122,12 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "skip_grace_period_days": (0, None),
     "max_active_shortlist_items": (1, None),
     "min_avg_movement": (0, None),
+    # Production (production/config.py's ProductionConfig - listed here, not
+    # there, because _check_range is keyed purely by field name and needs no
+    # Production import to do it; the enum-style structure/rig checks are the
+    # ones that genuinely can't live here).
+    "haul_cost_per_m3": (0, None),
+    "home_location_id": (1, None),
 }
 
 
