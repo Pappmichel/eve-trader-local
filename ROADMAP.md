@@ -85,6 +85,29 @@ reflected in `SYNC.md`'s "Never sync" list (`access_gate.py`, `admin.py`).
 
 - Native GUI (PyQt/PySide) replacing the CLI as the primary interface —
   discussed and decided in favor of "real native," not Electron/Tauri.
+  **Navigation model** (researched 2026-09-02, jEveAssets as the reference
+  point — a Java out-of-game asset manager, embedded SQLite, no server,
+  which is the closest existing example of this repo's own target shape):
+  jEveAssets does *not* keep every view permanently visible as its own tab
+  the way the parent repo's React frontend does (a fixed sidebar/tab per
+  page, e.g. Production alone has Overview/Blueprints/BuildCandidates/
+  Invention/Logistics/Margin/MaterialTree/Slots/UnlistedStock/AssetSearch/
+  Settings all visible at once). Instead it has one **menu bar with a
+  "Tools" menu** listing every available view (Assets, Values, Stockpile,
+  Overview, Materials, Journal, Transactions, Market Orders, Industry Jobs,
+  Contracts, Ship Fittings, Reprocessed, Routing, …); picking one opens it
+  as a tab in a shared workspace, and only the tabs someone actually opened
+  are ever on screen — closable, reorderable, none of them mandatory.
+  For this repo's GUI: mirror that shape, not the parent's fixed-tab-per-
+  page layout. A top-level menu per tool (Trading / Production / Doctrine /
+  Ore & Minerals), each listing its sub-views as menu items that open as
+  workspace tabs on demand — and, per the user's explicit ask, don't just
+  mirror the parent's page list 1:1 into menu items: group several of
+  today's separate pages into one combined view where that makes sense
+  (e.g. Production's BuildCandidates + MaterialTree + Invention could
+  reasonably be sub-sections of one "Blueprints" view rather than three
+  separate menu entries) rather than reproducing every existing route as
+  its own item.
 - Actual Trading/Production/Doctrine/Ore&Minerals business logic — see
   `SYNC.md`'s candidate table for what ports over and from where.
 - Packaging/installer once there's a GUI to package (feeds directly into
