@@ -30,6 +30,14 @@ import requests
 
 from . import storage
 from .errors import ActionError
+# The four SDE activity IDs used to live inlined here, because no Production
+# business logic existed in this repo to own them. production/constants.py is
+# now ported, so they have one definition again - same import direction as the
+# parent repo, where production/sde.py imports them from production/
+# constants.py. No cycle: constants.py imports nothing from this package.
+from .production.constants import (
+    ACTIVITY_COPYING, ACTIVITY_INVENTION, ACTIVITY_MANUFACTURING, ACTIVITY_REACTION,
+)
 
 FUZZWORK_CSV_BASE = "https://www.fuzzwork.co.uk/dump/latest/csv/"
 
@@ -41,14 +49,6 @@ FUZZWORK_CSV_BASE = "https://www.fuzzwork.co.uk/dump/latest/csv/"
 _FRESHNESS_FILE = "invTypes.csv"
 
 USER_AGENT = "eve-trader-local"
-
-# SDE industry activity IDs. Kept here rather than in a ported
-# production/constants.py - these four are all the SDE importer needs, and no
-# Production business logic exists in this repo yet (see SYNC.md).
-ACTIVITY_MANUFACTURING = 1
-ACTIVITY_COPYING = 5
-ACTIVITY_INVENTION = 8
-ACTIVITY_REACTION = 11
 
 # Copying (5) has no material rows (confirmed via wiki.eveuniversity.org/
 # Blueprint_copying: "no materials are consumed", just time) - included here

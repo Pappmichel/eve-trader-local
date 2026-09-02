@@ -557,6 +557,70 @@ def set_cached_packaged_volume(type_id: int, volume: float, path: Optional[Path]
         )
 
 
+def get_blueprint_for_product(product_type_id: int,
+                              path: Optional[Path] = None) -> Optional[tuple[int, int, float]]:
+    """(blueprint_type_id, activity_id, product_qty) for the blueprint/formula
+    that produces `product_type_id` via Manufacturing (1) or Reaction (11),
+    preferring Manufacturing if (implausibly) both exist. None if the type
+    isn't producible.
+
+    Confirmed real bug in the parent repo: some products (e.g. Tungsten
+    Carbide, type 16672) have a leftover *unpublished* blueprint row in the
+    SDE (CCP test/legacy data, e.g. "Test Reaction Blueprint") alongside the
+    real published one, with wildly different quantity/materials -
+    `t.published = 1` excludes those rows outright rather than merely
+    deprioritizing them, since a product whose *only* blueprint is unpublished
+    (e.g. Freki/Utu - CCP-unpublished, Faction-meta ships that
+    classify_activity would otherwise treat as buildable, confirmed live
+    2026-08-19) isn't actually buildable by any player either. The extra
+    `blueprint_type_id` tiebreak keeps the choice deterministic if several
+    published blueprints somehow tie."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT p.blueprint_type_id, p.activity_id, p.quantity FROM sde_blueprint_products p "
+            "JOIN sde_types t ON t.type_id = p.blueprint_type_id "
+            "WHERE p.product_type_id = ? AND p.activity_id IN (1, 11) AND t.published = 1 "
+            "ORDER BY p.activity_id, p.blueprint_type_id LIMIT 1",
+            (product_type_id,),
+        ).fetchone()
+    return tuple(row) if row else None
+
+
+def find_invention_recipe_candidates_by_product_type_id(
+    product_blueprint_type_id: int, path: Optional[Path] = None
+) -> tuple[int, ...]:
+    """Given a T2/T3 *blueprint*'s type_id (e.g. from
+    get_blueprint_for_product), every valid invention source for it
+    (best-probability-first), or an empty tuple if it isn't an invented type
+    (a T1 item, or a BPO that was never invention-sourced). This emptiness is
+    what production/engine.classify_activity relies on to keep Faction/Officer
+    items out of "Tech II".
+
+    Confirmed real in the parent repo: 79 T2/T3 products have *more than one*
+    valid invention source in the SDE - most visibly every Tech III
+    hull/subsystem, which has 3 relic "blueprints" (Intact/Malfunctioning/
+    Wrecked, see constants.ANCIENT_RELIC_CATEGORY_ID) with materially
+    different success probability (0.26/0.21/0.14) *and* output runs
+    (20/10/3) but identical materials/time otherwise - a real
+    buy-cost-vs-odds tradeoff, not a tiebreak to collapse away. An earlier
+    single-result version (`ORDER BY probability DESC LIMIT 1`) silently made
+    the cheaper Malfunctioning/Wrecked grades unconsiderable (reported by a
+    user, 2026-08-30). The ordering here just gives a deterministic first
+    element; picking the cheapest net cost across candidates x decryptors is
+    the invention module's job, which isn't ported here yet."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT p.blueprint_type_id FROM sde_blueprint_products p "
+            "LEFT JOIN sde_invention_probability prob "
+            "  ON prob.t1_blueprint_type_id = p.blueprint_type_id "
+            "  AND prob.product_type_id = p.product_type_id "
+            "WHERE p.activity_id = 8 AND p.product_type_id = ? "
+            "ORDER BY prob.probability DESC, p.blueprint_type_id",
+            (product_blueprint_type_id,),
+        ).fetchall()
+    return tuple(row[0] for row in rows)
+
+
 def search_sde_types(query: str, limit: int = 20,
                      path: Optional[Path] = None) -> list[tuple[int, str]]:
     """Substring name lookup over published types. An exact (case-insensitive)
