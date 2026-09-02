@@ -119,6 +119,8 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "min_margin_threshold": (0, None),
     "min_profit_threshold": (0, None),
     "min_hit_rate": (0, 1),
+    "skip_grace_period_days": (0, None),
+    "max_active_shortlist_items": (1, None),
     "min_avg_movement": (0, None),
 }
 
@@ -188,6 +190,18 @@ class TradingConfig:
     # An item has to clear *both* to be marked "Import" (see
     # shortlist._decision); below either one it's "Skip".
     min_profit_threshold: float = 0.0        # Minimum absolute profit per unit
+    # -- Shortlist pruning (see actions.do_refresh_and_prune_candidates) --
+    # How long an item has to stay continuously "No market data"/"Skip" before
+    # it is deactivated. The grace period exists so a single temporary
+    # market-data gap can't knock an otherwise-fine item off the shortlist.
+    skip_grace_period_days: int = 30
+    # Optional hard cap on how many items stay active, applied on top of the
+    # skip-streak pruning by ranking on max daily profit. Off by default: the
+    # skip streak already removes what's genuinely unprofitable, and a cap
+    # additionally removes items that are merely *less* profitable than 300
+    # others, which is a preference, not a correctness rule.
+    enforce_shortlist_cap: bool = False
+    max_active_shortlist_items: int = 300
     # (min_margin_threshold, further down under candidate discovery, is the
     # other half of that bar - the same field serves both the live shortlist
     # decision and the historical backtest's per-day profitability test.)

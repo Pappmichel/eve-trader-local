@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
-from .models import Candidate, RealizedTrade, ShortlistItem, ShortlistRow
+from .models import Candidate, NewCandidateResult, RealizedTrade, ShortlistItem, ShortlistRow
 from .paths import db_path
 
 SCHEMA = """
@@ -257,6 +257,64 @@ CREATE TABLE IF NOT EXISTS realized_trades (
     matched_qty     INTEGER,
     realized_profit REAL,
     margin          REAL
+);
+
+-- ------------------------------------------------ candidate search results
+-- One row per backtested candidate per search run (see history_backtest.py).
+-- Append-only, unlike candidate_universe/focused_candidates: a "safe" run
+-- only ever covers a rotating window of the universe, so previous runs'
+-- results are the rest of the picture, not stale duplicates. Reads always
+-- filter to MAX(run_ts) themselves.
+CREATE TABLE IF NOT EXISTS new_candidates (
+    run_ts            TEXT,
+    item              TEXT,
+    category          TEXT,
+    type_id           INTEGER,
+    volume_m3         REAL,
+    paired_days       INTEGER,
+    profitable_days   INTEGER,
+    hit_rate          REAL,
+    latest_margin     REAL,
+    best_margin       REAL,
+    avg_profit_m3     REAL,
+    avg_sell_movement REAL,
+    score             REAL,
+    recommendation    TEXT,
+    add_flag          INTEGER,
+    meta_level        INTEGER
+);
+
+-- Goonmetrics region price history, cached as it is fetched during a
+-- candidate search (history_sink) so the same days don't have to be
+-- re-downloaded to answer a later question about them (margin trends).
+CREATE TABLE IF NOT EXISTS goonmetrics_history (
+    region_id  INTEGER,
+    type_id    INTEGER,
+    date       TEXT,
+    min_price  REAL,
+    max_price  REAL,
+    avg_price  REAL,
+    movement   REAL,
+    num_orders INTEGER,
+    PRIMARY KEY (region_id, type_id, date)
+);
+
+-- Single row (id = 1): where the next "safe" (rate-limited) candidate search
+-- resumes from. Safe mode only tests a window of the universe per run, so
+-- without a persisted cursor the same head of the list would be re-tested
+-- every time and the tail never at all.
+CREATE TABLE IF NOT EXISTS candidate_search_cursor (
+    id           INTEGER PRIMARY KEY CHECK (id = 1),
+    offset_value INTEGER NOT NULL
+);
+
+-- When each item's current unbroken "No market data"/"Skip" streak started.
+-- A row exists only while a streak is in progress: it is deleted the moment
+-- the item is profitable again, and once a streak has actually led to
+-- deactivation (see actions.do_refresh_and_prune_candidates).
+CREATE TABLE IF NOT EXISTS shortlist_skip_streak (
+    item_id    INTEGER PRIMARY KEY,
+    skip_since TEXT NOT NULL
 );
 
 -- Single row (id = 1): when the SDE cache was last replaced, and the ETag
@@ -614,6 +672,117 @@ def get_candidate_universe_built_at(path: Optional[Path] = None) -> Optional[str
     return row[0] if row and row[0] else None
 
 
+# ------------------------------------------------- candidate search results
+def save_new_candidates(results: Sequence[NewCandidateResult], run_ts: str,
+                        path: Optional[Path] = None) -> None:
+    """Appends one search batch's scored candidates. Called once per internal
+    batch (see history_backtest's results_sink), not once per run - a full
+    scan takes minutes, and an interrupted one must keep whatever it already
+    scored."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO new_candidates (run_ts, item, category, type_id, volume_m3, paired_days, "
+            "profitable_days, hit_rate, latest_margin, best_margin, avg_profit_m3, avg_sell_movement, "
+            "score, recommendation, add_flag, meta_level) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(run_ts, r.item, r.category, r.type_id, r.volume_m3, r.paired_days, r.profitable_days,
+              r.hit_rate, r.latest_margin, r.best_margin, r.avg_profit_m3, r.avg_sell_movement,
+              r.score, r.recommendation, int(r.add), r.meta_level) for r in results],
+        )
+
+
+def latest_new_candidates(only_recommended: bool = False,
+                          path: Optional[Path] = None) -> list[NewCandidateResult]:
+    """The most recent search run's scored candidates, as NewCandidateResult
+    objects (the parent hands its web layer a DataFrame here; same reasoning
+    as latest_shortlist_snapshot). `only_recommended` keeps just the rows the
+    backtest actually flagged for adding - what do_add_to_shortlist wants."""
+    with connect(path) as conn:
+        run_ts = conn.execute("SELECT MAX(run_ts) FROM new_candidates").fetchone()[0]
+        if not run_ts:
+            return []
+        sql = "SELECT * FROM new_candidates WHERE run_ts = ?"
+        if only_recommended:
+            sql += " AND add_flag = 1"
+        rows = conn.execute(sql, (run_ts,)).fetchall()
+    return [NewCandidateResult(item=r["item"], category=r["category"], type_id=r["type_id"],
+                               volume_m3=r["volume_m3"], paired_days=r["paired_days"],
+                               profitable_days=r["profitable_days"], hit_rate=r["hit_rate"],
+                               latest_margin=r["latest_margin"], best_margin=r["best_margin"],
+                               avg_profit_m3=r["avg_profit_m3"],
+                               avg_sell_movement=r["avg_sell_movement"], score=r["score"],
+                               recommendation=r["recommendation"], add=bool(r["add_flag"]),
+                               meta_level=r["meta_level"]) for r in rows]
+
+
+def save_goonmetrics_history(points: Sequence, path: Optional[Path] = None) -> None:
+    """Upserts price-history days (goonmetrics_client.HistoryPoint). Deliberately
+    typed loosely: importing HistoryPoint here would pull goonmetrics_client ->
+    config -> storage into an import cycle, and every attribute used is part of
+    that dataclass' documented shape."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO goonmetrics_history VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(region_id, type_id, date) DO UPDATE SET "
+            "min_price=excluded.min_price, max_price=excluded.max_price, avg_price=excluded.avg_price, "
+            "movement=excluded.movement, num_orders=excluded.num_orders",
+            [(p.region_id, p.type_id, p.date, p.min_price, p.max_price, p.avg_price,
+              p.movement, p.num_orders) for p in points],
+        )
+
+
+def read_goonmetrics_history_for_types(type_ids: Sequence[int],
+                                       path: Optional[Path] = None) -> list:
+    """Cached history for just these type_ids, as HistoryPoint objects.
+    Filtered in SQL rather than read whole: the table also holds every
+    candidate ever backtested, and the only consumer (margin trends over the
+    shortlist) would discard all of that anyway."""
+    from .goonmetrics_client import HistoryPoint  # local import - see save_goonmetrics_history
+    type_ids = list(type_ids)
+    if not type_ids:
+        return []
+    placeholders = ",".join("?" * len(type_ids))
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT * FROM goonmetrics_history WHERE type_id IN ({placeholders})", type_ids
+        ).fetchall()
+    return [HistoryPoint(region_id=r["region_id"], type_id=r["type_id"], date=r["date"],
+                         min_price=r["min_price"], max_price=r["max_price"],
+                         avg_price=r["avg_price"], movement=r["movement"],
+                         num_orders=r["num_orders"]) for r in rows]
+
+
+def get_candidate_search_offset(path: Optional[Path] = None) -> int:
+    """Where the next safe-mode search resumes - 0 if none has run yet."""
+    with connect(path) as conn:
+        row = conn.execute("SELECT offset_value FROM candidate_search_cursor WHERE id = 1").fetchone()
+    return row[0] if row else 0
+
+
+def set_candidate_search_offset(offset: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO candidate_search_cursor (id, offset_value) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET offset_value = excluded.offset_value",
+            (offset,),
+        )
+
+
+def sde_type_names(type_ids: Sequence[int], path: Optional[Path] = None) -> dict[int, str]:
+    """type_id -> type_name for whichever ids are in the SDE cache. A missing
+    id is simply absent from the result, not an error - the cache only covers
+    published, market-grouped types, so an id from a wallet transaction can
+    legitimately miss."""
+    type_ids = list(type_ids)
+    if not type_ids:
+        return {}
+    placeholders = ",".join("?" * len(type_ids))
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT type_id, type_name FROM sde_types WHERE type_id IN ({placeholders})", type_ids
+        ).fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
 # ------------------------------------------------------------------ shortlist
 # Shortlist *membership* is genuinely persisted state (unlike a candidate
 # search, which is a stateless computation over its inputs), but it lives
@@ -681,6 +850,42 @@ def update_shortlist_meta_levels(meta_levels: dict[int, int], path: Optional[Pat
     with connect(path) as conn:
         conn.executemany("UPDATE shortlist SET meta_level = ? WHERE item_id = ?",
                          [(level, item_id) for item_id, level in meta_levels.items()])
+
+
+def get_shortlist_skip_since(path: Optional[Path] = None) -> dict[int, str]:
+    """{item_id: when its current unbroken Skip streak started} for every item
+    currently mid-streak - an item absent from this dict isn't on one."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT item_id, skip_since FROM shortlist_skip_streak").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def start_shortlist_skip_streak(item_ids: Sequence[int], since: str,
+                                path: Optional[Path] = None) -> None:
+    """Records `since` as the streak start for each item that doesn't already
+    have one in progress. DO NOTHING, not an update: a streak's start must
+    stay where it was, otherwise every further Skip run would push the
+    deactivation deadline out and it could never be reached."""
+    item_ids = list(item_ids)
+    if not item_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO shortlist_skip_streak (item_id, skip_since) VALUES (?, ?) "
+            "ON CONFLICT(item_id) DO NOTHING",
+            [(i, since) for i in item_ids],
+        )
+
+
+def clear_shortlist_skip_streak(item_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    """Ends the tracked streak for each item - called both when an item is
+    profitable again (streak broken) and once a streak has led to
+    deactivation (nothing left to track)."""
+    item_ids = list(item_ids)
+    if not item_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany("DELETE FROM shortlist_skip_streak WHERE item_id = ?", [(i,) for i in item_ids])
 
 
 def save_shortlist_snapshot(rows: Sequence[ShortlistRow], run_ts: str,

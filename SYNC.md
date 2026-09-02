@@ -31,6 +31,85 @@ candidate.
 | `eve_trader_local/sde.py` | `eve_trader/production/sde.py` | Fuzzwork CSV fetch/parse: the file list, `_fetch_csv`'s retry-with-backoff, `_dump_etag`'s ETag freshness check, every row-shaping rule (the `_RELEVANT_ACTIVITIES` filter, the slot-defining dogma effect IDs, `metaGroupID`/`portionSize` handling) | Ported 2026-09-02, near-verbatim. **Data layer only.** Deliberately left out: the parent's `production/constants.py` import (the four activity IDs are inlined), `ProductionConfig.fuzzwork_csv_base` (a module constant here — no Production config exists yet), and most of the parent's `storage.py` SDE *read* helpers (`load_sde_*`, `get_type_category`, `get_blueprint_*`, `find_invention_recipe_candidates_*`, `get_type_slot`, `get_type_materials`, …) — those exist to serve Production/Doctrine/Refining business logic that isn't ported here yet; port each one when the feature that needs it arrives. Only `sde_row_counts`, `get_sde_type` and `search_sde_types` came over, to make `refresh-sde`/`sde-status` verifiable by a human. The parent's `lru_cache` memoisation on those reads was dropped with them (nothing here calls them in a hot loop, and a cache would need invalidation on every refresh). |
 | `eve_trader_local/trade_reconciliation.py`, `eve_trader_local/models.py` | `eve_trader/trade_reconciliation.py`, `eve_trader/models.py` | The whole realized-P&L pass: `fetch_recent_transactions`' `from_id` cursor paging (a single un-paginated call only ever sees ESI's most recent 2500 transactions, which silently dropped older-but-still-in-window trades), `fetch_recent_journal_entries`' best-effort `market_transaction` lookup, `reconcile_realized_trades`' per-type FIFO match (pooled across every buyer/seller character, not paired 1:1) with both location filters and the `buy_date <= sell_date` rule, the landed-cost/net-sell formula including the wallet-journal real-tax path and its `_ASSUMED_TAX_RATE_IN_DEFAULT_HAIRCUT` back-out, the on-demand ESI type backfill, `summarize_realized` and `average_daily_sold_by_type`. Plus the `RealizedTrade` dataclass. | Ported 2026-09-02, near-verbatim. The two matching bugs the parent's shape exists for came over in the code, not just in this table: **a buy dated after its sell is never a cost basis** (FIFO alone only orders buys chronologically; in the parent 20% of matched rows, and 21.8% of reported profit, had `buy_date > sell_date` — the matcher breaks and drops the sell's unmatched remainder rather than substituting a later buy), and **the buy side is region-filtered too** (it had no location filter at all, so any wallet transaction the buyer made anywhere could be paired against an unrelated structure sale). `_BUY_LOOKBACK_MULTIPLIER` (buys fetched over 3x the sell window) came with them, for the same reason. `average_daily_sold_by_type` is deliberately kept even though the shortlist no longer uses it: it answers the narrower "how much have *I* sold of this" question, not the market-wide Profit/Day figure that `shortlist.average_market_daily_volume` now answers (issue #100 superseded issue #51's realized-sales version *there*, it did not delete this). **Storage-ownership decision: this module calls storage itself, unlike `candidate_discovery.py`/`history_backtest.py`/`shortlist.py`** — the parent's own `trade_reconciliation.py` imports `storage` and calls it directly in two places (`get_station_ids_in_region` for the buyer-side filter, and a `realized_trades` read in `average_daily_sold_by_type`), where the parent's `shortlist.py` imports no storage at all. So this file follows the parent's actual structure rather than the shortlist precedent: the calls live here, the SQL still lives in `storage.py` (this repo's one persistence module), and *writing* a run's results stays the caller's job exactly as in the parent's `actions.do_reconcile_trades`. Added here to support it: the `realized_trades` table (replaced wholesale per run, not appended — a naked INSERT had bloated the parent's to ~19.8k rows over 13 runs) with `save_realized_trades`/`latest_realized_trades` (the latter returns `RealizedTrade` objects where the parent's `read_table` returns a DataFrame — no pandas here), and `storage.get_station_ids_in_region`, without the parent's `lru_cache` (nothing calls it in a hot loop, and a cache would need invalidating on every SDE refresh — the same call this repo already made for its other SDE reads). No config fields were needed: `lookback_days`/`import_cost_per_m3`/`jita_buy_broker_fee`/`structure_sell_haircut`/`jita_region_id`/`structure_id` all already exist. |
 
+## The orchestration layer (`actions.py`) — an integration, not a port
+
+`eve_trader_local/actions.py` (2026-09-02) is a different kind of entry from
+every row above: the rows are file-for-file ports of business logic, this is
+the *integration* that finally wires them together. It follows the parent's
+`eve_trader/actions.py` structurally — same `do_*` names, same "thin
+orchestration only, real logic stays in the other modules" rule, same
+`ActionError` boundary the CLI catches — but it is a synthesis against this
+repo's own modules, so a future diff against the parent's file will never
+apply cleanly line-for-line. **Sync its *behavior*, not its text**: a change
+to the parent's step ordering, pruning policy, failure isolation or a
+`do_*`'s documented result shape is a sync candidate; its tenant/config/
+DataFrame plumbing is not.
+
+What's covered: `do_list_buyer_characters`/`do_list_seller_characters`/
+`do_remove_trading_character`, `do_wallet_balance`/`do_wallet_transactions`,
+`do_update_settings`, `do_build_universe`/`do_build_focused`,
+`do_find_new_candidates`, `do_add_to_shortlist`, `do_refresh_shortlist`
+(plus the shared `_refresh_shortlist_rows`/`_backfill_meta_levels`),
+`do_shortlist_trends`, `do_check_seller_unlisted_stock`/`do_check_undercut`,
+`do_refresh_and_prune_candidates` (with `_items_past_skip_grace_period`/
+`_items_beyond_rank`/`_items_to_reactivate` and
+`shortlist_skip_deactivation_days`), `do_reconcile_trades` and `do_pipeline`.
+The parent's two real behavioral lessons came over in the code: `do_pipeline`
+calls `do_refresh_and_prune_candidates`, never a separate find+refresh pair
+(the parent's "Run Complete Pipeline" once added and pruned nothing at all
+because of that), and each of its steps is isolated in its own try/except so
+a missing login or a network hiccup in one can't stop the others.
+
+Deliberately excluded: `do_create_backup`/`do_list_backups` (the parent's
+`backup.py` shells out to `docker exec pg_dump` — see "Never sync"), and
+anything tenant/admin-shaped. `do_auth` is excluded too: `cli.py`'s `auth`
+command calls `TokenManager.login` directly, and this repo's TokenManager
+has only ever stored characters under `f"{prefix}:{character_id}"`, so the
+parent's legacy-single-key reconciliation in `_list_role_characters` has
+nothing to reconcile here — it is one `tm.list_records(prefix)` call.
+`do_recategorize_shortlist` and `do_list_transaction_characters` are left
+out as web-UI-specific one-offs (a one-time fix-up for a bug this repo's
+shortlist never had, and a character picker for a tab that doesn't exist);
+port them if a GUI needs them. `do_wallet_transactions` returns raw
+`location_id`s where the parent resolves display names — that needs the
+parent's persisted `structure_names` table, which this repo has no
+equivalent of yet.
+
+Added here specifically to support this layer:
+- `storage.py`: the `new_candidates`, `goonmetrics_history`,
+  `candidate_search_cursor` and `shortlist_skip_streak` tables (the
+  persistence `candidate_discovery.py`/`history_backtest.py` were
+  deliberately ported without, since their caller owns it) with
+  `save_new_candidates`/`latest_new_candidates`, `save_goonmetrics_history`/
+  `read_goonmetrics_history_for_types`, `get_candidate_search_offset`/
+  `set_candidate_search_offset`, `get_shortlist_skip_since`/
+  `start_shortlist_skip_streak`/`clear_shortlist_skip_streak`, plus
+  `sde_type_names`. `latest_new_candidates` returns `NewCandidateResult`
+  objects and `read_goonmetrics_history_for_types` returns `HistoryPoint`
+  objects where the parent returns DataFrames (no pandas here) — the latter
+  imports `HistoryPoint` *inside* the function, since a module-level import
+  would close a `storage -> goonmetrics_client -> config -> storage` cycle.
+  `new_candidates` is append-only (a safe-mode run only ever covers a
+  rotating window, so earlier runs are the rest of the picture, not stale
+  duplicates); reads filter to `MAX(run_ts)` themselves.
+- `config.py`: `TradingConfig.skip_grace_period_days`,
+  `enforce_shortlist_cap` and `max_active_shortlist_items` — the pruning
+  policy fields the `shortlist.py` row deferred to exactly this layer, with
+  `_FIELD_RANGES` entries for the two numeric ones.
+- `cli.py`: `build-universe`, `find-candidates` (`--safe/--full`, matching
+  the parent's own flag pair), `add-to-shortlist`, `refresh-shortlist`,
+  `check-unlisted-stock`, `check-undercut`, `reconcile-trades` and
+  `pipeline` (`--rebuild-universe`). One command per action, printing only —
+  no logic, so the future GUI calls the same `do_*` functions.
+
+One deliberate behavioral difference from the parent, not an oversight:
+`do_add_to_shortlist` raises only when *no* candidate search has ever run,
+and returns `{"added": 0}` when the latest run simply recommended nothing.
+The parent raises on an empty table only, which amounts to the same thing
+there (its table accumulates across tenants' runs); here the distinction has
+to be explicit so a normal "nothing worth adding this run" outcome doesn't
+abort `do_refresh_and_prune_candidates` before it prunes.
+
 ## Candidates — port from eve-trader when a real local feature needs it
 
 None of these exist in this repo yet. When one gets ported over, add it to the table above and keep it in sync
