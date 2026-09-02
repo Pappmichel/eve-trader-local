@@ -12,6 +12,8 @@ Tables, ported from the parent's Postgres schema minus tenant scoping:
   settings      <- tenant_settings    (config overrides, keyed by scope)
   sde_*         <- sde_*              (Fuzzwork SDE cache, see sde.py)
   type_packaged_volume <- type_packaged_volume  (ESI-only per-type constant)
+  candidate_universe / focused_candidates <- same names (see
+                                             candidate_discovery.py)
 
 The sde_* tables carried no tenant_id even in the parent (they are CCP's own
 static data, identical for everyone and refreshed globally), so they port
@@ -29,6 +31,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
 
+from .models import Candidate
 from .paths import db_path
 
 SCHEMA = """
@@ -164,6 +167,31 @@ CREATE INDEX IF NOT EXISTS idx_sde_type_materials_by_type ON sde_type_materials 
 CREATE TABLE IF NOT EXISTS type_packaged_volume (
     type_id         INTEGER PRIMARY KEY,
     packaged_volume REAL NOT NULL
+);
+
+-- ------------------------------------------------- candidate discovery
+-- The market-group-derived candidate universe, and the focused subset built
+-- from it (see candidate_discovery.py). Both are "current state" snapshots,
+-- not append-only history: each run replaces the whole table (run_ts records
+-- when that happened), so runs never accumulate duplicates.
+CREATE TABLE IF NOT EXISTS candidate_universe (
+    run_ts            TEXT,
+    item              TEXT,
+    type_id           INTEGER,
+    volume_m3         REAL,
+    category          TEXT,
+    market_group_path TEXT,
+    meta_level        INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS focused_candidates (
+    run_ts            TEXT,
+    item              TEXT,
+    type_id           INTEGER,
+    volume_m3         REAL,
+    category          TEXT,
+    market_group_path TEXT,
+    meta_level        INTEGER
 );
 
 -- Single row (id = 1): when the SDE cache was last replaced, and the ETag
@@ -422,3 +450,100 @@ def search_sde_types(query: str, limit: int = 20,
             (f"%{query}%", query, limit),
         ).fetchall()
     return [tuple(r) for r in rows]
+
+
+def load_sde_category_names(path: Optional[Path] = None) -> dict[int, str]:
+    """category_id -> real SDE category name (e.g. 7 -> "Module", 20 ->
+    "Implant") - lets candidate_discovery.guess_category show the actual EVE
+    category instead of a crude Module-vs-everything-else split."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT category_id, category_name FROM sde_categories").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def load_sde_market_groups(path: Optional[Path] = None) -> list[tuple[int, Optional[int], str]]:
+    """(market_group_id, parent_group_id, market_group_name) for every cached
+    market group - static data (see sde.py), used by candidate_discovery.py to
+    build the candidate universe locally instead of walking ESI's market-group
+    tree live."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT market_group_id, parent_group_id, market_group_name FROM sde_market_groups"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def load_sde_types_with_market_group(
+    path: Optional[Path] = None,
+) -> list[tuple[int, str, float, int, Optional[int], Optional[int]]]:
+    """(type_id, type_name, volume, market_group_id, meta_level, category_id)
+    for every published, market-grouped type. category_id (joined via
+    sde_groups) is what lets candidate_discovery.guess_category classify by
+    real SDE data instead of string-matching "module"/"rig" in the item name
+    or market-group path."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT t.type_id, t.type_name, t.volume, t.market_group_id, t.meta_level, g.category_id "
+            "FROM sde_types t JOIN sde_groups g ON g.group_id = t.group_id "
+            "WHERE t.published = 1 AND t.market_group_id IS NOT NULL"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def load_sde_type_groups(path: Optional[Path] = None) -> dict[int, int]:
+    """type_id -> group_id for every SDE type - used by candidate_discovery.
+    guess_category to tell Boosters/Drugs apart from real Cyberimplants, which
+    otherwise share category_id 20 ("Implant") and can't be distinguished from
+    category_id alone. Kept separate rather than widening
+    load_sde_types_with_market_group()'s tuple shape, which other callers
+    depend on."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT type_id, group_id FROM sde_types").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+# -------------------------------------------------------- candidate universe
+_CANDIDATE_TABLES = ("candidate_universe", "focused_candidates")
+
+
+def save_candidate_universe(candidates: Sequence[Candidate], run_ts: str,
+                            table: str = "candidate_universe",
+                            path: Optional[Path] = None) -> None:
+    """Replaces `table`'s contents with `candidates` - these tables are read
+    in full as a current-state snapshot, never filtered by run_ts, so
+    appending would just accumulate duplicates forever."""
+    if table not in _CANDIDATE_TABLES:
+        raise ValueError(f"unknown candidate table {table!r}")
+    with connect(path) as conn:
+        conn.execute(f"DELETE FROM {table}")
+        conn.executemany(
+            f"INSERT INTO {table} (run_ts, item, type_id, volume_m3, market_group_path, category, meta_level) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [(run_ts, c.item, c.type_id, c.volume_m3, c.market_group_path, c.category, c.meta_level)
+             for c in candidates],
+        )
+
+
+def load_candidate_universe(table: str = "candidate_universe",
+                            path: Optional[Path] = None) -> list[Candidate]:
+    """Everything currently in `table`, as Candidate objects. The parent repo
+    hands its callers a pandas DataFrame here (its web layer wants one); this
+    repo has no pandas dependency and every caller wants the dataclass back."""
+    if table not in _CANDIDATE_TABLES:
+        raise ValueError(f"unknown candidate table {table!r}")
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT item, type_id, volume_m3, category, market_group_path, meta_level FROM {table}"
+        ).fetchall()
+    return [Candidate(item=r["item"], type_id=r["type_id"], volume_m3=r["volume_m3"],
+                      category=r["category"], market_group_path=r["market_group_path"],
+                      meta_level=r["meta_level"]) for r in rows]
+
+
+def get_candidate_universe_built_at(path: Optional[Path] = None) -> Optional[str]:
+    """When the candidate universe was last (re)built, or None if never. Worth
+    comparing against get_sde_refresh_state(): an item added by a newer SDE
+    dump isn't a candidate until this snapshot is rebuilt."""
+    with connect(path) as conn:
+        row = conn.execute("SELECT MAX(run_ts) FROM candidate_universe").fetchone()
+    return row[0] if row and row[0] else None

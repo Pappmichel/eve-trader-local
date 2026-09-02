@@ -1,5 +1,5 @@
-"""Goonmetrics current-price client, plus the one ESIClient method that
-falls back to it.
+"""Goonmetrics client (both endpoints - current prices and region price
+history), plus the one ESIClient method that falls back to it.
 
 Nothing here touches the network - `requests.Session.get` is the only seam
 the real code uses, so every test swaps `GoonmetricsClient.session` for the
@@ -23,9 +23,10 @@ from eve_trader_local.goonmetrics_client import CurrentPrice, GoonmetricsClient
 
 
 class FakeResponse:
-    def __init__(self, status_code: int = 200, json_body=None):
+    def __init__(self, status_code: int = 200, json_body=None, text: str = ""):
         self.status_code = status_code
         self._json = json_body
+        self.text = text
 
     def json(self):
         return self._json
@@ -291,3 +292,150 @@ def test_raises_when_both_sources_fail(monkeypatch):
     with pytest.raises(ESIError, match="403 boom"):
         ESIClient().structure_order_stats_bulk_or_goonmetrics(
             1000, [34], auth_role="seller", goonmetrics_market_slug="my-structure")
+
+
+# ------------------------------------------------------------ price_history
+def _history_xml(*, type_id: int = 34, date: str = "2026-09-01", min_price: str = "4.0",
+                 max_price: str = "6.0", avg_price: str = "5.0", movement: str = "1000",
+                 num_orders: str = "12") -> str:
+    return (
+        "<evec_api><result><rowset name='history'>"
+        f"<type id='{type_id}'>"
+        f"<history date='{date}' avgPrice='{avg_price}' maxPrice='{max_price}' "
+        f"minPrice='{min_price}' movement='{movement}' numOrders='{num_orders}'/>"
+        "</type></rowset></result></evec_api>"
+    )
+
+
+class UrlKeyedSession:
+    """Answers by *which type_ids the URL asks for*, not by call order -
+    price_history_chunked fires its chunks concurrently, so a
+    replay-in-order fake would be racy."""
+
+    def __init__(self, by_ids: dict[str, object]):
+        self.by_ids = by_ids
+        self.headers: dict = {}
+        self.calls: list[str] = []
+        self._lock = threading.Lock()
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        with self._lock:
+            self.calls.append(url)
+        ids = url.split("type_id=")[1]
+        return self.by_ids[ids]
+
+
+def test_parses_the_history_xml():
+    client = _client([FakeResponse(text=_history_xml())])
+
+    points = client.price_history(10000009, [34])
+
+    assert points == [goonmetrics_client.HistoryPoint(
+        region_id=10000009, type_id=34, date="2026-09-01", min_price=4.0,
+        max_price=6.0, avg_price=5.0, movement=1000.0, num_orders=12)]
+
+
+def test_history_request_batches_every_type_id_into_one_url():
+    cfg = TradingConfig()
+    cfg.goonmetrics_history_base = "https://example.test/api/price_history/"
+    client = _client([FakeResponse(text=_history_xml())], cfg)
+
+    client.price_history(10000009, [34, 35, 36])
+
+    assert client.session.calls == [
+        "https://example.test/api/price_history/?region_id=10000009&type_id=34,35,36"]
+
+
+def test_an_empty_history_document_yields_no_points():
+    client = _client([FakeResponse(text="<evec_api><result><rowset name='history'/></result></evec_api>")])
+
+    assert client.price_history(10000009, [34]) == []
+
+
+def test_history_falls_back_to_esi_when_goonmetrics_fails(monkeypatch):
+    """Goonmetrics is a no-SLA community API - an outage there must not take
+    candidate discovery down with it."""
+    client = _client([FakeResponse(status_code=503)])
+    monkeypatch.setattr(ESIClient, "region_market_history", lambda self, region_id, type_id: [
+        {"date": "2026-09-01", "lowest": 4.0, "highest": 6.0, "average": 5.0,
+         "volume": 1000, "order_count": 12}])
+
+    points = client.price_history(10000009, [34])
+
+    assert points == [goonmetrics_client.HistoryPoint(
+        region_id=10000009, type_id=34, date="2026-09-01", min_price=4.0,
+        max_price=6.0, avg_price=5.0, movement=1000, num_orders=12)]
+
+
+def test_esi_fallback_movement_is_units_traded_not_isk(monkeypatch):
+    """ESI's `volume` is a unit count. Multiplying it by average_price here
+    (which the parent repo once did) silently mixed unit counts and ISK values
+    into the same field depending on which source answered."""
+    client = _client([FakeResponse(status_code=503)])
+    monkeypatch.setattr(ESIClient, "region_market_history", lambda self, region_id, type_id: [
+        {"date": "2026-09-01", "lowest": 4.0, "highest": 6.0, "average": 5.0,
+         "volume": 1000, "order_count": 12}])
+
+    assert client.price_history(10000009, [34])[0].movement == 1000
+
+
+def test_esi_fallback_skips_a_type_it_cannot_fetch(monkeypatch):
+    client = _client([FakeResponse(status_code=503)])
+
+    def _history(self, region_id, type_id):
+        if type_id == 35:
+            raise ESIError("404")
+        return [{"date": "2026-09-01", "lowest": 4.0, "highest": 6.0, "average": 5.0,
+                 "volume": 1000, "order_count": 12}]
+    monkeypatch.setattr(ESIClient, "region_market_history", _history)
+
+    points = client.price_history(10000009, [34, 35, 36])
+
+    assert [p.type_id for p in points] == [34, 36]
+
+
+# ---------------------------------------------------- price_history_chunked
+def test_chunking_splits_the_ids_by_chunk_size():
+    client = GoonmetricsClient(TradingConfig())
+    client.session = UrlKeyedSession({
+        "1,2": FakeResponse(text=_history_xml(type_id=1)),
+        "3,4": FakeResponse(text=_history_xml(type_id=3)),
+        "5": FakeResponse(text=_history_xml(type_id=5)),
+    })
+
+    points = client.price_history_chunked(10000009, [1, 2, 3, 4, 5], chunk_size=2)
+
+    assert sorted(p.type_id for p in points) == [1, 3, 5]
+    assert len(client.session.calls) == 3
+
+
+def test_chunk_size_defaults_to_the_config_field():
+    cfg = TradingConfig()
+    cfg.chunk_size = 2
+    client = GoonmetricsClient(cfg)
+    client.session = UrlKeyedSession({"1,2": FakeResponse(text=_history_xml(type_id=1)),
+                                      "3": FakeResponse(text=_history_xml(type_id=3))})
+
+    client.price_history_chunked(10000009, [1, 2, 3])
+
+    assert len(client.session.calls) == 2
+
+
+def test_one_broken_chunk_does_not_lose_the_others(monkeypatch):
+    """A malformed response is exactly what price_history's own
+    Goonmetrics->ESI fallback does *not* cover, so the per-chunk try/except
+    has to."""
+    client = GoonmetricsClient(TradingConfig())
+    client.session = UrlKeyedSession({"1": FakeResponse(text="not xml at all"),
+                                      "2": FakeResponse(text=_history_xml(type_id=2))})
+
+    points = client.price_history_chunked(10000009, [1, 2], chunk_size=1)
+
+    assert [p.type_id for p in points] == [2]
+
+
+def test_no_type_ids_makes_no_requests():
+    client = _client([])
+
+    assert client.price_history_chunked(10000009, []) == []
+    assert client.session.calls == []

@@ -111,6 +111,7 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "structure_sell_haircut": (0, 1),
     "jita_buy_broker_fee": (0, 1),
     "lookback_days": (0, None),
+    "chunk_size": (1, None),
 }
 
 
@@ -187,12 +188,33 @@ class TradingConfig:
     # -- Realized trade history --
     lookback_days: int = 30
 
+    # -- Candidate discovery --
+    chunk_size: int = 25                       # type_ids per Goonmetrics price-history request
+
+    # Market-group top-level path prefixes to hard-exclude from candidate
+    # discovery entirely. Confirmed one-by-one in the parent repo with the
+    # user: these structurally don't fit the Jita->structure import-arbitrage
+    # model. Nothing else is categorically pre-filtered - there is no keyword
+    # allowlist/denylist and no per-item m3 cap (both existed once and were
+    # removed: an item should only ever be dropped for failing on actual
+    # profitability or real trading volume, not for its category or size).
+    # "skills" used to be on this list and was deliberately taken off.
+    excluded_path_prefixes: tuple = (
+        "ships", "blueprints", "apparel",
+        "personalization", "pilot's services", "structures",
+    )
+
     # -- API endpoints --
     esi_base: str = "https://esi.evetech.net/latest"
     # gnf.lt's rehosting of the Goonmetrics current-price API - the failsafe
     # price source used when a structure's real order book is unreachable
     # (see goonmetrics_client.py).
     goonmetrics_appraise_base: str = "https://appraise.gnf.lt"
+    # The other gnf.lt endpoint: region *price history*, a different question
+    # from the current quotes above - "was this item historically worth
+    # importing", asked against reference_region_id (see goonmetrics_client.
+    # price_history).
+    goonmetrics_history_base: str = "https://goonmetrics.apps.gnf.lt/api/price_history/"
 
 
 @dataclass
