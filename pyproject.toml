@@ -10,6 +10,11 @@ requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31",
     "PyYAML>=6.0",
+    # Only used by refining/optimizer.py's linear program (scipy.optimize.linprog,
+    # HiGHS) - a deliberate exception to this repo's otherwise dependency-light
+    # discipline: hand-rolling a simplex solver is notoriously easy to get subtly
+    # wrong, and this is exactly what scipy exists for. numpy comes along with it.
+    "scipy>=1.11",
 ]
 
 [project.optional-dependencies]
