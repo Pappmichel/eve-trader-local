@@ -36,6 +36,16 @@ def test_main_window_has_one_menu_per_tool(qapp, db):
     assert menu_labels == ["Trading", "Production", "Doctrine", "Ore && Minerals", "Station Trading"]
 
 
+def test_production_menu_lists_its_views_not_the_placeholder(qapp, db):
+    from eve_trader_local.gui.main_window import _TOOL_MENUS
+
+    labels = [label for label, _view_class in _TOOL_MENUS["Production"]]
+    assert labels == [
+        "Build Candidates", "Planner", "Asset-Optimized Planner", "Logistics",
+        "Special Orders", "Ship Margins && Market Status",
+    ]
+
+
 def test_opening_same_view_twice_refocuses_not_duplicates(qapp, db):
     from eve_trader_local.gui.main_window import MainWindow
     from eve_trader_local.gui.views.trading_shortlist import TradingShortlistView

@@ -16,6 +16,12 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 
+from .views.production_asset_optimized import AssetOptimizedPlannerView
+from .views.production_build_candidates import BuildCandidatesView
+from .views.production_logistics import LogisticsView
+from .views.production_margins_market import MarginsMarketView
+from .views.production_planner import ProductionPlannerView
+from .views.production_special_orders import SpecialOrdersView
 from .views.trading_shortlist import TradingShortlistView
 
 # Declarative menu structure: {tool menu label: [(view menu-item label, view class), ...]}.
@@ -26,7 +32,14 @@ _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
     "Trading": [
         ("Shortlist", TradingShortlistView),
     ],
-    "Production": [],
+    "Production": [
+        ("Build Candidates", BuildCandidatesView),
+        ("Planner", ProductionPlannerView),
+        ("Asset-Optimized Planner", AssetOptimizedPlannerView),
+        ("Logistics", LogisticsView),
+        ("Special Orders", SpecialOrdersView),
+        ("Ship Margins && Market Status", MarginsMarketView),
+    ],
     "Doctrine": [],
     "Ore && Minerals": [],
     "Station Trading": [],
