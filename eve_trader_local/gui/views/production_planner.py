@@ -1,20 +1,38 @@
 """Production's Planner tab: the stock-aware buy/build planner
 (`plan-production` / `production_actions.do_plan_production`), plus stock
-target management (`set/remove/list-stock-target`) - grouped together
-because stock targets are this planner's own only input; there is nothing
-to plan without at least one of them, and no other view needs them.
+target management (`set/update/remove/list-stock-target`) - grouped
+together because stock targets are this planner's own only input; there is
+nothing to plan without at least one of them, and no other view needs them.
+
+`do_update_stock_target` (GitHub issue #16 - "should be able to change the
+targets directly in the table") is genuinely different from
+`do_add_stock_target`/"Set Target": it requires the target to already exist
+(raises ActionError otherwise, rather than silently creating one) and each
+field is independently optional - leaving Quantity blank or Sells At at
+"(unchanged)" keeps that field's current value rather than resetting it,
+same as `cli.py`'s own `update-stock-target --quantity`/`--jita`/`--home`
+flags, all optional.
+
+Also carries the manual-stock ledger (`set/remove/list-manual-stock`) -
+previously ported but unwired in any GUI - since it's a direct override of
+the on-hand quantities the planner's own Inventory table reads (see
+`storage.py`'s `manual_stock` table comment: a genuinely separate signal
+from ESI-synced assets, e.g. stock sitting somewhere not covered by a
+producer character's own sync), so it belongs alongside stock-target
+management as this planner's other real input, not off in Logistics
+(which is about *where* a build happens, not how much is already on hand).
 
 `do_plan_production` re-runs the full priced BOM traversal every time (no
 "last plan" table to load cheaply on open, unlike Trading's Shortlist) -
-so only the stock targets list itself is loaded on open; the planner output
-tables start empty until "Run Planner" is clicked.
+so only the stock targets/manual stock lists themselves are loaded on open;
+the planner output tables start empty until "Run Planner" is clicked.
 """
 from __future__ import annotations
 
 import functools
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
 from ...production import actions as production_actions
@@ -27,6 +45,12 @@ _STOCK_WIDTHS = [200, None, None]
 # alphabetical by item name, the most usable order for a manually-maintained
 # list with no other inherent ranking.
 _STOCK_SORT = (0, Qt.SortOrder.AscendingOrder)
+
+_MANUAL_STOCK_COLUMNS = ["Item", "Count"]
+_MANUAL_STOCK_WIDTHS = [200, None]
+# storage.list_manual_stock: "ORDER BY type_name" - alphabetical, same
+# reasoning as the stock target list above.
+_MANUAL_STOCK_SORT = (0, Qt.SortOrder.AscendingOrder)
 
 _INVENTORY_COLUMNS = ["Item", "Activity", "Target", "On Hand", "Missing"]
 _INVENTORY_WIDTHS = [200, 120, None, None, None]
@@ -52,6 +76,11 @@ _INVENTION_SORT = (4, Qt.SortOrder.DescendingOrder)
 def _stock_target_row(row) -> list:
     type_id, type_name, quantity, jita_target = row
     return [type_name, f"{quantity:,.0f}", "Jita" if jita_target else "home"]
+
+
+def _manual_stock_row(row) -> list:
+    type_id, type_name, count = row
+    return [type_name, f"{count:,.0f}"]
 
 
 def _inventory_row(row) -> list:
@@ -88,6 +117,7 @@ class ProductionPlannerView(BaseView):
         self.root_layout.addLayout(toolbar)
 
         self.root_layout.addWidget(self._build_stock_target_box())
+        self.root_layout.addWidget(self._build_manual_stock_box())
 
         self.tabs = QTabWidget()
         self.inventory_table = build_table(_INVENTORY_COLUMNS, column_widths=_INVENTORY_WIDTHS)
@@ -102,6 +132,7 @@ class ProductionPlannerView(BaseView):
 
         self._finish_status_row()
         self._load_stock_targets()
+        self._load_manual_stock()
 
     def _build_stock_target_box(self) -> QGroupBox:
         box = QGroupBox("Stock Targets")
@@ -131,9 +162,65 @@ class ProductionPlannerView(BaseView):
         form.addStretch(1)
         outer.addLayout(form)
 
+        # Edit-in-place row (do_update_stock_target - GitHub issue #16): both
+        # fields are independently optional, unlike "Set Target"/
+        # do_add_stock_target's upsert above - a blank Quantity or "(leave
+        # unchanged)" Sells At keeps that field's current stored value rather
+        # than resetting it, and it raises rather than creating a new row if
+        # the target doesn't already exist. Reuses the Item field above -
+        # "which item" is the one thing every one of these actions shares.
+        update_form = QHBoxLayout()
+        update_form.addWidget(QLabel("Update quantity to:"))
+        self.update_quantity_input = QLineEdit()
+        self.update_quantity_input.setPlaceholderText("(leave unchanged)")
+        self.update_quantity_input.setMaximumWidth(120)
+        update_form.addWidget(self.update_quantity_input)
+        update_form.addWidget(QLabel("Sells at:"))
+        self.update_jita_combo = QComboBox()
+        self.update_jita_combo.addItem("(leave unchanged)", None)
+        self.update_jita_combo.addItem("home", False)
+        self.update_jita_combo.addItem("Jita", True)
+        update_form.addWidget(self.update_jita_combo)
+        update_btn = QPushButton("Update Target")
+        update_btn.clicked.connect(self._update_stock_target)
+        update_form.addWidget(update_btn)
+        update_form.addStretch(1)
+        outer.addLayout(update_form)
+
         self.stock_target_table = build_table(_STOCK_COLUMNS, column_widths=_STOCK_WIDTHS)
         self.stock_target_table.setMaximumHeight(160)
         outer.addWidget(self.stock_target_table)
+        return box
+
+    def _build_manual_stock_box(self) -> QGroupBox:
+        box = QGroupBox("Manual Stock Overrides")
+        outer = QVBoxLayout(box)
+
+        form = QHBoxLayout()
+        form.addWidget(QLabel("Item:"))
+        self.manual_stock_item_input = QLineEdit()
+        self.manual_stock_item_input.setPlaceholderText("type_id or exact item name")
+        form.addWidget(self.manual_stock_item_input)
+        form.addWidget(QLabel("Count:"))
+        self.manual_stock_count_input = QLineEdit()
+        self.manual_stock_count_input.setPlaceholderText("e.g. 50")
+        self.manual_stock_count_input.setMaximumWidth(100)
+        form.addWidget(self.manual_stock_count_input)
+        set_btn = QPushButton("Set Count")
+        set_btn.clicked.connect(self._set_manual_stock)
+        form.addWidget(set_btn)
+        remove_btn = QPushButton("Remove Override")
+        remove_btn.clicked.connect(self._remove_manual_stock)
+        form.addWidget(remove_btn)
+        refresh_btn = QPushButton("Refresh List")
+        refresh_btn.clicked.connect(self._load_manual_stock)
+        form.addWidget(refresh_btn)
+        form.addStretch(1)
+        outer.addLayout(form)
+
+        self.manual_stock_table = build_table(_MANUAL_STOCK_COLUMNS, column_widths=_MANUAL_STOCK_WIDTHS)
+        self.manual_stock_table.setMaximumHeight(160)
+        outer.addWidget(self.manual_stock_table)
         return box
 
     def _load_stock_targets(self) -> None:
@@ -172,6 +259,67 @@ class ProductionPlannerView(BaseView):
             self.show_info(f"Stock target set: {result['type_name']} -> {result['quantity']:,.0f} units.")
         else:
             self.show_info(f"Removed stock target: {result['type_name']}")
+
+    def _update_stock_target(self) -> None:
+        item = self.item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        quantity_text = self.update_quantity_input.text().strip()
+        if quantity_text:
+            try:
+                quantity = float(quantity_text)
+            except ValueError:
+                self.show_error("Quantity must be a number.")
+                return
+        else:
+            quantity = None  # leave unchanged - see do_update_stock_target's own docstring
+        jita_target = self.update_jita_combo.currentData()  # None = leave unchanged
+        self.run_action(
+            functools.partial(production_actions.do_update_stock_target, item,
+                              quantity=quantity, jita_target=jita_target),
+            self._on_stock_target_updated, busy_message="Updating stock target...")
+
+    def _on_stock_target_updated(self, result: dict) -> None:
+        self._load_stock_targets()
+        where = "Jita" if result["jita_target"] else "home"
+        self.show_info(f"Stock target updated: {result['type_name']} -> {result['quantity']:,.0f} units "
+                       f"(sells at {where}).")
+
+    def _load_manual_stock(self) -> None:
+        # storage-only cheap read (no network), same convention as
+        # _load_stock_targets above.
+        result = production_actions.do_list_manual_stock()
+        populate(self.manual_stock_table, [_manual_stock_row(r) for r in result["rows"]],
+                default_sort=_MANUAL_STOCK_SORT)
+
+    def _set_manual_stock(self) -> None:
+        item = self.manual_stock_item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        try:
+            count = float(self.manual_stock_count_input.text().strip())
+        except ValueError:
+            self.show_error("Count must be a number.")
+            return
+        self.run_action(functools.partial(production_actions.do_set_manual_stock, item, count),
+                        self._on_manual_stock_changed, busy_message="Setting manual stock override...")
+
+    def _remove_manual_stock(self) -> None:
+        item = self.manual_stock_item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        self.run_action(functools.partial(production_actions.do_remove_manual_stock, item),
+                        self._on_manual_stock_changed, busy_message="Removing manual stock override...")
+
+    def _on_manual_stock_changed(self, result: dict) -> None:
+        self._load_manual_stock()
+        if "count" in result:
+            self.show_info(f"Manual stock set: {result['type_name']} -> {result['count']:,.0f} units.")
+        else:
+            self.show_info(f"Removed manual stock override: {result['type_name']}")
 
     def _run_planner(self) -> None:
         self.run_action(functools.partial(production_actions.do_plan_production), self._on_plan,

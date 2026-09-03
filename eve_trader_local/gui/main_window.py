@@ -45,10 +45,15 @@ from .views.doctrine_contract_history import ContractHistoryView
 from .views.doctrine_fittings import FittingsView
 from .views.doctrine_shopping_list import ShoppingListView
 from .views.doctrine_stockpile import StockpileStatusView
+from .views.portfolio_overview import PortfolioOverviewView
 from .views.production_asset_optimized import AssetOptimizedPlannerView
 from .views.production_build_candidates import BuildCandidatesView
+from .views.production_invention_estimator import InventionEstimatorView
+from .views.production_item_lookup import ItemLookupView
+from .views.production_jobs_slots import JobsSlotsView
 from .views.production_logistics import LogisticsView
 from .views.production_margins_market import MarginsMarketView
+from .views.production_owned_blueprints import OwnedBlueprintsView
 from .views.production_planner import ProductionPlannerView
 from .views.production_special_orders import SpecialOrdersView
 from .views.refining_mineral_shopping_list import MineralShoppingListView
@@ -81,6 +86,13 @@ _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
         ("Logistics", LogisticsView),
         ("Special Orders", SpecialOrdersView),
         ("Ship Margins && Market Status", MarginsMarketView),
+        ("Item Lookup", ItemLookupView),
+        ("Invention Estimator", InventionEstimatorView),
+        ("Owned Blueprints", OwnedBlueprintsView),
+        ("Current Jobs && Slots", JobsSlotsView),
+    ],
+    "Portfolio": [
+        ("Overview", PortfolioOverviewView),
     ],
     "Doctrine": [
         ("Fittings", FittingsView),

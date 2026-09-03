@@ -217,8 +217,24 @@ below (never a 1:1 CLI-command mirror):
   checks); Price History (`views/trading_price_history.py`, margin-momentum
   trends over cached price history — `do_shortlist_trends` existed in
   `actions.py` with no caller until this view).
-- **Production** — Build Candidates, Planner, Asset-Optimized Planner,
-  Logistics, Special Orders, Ship Margins & Market Status.
+- **Production** — Build Candidates, Planner (now also carrying in-place
+  stock-target editing, `update-stock-target` — GitHub issue #16, every
+  field independently optional, unlike the existing Set Target/upsert
+  control — and the manual-stock ledger, `set/remove/list-manual-stock` — a
+  direct override of the on-hand quantities the planner's own Inventory
+  table reads), Asset-
+  Optimized Planner, Logistics (now also carrying manual Build/Buy override,
+  structure-name resolution, and the single-location invention-logistics
+  slice — `invention-logistics`/`t1-bpc-invention-needs`, ported earlier but
+  previously unwired in any GUI), Special Orders, Ship Margins & Market
+  Status (now also showing live system cost indices), Item Lookup
+  (`views/production_item_lookup.py`, margin/material-tree/asset-location
+  search sharing one item-name field), Invention Estimator
+  (`views/production_invention_estimator.py`, standalone recipe/decryptor
+  comparison), Owned Blueprints, and Current Jobs & Slots (active industry
+  jobs plus per-character slot usage). This closes every gap the
+  parent-vs-local GUI audit found — Production's GUI now covers the tool's
+  full `do_*` backend surface, see `SYNC.md`'s Production section.
 - **Doctrine** — Fittings, Stockpile Status, Shopping List, Contract History.
 - **Ore & Minerals** — Ore Shortlist, Reprocessing Quote, Mineral Shopping List.
 - **Station Trading** — Shortlist (`views/station_trading_shortlist.py`,
@@ -253,6 +269,14 @@ belongs to just one tool):
   system browser, so it always runs on a worker thread), and removes a
   registered character. `eve-trader-local auth`/`whoami` on the CLI still
   work exactly as before — this is an additional way in, not a replacement.
+
+A new top-level **Portfolio** menu (`views/portfolio_overview.py`) — a tab,
+not an "App"-menu dialog, since it's a live-refreshable cross-tool dashboard
+(Trading realized profit, daily profit volatility, Production stock value,
+combined value) rather than a one-shot settings form, matching every other
+tool's own top-level-menu treatment. Wraps `portfolio.portfolio_overview()`
+(previously CLI-only, `cmd_portfolio-overview`) with the same field
+formatting the CLI command itself uses.
 
 Both dialogs are the first real callers of any tool's `do_update_settings` -
 there was no CLI command wiring those up before (`cmd_config` only ever

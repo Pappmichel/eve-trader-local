@@ -33,6 +33,7 @@ def test_production_planner_view_opens_with_empty_db(qapp, db):
 
     view = ProductionPlannerView()
     assert view.stock_target_table.rowCount() == 0
+    assert view.manual_stock_table.rowCount() == 0
     assert view.inventory_table.rowCount() == 0
     assert view.build_table_widget.rowCount() == 0
     assert view.buy_table.rowCount() == 0
@@ -53,8 +54,11 @@ def test_logistics_view_opens_with_empty_db(qapp, db):
     view = LogisticsView()
     # Every job category gets a row, even with nothing configured yet.
     assert view.category_location_table.rowCount() == len(JOB_CATEGORIES)
+    assert view.manual_bb_table.rowCount() == 0
     assert view.logistics_table.rowCount() == 0
     assert view.distribution_table.rowCount() == 0
+    assert view.invention_logistics_table.rowCount() == 0
+    assert view.t1_bpc_table.rowCount() == 0
 
 
 def test_special_orders_view_opens_with_empty_db(qapp, db):
@@ -71,6 +75,7 @@ def test_margins_market_view_opens_with_empty_db(qapp, db):
     view = MarginsMarketView()
     assert view.margins_table.rowCount() == 0
     assert view.market_status_table.rowCount() == 0
+    assert view.cost_index_table.rowCount() == 0
 
 
 def test_main_window_opens_every_production_view(qapp, db):

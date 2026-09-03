@@ -56,7 +56,8 @@ def test_main_window_has_one_menu_per_tool(qapp, db):
 
     window = MainWindow()
     menu_labels = [action.text() for action in window.menuBar().actions()]
-    assert menu_labels == ["App", "Trading", "Production", "Doctrine", "Ore && Minerals", "Station Trading"]
+    assert menu_labels == ["App", "Trading", "Production", "Portfolio", "Doctrine", "Ore && Minerals",
+                           "Station Trading"]
 
 
 def test_trading_menu_lists_its_views_not_the_placeholder(qapp, db):
@@ -75,8 +76,16 @@ def test_production_menu_lists_its_views_not_the_placeholder(qapp, db):
     labels = [label for label, _view_class in _TOOL_MENUS["Production"]]
     assert labels == [
         "Build Candidates", "Planner", "Asset-Optimized Planner", "Logistics",
-        "Special Orders", "Ship Margins && Market Status",
+        "Special Orders", "Ship Margins && Market Status", "Item Lookup",
+        "Invention Estimator", "Owned Blueprints", "Current Jobs && Slots",
     ]
+
+
+def test_portfolio_menu_lists_its_views_not_the_placeholder(qapp, db):
+    from eve_trader_local.gui.main_window import _TOOL_MENUS
+
+    labels = [label for label, _view_class in _TOOL_MENUS["Portfolio"]]
+    assert labels == ["Overview"]
 
 
 def test_doctrine_menu_lists_its_views_not_the_placeholder(qapp, db):

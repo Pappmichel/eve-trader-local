@@ -132,6 +132,25 @@ coverage).
   defaults, remembered window/tab state, real tuple/dict Settings editors)
   is done too, as of 2026-09-03 — see README.md's "Native GUI" section for
   what each of those actually covers.
+- A careful parent-vs-local GUI audit (2026-09-03) found real gaps even
+  after the above: Production's backend had 12 `do_*` actions/CLI commands
+  with no GUI at all (item margin search, standalone invention estimator,
+  material-tree browser, item-location search, system cost indices,
+  structure-name resolution, manual build/buy override, in-place stock-
+  target edit, current-jobs list, per-character job-slot usage, owned-
+  blueprint browser), two ported-but-unwired actions
+  (`invention_logistics`/`t1_bpc_invention_needs`, the manual-stock ledger)
+  sat unreachable from any view, and `portfolio_overview()` had no GUI at
+  all despite being a real cross-cutting page in the parent's frontend.
+  Closed 2026-09-03: four new Production views (Item Lookup, Invention
+  Estimator, Owned Blueprints, Current Jobs & Slots), manual-stock wired
+  into the Planner, manual build/buy override + structure-name resolution +
+  invention-logistics wired into Logistics, system cost indices folded into
+  Ship Margins & Market Status, and a new top-level Portfolio menu/view for
+  `portfolio_overview()` — see README.md's "Native GUI" section for the
+  full per-view breakdown. This is the point where every gap the audit
+  found is resolved — Production's GUI now covers its full backend surface,
+  cross-checked against `SYNC.md`'s current Production section.
 - Packaging/installer once the above is far enough along to be worth
   packaging (feeds directly into Stage 2 of the update mechanism above).
 
