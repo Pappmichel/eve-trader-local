@@ -20,7 +20,7 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine works end to end (CLI); Ore&Minerals started
+## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine works end to end (CLI); Ore & Minerals works end to end (CLI)
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
@@ -43,11 +43,14 @@ a contract/stockpile deviation report with red/yellow/green ampel status.
 Only the Shopping List's build-vs-buy comparison is still missing.
 
 The **Ore & Minerals** tool (ore/ice import-refine-sell, reprocessing quotes,
-mineral shopping list) has just started: the fixed reprocessing-yield game
-constants and the real ore/ice + scrapmetal yield math (structure/rig/
-security/skill/implant bonuses, whole-portion batching, per-material
-rounding) are ported and tested, plus the inventory-paste parser. No pricing,
-candidate discovery, shopping-list optimizer or CLI command yet.
+mineral shopping list) is fully ported and runnable from the CLI too: an
+SDE-derived Ore Shortlist you can add-to and live-refresh (Jita buy price vs.
+C-J mineral sell value, after real reprocessing-yield math and the structure's
+refining tax), a Reprocessing-tab-style quote for a pasted inventory list
+(sell-as-is vs. reprocess, per line), and a Mineral Shopping List solved by a
+real linear program (`scipy.optimize.linprog`) across every compressed ore/ice
+type at once, picking whichever mix of buy-ore-and-refine vs. buy-mineral-
+outright is cheapest for a saved (or ad-hoc) list of required minerals.
 
 What exists:
 
@@ -91,6 +94,15 @@ What exists:
   contract matching/validation, and Soll/Ist stockpile computation that ties
   parser.py/validation.py to real synced data), `config.py`
   (`DoctrineConfig`) and `actions.py`.
+- `refining/` — the Ore & Minerals tool (ore/ice import-refine-sell,
+  reprocessing quotes, mineral shopping list): `constants.py` (reprocessing-
+  yield game constants), `models.py`, `reprocessing.py` (the real ore/ice +
+  scrapmetal yield math), `paste_parser.py` (EVE inventory "Copy As" paste
+  parsing), `candidate_discovery.py` (the fixed, SDE-derived compressed-ore/
+  ice universe), `pricing.py` (the Ore Shortlist's per-row profit math),
+  `quote.py` (the Reprocessing-tab's sell-as-is-vs-refine quote calculation),
+  `optimizer.py` (the Mineral Shopping List's LP solver), `config.py`
+  (`RefiningConfig`) and `actions.py`.
 - `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
@@ -98,7 +110,10 @@ What exists:
   `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`,
   `parse-fitting`, `create-doctrine`, `list-doctrines`, `add-fitting`,
   `list-fittings`, `sync-doctrine`, `validate-contracts`, `doctrine-status`,
-  `stockpile-status`, `list-contracts`.
+  `stockpile-status`, `list-contracts`, `add-ore-to-shortlist`,
+  `refresh-ore-shortlist`, `list-ore-shortlist`, `quote-reprocessing`,
+  `set-mineral-requirement`, `remove-mineral-requirement`,
+  `list-mineral-requirements`, `solve-shopping-list`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
@@ -112,9 +127,7 @@ Explicitly **not** done yet:
   asset-optimized planner variant (per-category structure assignments —
   web-UI-shaped concepts with no local equivalent yet).
 - Doctrine's Shopping List (build-vs-buy-vs-buy-Jita pricing for stockpile
-  shortfalls) and its separate append-only contract-history log. The whole
-  Ore & Minerals tool (the parent's `refining/*`) — none of its business
-  logic has been ported.
+  shortfalls) and its separate append-only contract-history log.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
@@ -180,6 +193,15 @@ eve-trader-local validate-contracts          # re-match/re-validate synced contr
 eve-trader-local doctrine-status [doctrine_id]    # contract + stockpile ampel status
 eve-trader-local stockpile-status [doctrine_id]   # aggregated stockpile shortfalls
 eve-trader-local list-contracts [--status]        # list every synced Doctrine contract
+
+eve-trader-local add-ore-to-shortlist        # add every compressed ore/ice type from the SDE
+eve-trader-local refresh-ore-shortlist       # re-price every Ore Shortlist item against live market data
+eve-trader-local list-ore-shortlist          # show the last Ore Shortlist evaluation run
+eve-trader-local quote-reprocessing <path>   # quote a pasted inventory list: sell as-is vs. reprocess
+eve-trader-local set-mineral-requirement <item> <qty>   # set/update a shopping-list requirement
+eve-trader-local remove-mineral-requirement <item>      # remove a requirement
+eve-trader-local list-mineral-requirements              # list configured requirements
+eve-trader-local solve-shopping-list         # solve the cheapest buy-ore-and-refine-vs-buy-direct mix
 ```
 
 `<item>` above accepts either a numeric type_id or an exact (case-insensitive)

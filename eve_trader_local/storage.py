@@ -594,6 +594,50 @@ CREATE TABLE IF NOT EXISTS doctrine_corp_assets (
 );
 CREATE INDEX IF NOT EXISTS idx_doctrine_corp_assets_type_resolved_location
     ON doctrine_corp_assets (type_id, resolved_location_id);
+
+-- ------------------------------------------------------------- Ore & Minerals
+-- Ore Shortlist (GitHub issue #91 in the parent) - same two-table shape as
+-- Trading's own shortlist/shortlist_snapshot above: `ore_shortlist` is the
+-- live membership list, keyed by item_id so an upsert edits the one row in
+-- place; `ore_shortlist_snapshot` is append-only history, one full set of
+-- evaluated rows per run_ts.
+CREATE TABLE IF NOT EXISTS ore_shortlist (
+    item_id INTEGER PRIMARY KEY,
+    item    TEXT NOT NULL,
+    family  TEXT NOT NULL,
+    is_ice  INTEGER NOT NULL DEFAULT 0,
+    active  INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS ore_shortlist_snapshot (
+    run_ts           TEXT,
+    item_id          INTEGER,
+    item             TEXT,
+    family           TEXT,
+    is_ice           INTEGER,
+    active           INTEGER,
+    volume_m3        REAL,
+    landed_cost      REAL,
+    yield_pct        REAL,
+    mineral_value    REAL,
+    refining_tax     REAL,
+    net_sell         REAL,
+    sell_listed_qty  REAL,
+    profit_per_unit  REAL,
+    margin           REAL,
+    profit_per_m3    REAL,
+    decision         TEXT
+);
+
+-- Mineral Shopping List (GitHub issue #93 in the parent) - the saved
+-- "I need this many of this mineral" requirement list the optimizer solves
+-- for by default (do_optimize_mineral_shopping_list can also solve an ad-hoc
+-- list without touching this table).
+CREATE TABLE IF NOT EXISTS mineral_requirements (
+    mineral_type_id INTEGER PRIMARY KEY,
+    mineral_name    TEXT NOT NULL,
+    required_qty    REAL NOT NULL
+);
 """
 
 # Insert order matters only for readability; the tuple arity per table is what
@@ -1128,6 +1172,111 @@ def load_ore_ice_candidate_types(path: Optional[Path] = None) -> list[tuple[int,
             "WHERE g.category_id = 25 AND t.type_name LIKE 'Compressed%' AND t.published = 1"
         ).fetchall()
     return [tuple(r) for r in rows]
+
+
+# ------------------------------------------------------- Ore & Minerals: Ore Shortlist
+# Same two-table shape as the shortlist/shortlist_snapshot functions above
+# (composite key-only live list + no-PK append snapshot). Deliberately raw
+# tuples in/out, not refining.models dataclasses - storage.py never imports a
+# submodule's own models (same "the submodule does its own wrapping"
+# precedent as production/doctrine's storage helpers) - refining/actions.py
+# does that wrapping.
+def upsert_ore_shortlist(rows: Sequence[tuple[int, str, str, bool, bool]], path: Optional[Path] = None) -> None:
+    """rows: (item_id, item, family, is_ice, active)."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO ore_shortlist (item_id, item, family, is_ice, active) VALUES (?,?,?,?,?) "
+            "ON CONFLICT(item_id) DO UPDATE SET item=excluded.item, family=excluded.family, "
+            "is_ice=excluded.is_ice, active=excluded.active",
+            [(item_id, item, family, int(bool(is_ice)), int(bool(active)))
+             for item_id, item, family, is_ice, active in rows],
+        )
+
+
+def load_ore_shortlist(path: Optional[Path] = None) -> list[tuple[int, str, str, bool, bool]]:
+    """Returns (item_id, item, family, is_ice, active) rows."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT item_id, item, family, is_ice, active FROM ore_shortlist").fetchall()
+    return [(r["item_id"], r["item"], r["family"], bool(r["is_ice"]), bool(r["active"])) for r in rows]
+
+
+def deactivate_ore_shortlist_items(item_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    item_ids = list(item_ids)
+    if not item_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany("UPDATE ore_shortlist SET active = 0 WHERE item_id = ?", [(i,) for i in item_ids])
+
+
+def activate_ore_shortlist_items(item_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    """Reactivation counterpart - same reasoning as Trading's own
+    activate_shortlist_items: without this, an item deactivated once would
+    stay inactive forever even after its economics recovered, since
+    pricing._decision short-circuits to "Inactive" whenever active=False."""
+    item_ids = list(item_ids)
+    if not item_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany("UPDATE ore_shortlist SET active = 1 WHERE item_id = ?", [(i,) for i in item_ids])
+
+
+def save_ore_shortlist_snapshot(rows: list[tuple], run_ts: str, path: Optional[Path] = None) -> None:
+    """rows: (item_id, item, family, is_ice, active, volume_m3, landed_cost,
+    yield_pct, mineral_value, refining_tax, net_sell, sell_listed_qty,
+    profit_per_unit, margin, profit_per_m3, decision) - see refining/models.py's
+    OreShortlistRow for field meanings."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO ore_shortlist_snapshot (run_ts, item_id, item, family, is_ice, active, volume_m3, "
+            "landed_cost, yield_pct, mineral_value, refining_tax, net_sell, sell_listed_qty, profit_per_unit, "
+            "margin, profit_per_m3, decision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            [(run_ts, *row) for row in rows],
+        )
+
+
+def latest_ore_shortlist_snapshot(path: Optional[Path] = None) -> list[tuple]:
+    """The most recent run's rows, in ore_shortlist_snapshot's own column
+    order (see save_ore_shortlist_snapshot) - refining/actions.py wraps these
+    into OreShortlistRow objects for its caller. Empty list if no run has
+    been saved yet."""
+    with connect(path) as conn:
+        run_ts = conn.execute("SELECT MAX(run_ts) FROM ore_shortlist_snapshot").fetchone()[0]
+        if not run_ts:
+            return []
+        rows = conn.execute(
+            "SELECT item_id, item, family, is_ice, active, volume_m3, landed_cost, yield_pct, mineral_value, "
+            "refining_tax, net_sell, sell_listed_qty, profit_per_unit, margin, profit_per_m3, decision "
+            "FROM ore_shortlist_snapshot WHERE run_ts = ?", (run_ts,)
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+# --------------------------------------------- Ore & Minerals: Mineral Shopping List
+# Same simple key-value shape as stock_targets - raw tuples in/out, same
+# reasoning as the Ore Shortlist section above.
+def replace_mineral_requirements(rows: Sequence[tuple[int, str, float]], path: Optional[Path] = None) -> None:
+    """rows: (mineral_type_id, mineral_name, required_qty). Replace-all, not
+    upsert-only: the shopping list's editor always submits the whole list, so
+    a mineral removed there has to actually disappear here - an upsert-only
+    write would silently keep it, and the optimizer would keep solving for a
+    requirement the user already deleted."""
+    rows = [(int(type_id), name, float(qty)) for type_id, name, qty in rows]
+    with connect(path) as conn:
+        conn.execute("DELETE FROM mineral_requirements")
+        if rows:
+            conn.executemany(
+                "INSERT INTO mineral_requirements (mineral_type_id, mineral_name, required_qty) VALUES (?,?,?)",
+                rows,
+            )
+
+
+def load_mineral_requirements(path: Optional[Path] = None) -> list[tuple[int, str, float]]:
+    """Returns (mineral_type_id, mineral_name, required_qty) rows, name-ordered
+    so the editor and the optimizer's output always list minerals the same way."""
+    with connect(path) as conn:
+        return [tuple(r) for r in conn.execute(
+            "SELECT mineral_type_id, mineral_name, required_qty FROM mineral_requirements ORDER BY mineral_name"
+        ).fetchall()]
 
 
 # -------------------------------------------------------- candidate universe

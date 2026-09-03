@@ -23,6 +23,10 @@
     eve-trader-local sync-doctrine / validate-contracts
     eve-trader-local doctrine-status [doctrine_id] / stockpile-status [doctrine_id]
     eve-trader-local list-contracts [--status]
+    eve-trader-local add-ore-to-shortlist / refresh-ore-shortlist / list-ore-shortlist
+    eve-trader-local quote-reprocessing <paste-file>
+    eve-trader-local set-mineral-requirement <item> <qty> / list-mineral-requirements
+    eve-trader-local solve-shopping-list
     eve-trader-local check-update / update
 
 No logic lives here: every command calls one actions.do_* function and prints
@@ -40,6 +44,7 @@ from . import actions, config, sde, storage, updater
 from .auth import TokenManager
 from .doctrine import actions as doctrine_actions
 from .doctrine import config as doctrine_config
+from .refining import actions as refining_actions
 from .refining import config as refining_config
 from .doctrine import esi_sync as doctrine_esi_sync
 from .errors import ActionError
@@ -426,6 +431,87 @@ def cmd_list_contracts(args: argparse.Namespace) -> None:
               f"{r['price'] or 0:>14,.0f} ISK")
 
 
+def cmd_add_ore_to_shortlist(args: argparse.Namespace) -> None:
+    result = refining_actions.do_add_ore_to_shortlist()
+    print(f"Added {result['added']:,} candidate(s); {result['already_tracked']:,} already tracked.")
+
+
+def cmd_refresh_ore_shortlist(args: argparse.Namespace) -> None:
+    print("Refreshing live market data for every Ore Shortlist item...")
+    result = refining_actions.do_refresh_ore_shortlist()
+    print(f"Evaluated {result['evaluated']:,} item(s), {result['import_candidates']:,} worth importing.")
+    if result.get("priced_via_fallback"):
+        print("Note: mineral prices came from the Goonmetrics fallback, not the real order book.")
+
+
+def cmd_list_ore_shortlist(args: argparse.Namespace) -> None:
+    rows = refining_actions.do_get_ore_shortlist()["rows"]
+    if not rows:
+        print("Ore Shortlist is empty - run add-ore-to-shortlist then refresh-ore-shortlist.")
+        return
+    for r in rows:
+        state = "" if r.active else "  [inactive]"
+        profit = f"{r.profit_per_unit:>12,.2f}" if r.profit_per_unit is not None else "           -"
+        margin = f"{r.margin * 100:6.1f}%" if r.margin is not None else "     -"
+        print(f"  {r.item:<32} {r.decision:<16} profit/unit {profit}  margin {margin}{state}")
+
+
+def cmd_quote_reprocessing(args: argparse.Namespace) -> None:
+    with open(args.path, encoding="utf-8") as f:
+        paste_text = f.read()
+    result = refining_actions.do_quote_reprocessing(paste_text)
+    for r in result["rows"]:
+        if r.error:
+            print(f"  {r.name:<32} error: {r.error}")
+            continue
+        sell = f"{r.sell_as_is_value:>14,.0f}" if r.sell_as_is_value is not None else "             -"
+        refined = f"{r.refined_value:>14,.0f}" if r.refined_value is not None else "             -"
+        print(f"  {r.name:<32} x{r.quantity:<6,} sell-as-is {sell}  refined {refined}  -> {r.decision}")
+    totals = result["totals"]
+    print(f"\n{totals['reprocess_count']:,} item(s) worth reprocessing - "
+          f"{totals['total_refined_value']:,.0f} ISK refined vs. "
+          f"{totals['total_sell_as_is_value']:,.0f} ISK sold as-is.")
+    if result.get("priced_via_fallback"):
+        print("Note: prices came from the Goonmetrics fallback, not the real order book.")
+
+
+def cmd_set_mineral_requirement(args: argparse.Namespace) -> None:
+    result = refining_actions.do_set_mineral_requirement(args.item, args.quantity)
+    print(f"Requirement set: {result['type_name']} -> {result['required_qty']:,.0f} units.")
+
+
+def cmd_remove_mineral_requirement(args: argparse.Namespace) -> None:
+    result = refining_actions.do_remove_mineral_requirement(args.item)
+    print(f"Removed requirement: {result['type_name']}")
+
+
+def cmd_list_mineral_requirements(args: argparse.Namespace) -> None:
+    rows = refining_actions.do_load_mineral_requirements()
+    if not rows:
+        print("No mineral requirements configured.")
+        return
+    for r in rows:
+        print(f"  {r['name']:<32} {r['required_qty']:>12,.0f} units")
+
+
+def cmd_solve_shopping_list(args: argparse.Namespace) -> None:
+    print("Solving the Mineral Shopping List (this can take a moment)...")
+    plan = refining_actions.do_optimize_mineral_shopping_list()
+    if plan["ore_purchases"]:
+        print("\nOre to buy:")
+        for p in plan["ore_purchases"]:
+            print(f"  {p.item:<32} {p.portions:>6,} portions ({p.units:>10,.0f} units)  "
+                  f"{p.total_cost:>16,.0f} ISK")
+    if plan["direct_purchases"]:
+        print("\nBuy directly:")
+        for p in plan["direct_purchases"]:
+            print(f"  {p.name:<32} {p.quantity:>10,.0f} units  {p.total_cost:>16,.0f} ISK  ({p.source})")
+    print(f"\nTotal cost: {plan['total_cost']:,.0f} ISK  (ore {plan['ore_cost']:,.0f} + "
+          f"direct {plan['direct_cost']:,.0f})")
+    if plan.get("savings_vs_all_direct") is not None:
+        print(f"Savings vs. buying everything outright: {plan['savings_vs_all_direct']:,.0f} ISK")
+
+
 def cmd_pipeline(args: argparse.Namespace) -> None:
     results = actions.do_pipeline(safe=args.safe, rebuild_universe=args.rebuild_universe)
     for step, result in results.items():
@@ -587,6 +673,42 @@ def build_parser() -> argparse.ArgumentParser:
     p_list_contracts.add_argument("--status", default=None,
                                   help="filter by validation_status (valid/tolerable/unmatched/invalid)")
     p_list_contracts.set_defaults(func=cmd_list_contracts)
+
+    sub.add_parser(
+        "add-ore-to-shortlist", help="add every compressed ore/ice type from the SDE to the Ore Shortlist"
+    ).set_defaults(func=cmd_add_ore_to_shortlist)
+    sub.add_parser(
+        "refresh-ore-shortlist", help="re-price every Ore Shortlist item against live market data"
+    ).set_defaults(func=cmd_refresh_ore_shortlist)
+    sub.add_parser(
+        "list-ore-shortlist", help="show the last Ore Shortlist evaluation run"
+    ).set_defaults(func=cmd_list_ore_shortlist)
+
+    p_quote = sub.add_parser(
+        "quote-reprocessing", help="quote a pasted inventory list: sell as-is vs. reprocess"
+    )
+    p_quote.add_argument("path", help="path to a text file with an EVE inventory 'Copy As' paste")
+    p_quote.set_defaults(func=cmd_quote_reprocessing)
+
+    p_set_req = sub.add_parser(
+        "set-mineral-requirement", help="set (or update) how many units of a mineral the shopping list needs"
+    )
+    p_set_req.add_argument("item", help="type_id or exact item name")
+    p_set_req.add_argument("quantity", type=float, help="required quantity")
+    p_set_req.set_defaults(func=cmd_set_mineral_requirement)
+
+    p_remove_req = sub.add_parser("remove-mineral-requirement", help="remove a mineral requirement")
+    p_remove_req.add_argument("item", help="type_id or exact item name")
+    p_remove_req.set_defaults(func=cmd_remove_mineral_requirement)
+
+    sub.add_parser(
+        "list-mineral-requirements", help="list every configured mineral requirement"
+    ).set_defaults(func=cmd_list_mineral_requirements)
+
+    sub.add_parser(
+        "solve-shopping-list",
+        help="solve the cheapest ore-buy-and-refine-vs-buy-direct mix for the saved mineral requirements",
+    ).set_defaults(func=cmd_solve_shopping_list)
 
     sub.add_parser(
         "check-update", help="check GitHub for a newer commit (read-only)"
