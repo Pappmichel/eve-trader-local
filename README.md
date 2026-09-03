@@ -39,9 +39,19 @@ stock-value reads, invention-location logistics (datacores/decryptors/T1 BPCs
 needed vs. on hand), the multi-structure Logistik-tab helpers (per-category
 material logistics status with pull-from hints, plus distribution
 recommendations for moving stock from a configured warehouse — or another
-category's own surplus — to whichever category is short), and Special Orders
+category's own surplus — to whichever category is short), Special Orders
 (ad-hoc one-off build orders priced with the same buy-vs-build engine,
-optionally netted against synced stock).
+optionally netted against synced stock), a search-any-item Margin lookup and
+full recursive material-tree browser, an asset-location search ("where is
+this item currently sitting, across every synced character/corp", with
+ESI-backed structure-name resolution), a standalone invention cost/decryptor
+estimator, a live system-cost-index display, a manual Build/Buy override
+(force an item to always build or always buy, wired into every planner), an
+in-place stock-target editor, an owned-blueprint browser (every BPO/BPC,
+aggregated by ME/TE/runs), and a current-industry-jobs list with a
+per-character job-slot usage summary (usage counts only — no total/free slot
+count, since that needs a live ESI character-skills pull this repo
+deliberately doesn't request; see SYNC.md).
 
 The **Doctrine** tool (fitted-ship contract/stockpile tracking against EFT
 fittings) is fully ported and runnable from the CLI too: paste-and-store EFT
@@ -332,7 +342,7 @@ eve-trader-local auth --role buyer  # opens a browser, stores the token
 eve-trader-local whoami             # list authorized characters
 eve-trader-local config             # show the resolved configuration
 eve-trader-local refresh-sde        # download the EVE Static Data Export
-eve-trader-local sde-status         # when was it refreshed; is a newer dump out?
+eve-trader-local sde-status         # when was it refreshed; is a newer dump out; is Trading's candidate universe stale?
 eve-trader-local check-update       # is there a newer commit on origin/main?
 eve-trader-local update             # fetch + reset --hard + reinstall deps
 
@@ -347,9 +357,22 @@ eve-trader-local auth --role producer       # authorize an industry character (a
 eve-trader-local sync-esi                   # refresh what your producers own: assets, BPOs, jobs
 eve-trader-local discover-build-candidates  # scan the SDE for build-vs-buy opportunities
 eve-trader-local set-stock-target <item> <qty> [--jita]  # keep <qty> units of an item in stock
+eve-trader-local update-stock-target <item> [--quantity] [--jita|--home]  # edit an existing target in place
 eve-trader-local remove-stock-target <item>              # stop tracking a stock target
 eve-trader-local list-stock-targets                      # show every configured stock target
 eve-trader-local plan-production            # stock-aware buy/build plan against your stock targets
+eve-trader-local item-margin <item>                      # price/build cost/margin for any one item
+eve-trader-local material-tree <item> [--quantity]       # full recursive bill-of-materials tree
+eve-trader-local item-locations <item>                   # where a synced character/corp currently holds an item
+eve-trader-local resolve-structure-name <location_id> [--force]  # resolve a location_id via ESI (cached)
+eve-trader-local system-cost-indices        # live ESI manufacturing/reaction cost indices
+eve-trader-local estimate-invention <product> [--decryptor]  # invention cost/probability by decryptor
+eve-trader-local set-manual-build-buy <item> <Build|Buy>  # force an item to always Build or always Buy
+eve-trader-local clear-manual-build-buy <item>            # remove a manual Build/Buy override
+eve-trader-local list-manual-build-buy                    # list every manual Build/Buy override
+eve-trader-local list-current-jobs          # every active/paused/ready character + corp industry job
+eve-trader-local character-slots            # per-character, per-category running-job counts
+eve-trader-local list-owned-blueprints       # every owned BPO/BPC, aggregated by ME/TE/runs
 eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--net-against-stock]
 eve-trader-local list-special-orders                     # show every special order
 eve-trader-local update-special-order <order_id> [--status open|done] [--note]

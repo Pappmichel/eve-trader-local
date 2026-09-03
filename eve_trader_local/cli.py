@@ -13,9 +13,18 @@
     eve-trader-local sync-esi
     eve-trader-local discover-build-candidates
     eve-trader-local set-stock-target <item> <quantity> [--jita] / remove-stock-target <item> / list-stock-targets
+    eve-trader-local update-stock-target <item> [--quantity] [--jita|--home]
     eve-trader-local plan-production / plan-asset-optimized
     eve-trader-local market-status / stock-value
-    eve-trader-local discover-ship-margins
+    eve-trader-local discover-ship-margins / item-margin <item>
+    eve-trader-local material-tree <item> [--quantity]
+    eve-trader-local item-locations <item>
+    eve-trader-local system-cost-indices
+    eve-trader-local estimate-invention <product> [--decryptor]
+    eve-trader-local resolve-structure-name <location_id> [--force]
+    eve-trader-local set-manual-build-buy <item> <Build|Buy> / clear-manual-build-buy <item> / list-manual-build-buy
+    eve-trader-local list-current-jobs / character-slots
+    eve-trader-local list-owned-blueprints
     eve-trader-local invention-logistics / t1-bpc-invention-needs
     eve-trader-local logistics-status / distribution-recommendations
     eve-trader-local set-category-location <category> <location_id> / clear-category-location <category>
@@ -204,6 +213,25 @@ def cmd_sde_status(args: argparse.Namespace) -> None:
         print("A newer SDE dump is available. Run: eve-trader-local refresh-sde")
     elif status["local_refreshed_at"] is not None:
         print("Fuzzwork's current dump matches the cached one.")
+
+    # Second, independent staleness check (ported from the parent's
+    # do_check_sde_freshness): has the SDE cache itself been refreshed more
+    # recently than Trading's "Build Universe" candidate_universe snapshot
+    # was last rebuilt? Production's own scans always walk the live SDE
+    # cache directly, so this only matters for Trading's cached universe.
+    # Timestamps come from two different isoformat() calls (sde.py's
+    # tz-aware datetime.now(timezone.utc).isoformat() vs actions.now_ts(), a
+    # naive utcnow().isoformat(timespec="seconds")) - comparing full strings
+    # risks a spurious mismatch from the trailing "+00:00"/microseconds
+    # Trading's format lacks, so compare only the shared whole-second prefix
+    # both formats guarantee. Only True (never "unknown") when both
+    # timestamps are known and the SDE is newer.
+    sde_state = storage.get_sde_refresh_state()
+    sde_refreshed_at = sde_state[0] if sde_state else None
+    universe_built_at = storage.get_candidate_universe_built_at()
+    if sde_refreshed_at and universe_built_at and sde_refreshed_at[:19] > universe_built_at[:19]:
+        print("Trading's candidate universe predates the last SDE refresh. "
+              "Run: eve-trader-local build-universe")
 
 
 def cmd_build_universe(args: argparse.Namespace) -> None:
@@ -396,6 +424,131 @@ def cmd_discover_ship_margins(args: argparse.Namespace) -> None:
         home_price = f"{r.home_price:,.0f}" if r.home_price is not None else "-"
         margin = f"{r.margin_home * 100:6.1f}%" if r.margin_home is not None else "     -"
         print(f"  {r.type_name:<40} {r.activity:<10} home {home_price:>16}   margin {margin}")
+
+
+def cmd_item_margin(args: argparse.Namespace) -> None:
+    r = production_actions.do_get_item_margin(args.item)
+    home_price = f"{r.home_price:,.0f}" if r.home_price is not None else "-"
+    jita_price = f"{r.jita_price:,.0f}" if r.jita_price is not None else "-"
+    build_cost = f"{r.build_cost:,.0f}" if r.build_cost is not None else "-"
+    margin_home = f"{r.margin_home * 100:6.1f}%" if r.margin_home is not None else "     -"
+    margin_jita = f"{r.margin_jita * 100:6.1f}%" if r.margin_jita is not None else "     -"
+    print(f"{r.type_name} ({r.activity})")
+    print(f"  home price {home_price:>16}   margin {margin_home}")
+    print(f"  jita price {jita_price:>16}   margin {margin_jita}")
+    print(f"  build cost {build_cost:>16}")
+
+
+def cmd_material_tree(args: argparse.Namespace) -> None:
+    tree = production_actions.do_build_material_tree(args.item, quantity=args.quantity)
+
+    def _print(node: dict, depth: int = 0) -> None:
+        indent = "  " * depth
+        print(f"{indent}{node['type_name']} x{node['quantity']:,.2f} [{node['activity']}]"
+              + (f" ({node['decryptor']})" if node.get("decryptor") else ""))
+        for child in node["children"]:
+            _print(child, depth + 1)
+
+    _print(tree)
+
+
+def cmd_item_locations(args: argparse.Namespace) -> None:
+    result = production_actions.do_search_item_locations(args.item)
+    if not result["locations"]:
+        print(f"No synced assets found for {result['type_name']}.")
+        return
+    print(f"{result['type_name']}:")
+    for loc in result["locations"]:
+        name = loc.location_name or f"location {loc.location_id}"
+        print(f"  {name:<40} {loc.owner_name:<25} {loc.quantity:>10,.0f} units")
+
+
+def cmd_system_cost_indices(args: argparse.Namespace) -> None:
+    indices = production_actions.do_get_system_cost_indices()
+    for profile in ("manufacturing", "component"):
+        values = indices.get(profile)
+        if not values:
+            print(f"  {profile:<14} no data (system not configured, or ESI unreachable)")
+            continue
+        parts = ", ".join(f"{activity} {rate * 100:.2f}%" for activity, rate in values.items())
+        print(f"  {profile:<14} {parts}")
+
+
+def cmd_estimate_invention(args: argparse.Namespace) -> None:
+    result = production_actions.do_estimate_invention(args.product, decryptor_name=args.decryptor)
+    if not result["results"]:
+        print(f"No invention recipe found for '{args.product}'.")
+        return
+    for r in result["results"][:10]:
+        cost = f"{r.net_cost_per_run:,.2f}" if r.net_cost_per_run is not None else "-"
+        print(f"  {r.t1_blueprint_name:<40} decryptor {r.decryptor or 'None':<20} "
+              f"probability {r.probability * 100:5.1f}%   runs {r.output_runs:>3}   "
+              f"net cost/run {cost:>14}")
+
+
+def cmd_resolve_structure_name(args: argparse.Namespace) -> None:
+    result = production_actions.do_resolve_structure_name(args.location_id, force=args.force)
+    if result["name"] is None:
+        print(f"Could not resolve location {result['location_id']} - no producer character can see it.")
+    else:
+        cached = " (cached)" if result["cached"] else ""
+        print(f"Location {result['location_id']}: {result['name']}{cached}")
+
+
+def cmd_set_manual_build_buy(args: argparse.Namespace) -> None:
+    result = production_actions.do_set_manual_build_buy(args.item, args.decision)
+    print(f"Manual override set: {result['type_name']} -> always {result['decision']}.")
+
+
+def cmd_clear_manual_build_buy(args: argparse.Namespace) -> None:
+    result = production_actions.do_clear_manual_build_buy(args.item)
+    print(f"Cleared manual override for {result['type_name']} - back to automatic (cost-based).")
+
+
+def cmd_list_manual_build_buy(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_manual_build_buy()["rows"]
+    if not rows:
+        print("No manual Build/Buy overrides configured.")
+        return
+    for type_id, type_name, decision in rows:
+        print(f"  {type_name:<40} always {decision}")
+
+
+def cmd_update_stock_target(args: argparse.Namespace) -> None:
+    result = production_actions.do_update_stock_target(args.item, quantity=args.quantity, jita_target=args.jita)
+    where = "Jita" if result["jita_target"] else "home"
+    print(f"Stock target updated: {result['type_name']} -> {result['quantity']:,.0f} units (sells at {where}).")
+
+
+def cmd_list_current_jobs(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_current_jobs()["rows"]
+    if not rows:
+        print("No active industry jobs.")
+        return
+    for row in rows:
+        remaining = f"{row.remaining_seconds / 3600:6.1f}h" if row.remaining_seconds is not None else "     -"
+        value = f"{row.output_value:,.0f}" if row.output_value is not None else "-"
+        print(f"  {row.type_name:<40} {row.activity:<14} {row.runs:>4} runs   "
+              f"{row.status:<8} {remaining:<8}   installer {row.installer_name:<20} value {value}")
+
+
+def cmd_character_slots(args: argparse.Namespace) -> None:
+    rows = production_actions.do_character_slot_overview()["rows"]
+    if not rows:
+        print("No active industry jobs to summarize.")
+        return
+    for row in rows:
+        print(f"  {row.character_name:<25} {row.job_type:<14} {row.used_slots:>3} in use")
+
+
+def cmd_list_owned_blueprints(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_owned_blueprints()["rows"]
+    if not rows:
+        print("No owned blueprints synced yet.")
+        return
+    for row in rows:
+        kind = "BPO" if row.is_original else f"BPC ({row.runs} runs left)"
+        print(f"  {row.type_name:<40} x{row.quantity:<4} {kind:<20} ME{row.material_efficiency} TE{row.time_efficiency}")
 
 
 def cmd_invention_logistics(args: argparse.Namespace) -> None:
@@ -960,6 +1113,17 @@ def build_parser() -> argparse.ArgumentParser:
         "list-stock-targets", help="list every configured stock target"
     ).set_defaults(func=cmd_list_stock_targets)
 
+    p_update_target = sub.add_parser(
+        "update-stock-target", help="edit an existing stock target's quantity/sell-market in place"
+    )
+    p_update_target.add_argument("item", help="type_id or exact item name")
+    p_update_target.add_argument("--quantity", type=float, default=None, help="new target quantity")
+    p_update_target.add_argument("--jita", dest="jita", action="store_true", default=None,
+                                 help="sell at Jita instead of home")
+    p_update_target.add_argument("--home", dest="jita", action="store_false",
+                                 help="sell at home instead of Jita")
+    p_update_target.set_defaults(func=cmd_update_stock_target)
+
     sub.add_parser(
         "plan-production", help="run the stock-aware buy/build planner against configured stock targets"
     ).set_defaults(func=cmd_plan_production)
@@ -980,6 +1144,73 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "discover-ship-margins", help="every manufacturable ship's current price/build cost/margin"
     ).set_defaults(func=cmd_discover_ship_margins)
+
+    p_item_margin = sub.add_parser(
+        "item-margin", help="current price/build cost/margin for one arbitrary item (any category)"
+    )
+    p_item_margin.add_argument("item", help="type_id or exact item name")
+    p_item_margin.set_defaults(func=cmd_item_margin)
+
+    p_material_tree = sub.add_parser(
+        "material-tree", help="full recursive bill-of-materials tree for one item"
+    )
+    p_material_tree.add_argument("item", help="type_id or exact item name")
+    p_material_tree.add_argument("--quantity", type=float, default=1.0, help="units to size the tree for (default 1)")
+    p_material_tree.set_defaults(func=cmd_material_tree)
+
+    p_item_locations = sub.add_parser(
+        "item-locations", help="every synced character/corp asset location currently holding an item"
+    )
+    p_item_locations.add_argument("item", help="type_id or exact item name")
+    p_item_locations.set_defaults(func=cmd_item_locations)
+
+    sub.add_parser(
+        "system-cost-indices", help="live ESI manufacturing/reaction cost indices for the configured systems"
+    ).set_defaults(func=cmd_system_cost_indices)
+
+    p_estimate_invention = sub.add_parser(
+        "estimate-invention", help="invention cost/probability for a T2/T3 blueprint, by decryptor"
+    )
+    p_estimate_invention.add_argument("product", help="exact name of the T2/T3 blueprint to invent")
+    p_estimate_invention.add_argument("--decryptor", default=None,
+                                      help="estimate only this decryptor (default: compare every option)")
+    p_estimate_invention.set_defaults(func=cmd_estimate_invention)
+
+    p_resolve_structure = sub.add_parser(
+        "resolve-structure-name", help="resolve a location_id to its structure name via ESI (cached)"
+    )
+    p_resolve_structure.add_argument("location_id", type=int)
+    p_resolve_structure.add_argument("--force", action="store_true", help="bypass the cache and re-resolve")
+    p_resolve_structure.set_defaults(func=cmd_resolve_structure_name)
+
+    p_set_bb = sub.add_parser(
+        "set-manual-build-buy", help="force an item to always Build or always Buy, regardless of modeled cost"
+    )
+    p_set_bb.add_argument("item", help="type_id or exact item name")
+    p_set_bb.add_argument("decision", choices=("Build", "Buy"))
+    p_set_bb.set_defaults(func=cmd_set_manual_build_buy)
+
+    p_clear_bb = sub.add_parser("clear-manual-build-buy", help="clear a manual Build/Buy override")
+    p_clear_bb.add_argument("item", help="type_id or exact item name")
+    p_clear_bb.set_defaults(func=cmd_clear_manual_build_buy)
+
+    sub.add_parser(
+        "list-manual-build-buy", help="list every configured manual Build/Buy override"
+    ).set_defaults(func=cmd_list_manual_build_buy)
+
+    sub.add_parser(
+        "list-current-jobs", help="every active/paused/ready character + corp industry job"
+    ).set_defaults(func=cmd_list_current_jobs)
+
+    sub.add_parser(
+        "character-slots",
+        help="per-character, per-category count of currently-running industry jobs "
+             "(usage only - no total/free, see README)",
+    ).set_defaults(func=cmd_character_slots)
+
+    sub.add_parser(
+        "list-owned-blueprints", help="every owned BPO/BPC (character + corp), aggregated by ME/TE/runs"
+    ).set_defaults(func=cmd_list_owned_blueprints)
 
     sub.add_parser(
         "invention-logistics",

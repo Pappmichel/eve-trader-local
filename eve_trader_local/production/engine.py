@@ -93,7 +93,8 @@ from .constants import (
 )
 from .models import (
     AssetPlanJob, BuildJobEntry, BuyListEntry, DistributionRow, InventionNeedRow, InventionResult, InventoryRow,
-    LogisticsRow, MarketStatusRow, ShipMarginRow, SpecialOrderLineItem, StockOverlapWarningRow, T1BpcInventionNeedRow,
+    LogisticsRow, MarketStatusRow, OwnedBlueprintRow, ShipMarginRow, SpecialOrderLineItem, StockOverlapWarningRow,
+    T1BpcInventionNeedRow,
 )
 
 # Guards against an unexpected SDE cycle (a blueprint whose materials
@@ -889,7 +890,8 @@ def _stock_on_hand(type_id: int, manual_stock: dict[int, float]) -> float:
 def _base_runs(cfg: ProductionConfig, home: dict, jita: dict, cost_memo: dict[int, Optional[float]],
                selected_decryptors: dict[int, str], t2_memo: dict[int, T2Mods],
                cost_indices: CostIndices, adjusted_prices: dict[int, float],
-               stock_targets: list[tuple[int, str, float, bool]]) -> dict[int, float]:
+               stock_targets: list[tuple[int, str, float, bool]],
+               manual_overrides: Optional[dict[int, str]] = None) -> dict[int, float]:
     """Pure structural run count per type_id, completely ignoring current
     stock and never buffered by overbuild: if every stock target's full
     target quantity had to be built from absolute zero, how many runs of each
@@ -897,8 +899,18 @@ def _base_runs(cfg: ProductionConfig, home: dict, jita: dict, cost_memo: dict[in
     _expand_all's overbuild buffer - it must not shrink just because some
     stock happens to be on hand right now, and must not itself compound level
     over level (see _expand_all's docstring for why a naive multiplicative
-    buffer would)."""
+    buffer would).
+
+    `manual_overrides` (storage.load_manual_build_buy - a caller-forced
+    "always Build"/"always Buy" per type_id, GitHub issue-style manual
+    override) is consulted the same way _expand_all consults it: a manually-
+    forced Buy stops the walk here exactly like a cost-based "Buy" decision
+    would, so base_runs (the overbuild-buffer baseline) never counts runs for
+    something the user has said never to build. None (the default) behaves
+    exactly as before this parameter existed - every decision purely cost-
+    based."""
     base_runs: dict[int, float] = {}
+    overrides = manual_overrides or {}
 
     def expand(type_id: int, quantity: float, depth: int = 0) -> None:
         """Recurses down the BOM, accumulating each type_id's total run count
@@ -909,7 +921,7 @@ def _base_runs(cfg: ProductionConfig, home: dict, jita: dict, cost_memo: dict[in
             return
         activity, bp = classify_activity(type_id)
         _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
-        decision = _buy_or_build_decision(type_id, cfg, home, jita, {}, cost_memo, bp, depth)
+        decision = _buy_or_build_decision(type_id, cfg, home, jita, overrides, cost_memo, bp, depth)
         if decision == "Buy" or bp is None:
             return
         blueprint_id, activity_id, product_qty = bp
@@ -950,6 +962,7 @@ def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dic
                 base_runs: dict[int, float],
                 gross_demand: Optional[dict[int, float]] = None,
                 ignore_current_stock: bool = False,
+                manual_overrides: Optional[dict[int, str]] = None,
                 ) -> tuple[dict[int, float], dict[tuple[int, int, int], int]]:
     """Resolves every stock target's `seed_missing` quantity into buy_totals
     ({type_id: qty}) and build_runs ({(blueprint_id, activity_id,
@@ -984,11 +997,16 @@ def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dic
     needed by two different branches doesn't have the same physical stock
     counted against both of them.
 
-    No manual Build/Buy override table exists here (see SYNC.md), so every
-    node's sourcing decision is purely cost-based (`_buy_or_build_decision`
-    with an empty override dict) and every material gets the full overbuild
-    buffer - the parent skips the buffer for a manually-forced Buy, which has
-    no local equivalent to skip for.
+    `manual_overrides` (storage.load_manual_build_buy) is passed straight
+    through to `_buy_or_build_decision` (a manually-forced Build/Buy always
+    wins over the modeled cost comparison) and additionally skips the
+    overbuild buffer for any material with a manual override of its own -
+    matching the parent's own reasoning: a manually-forced decision already
+    says exactly how much of that material to source, so padding its target
+    with an extra buffer on top second-guesses a choice the user made on
+    purpose. None (the default) behaves exactly as before this parameter
+    existed - every decision purely cost-based and every material gets the
+    full overbuild buffer.
 
     `ignore_current_stock`, if True, treats every material's on-hand stock as
     0 regardless of what _current_stock would actually report - used by
@@ -999,6 +1017,7 @@ def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dic
     buy_totals: dict[int, float] = {}
     build_runs: dict[tuple[int, int, int], int] = {}
     buffered_parents: set[int] = set()
+    overrides = manual_overrides or {}
 
     jobs_this_level: dict[int, float] = {tid: q for tid, q in seed_missing.items() if q > 0}
     depth = 0
@@ -1007,7 +1026,7 @@ def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dic
 
         for type_id, quantity in jobs_this_level.items():
             activity, bp = classify_activity(type_id)
-            decision = _buy_or_build_decision(type_id, cfg, home, jita, {}, cost_memo, bp, depth)
+            decision = _buy_or_build_decision(type_id, cfg, home, jita, overrides, cost_memo, bp, depth)
             if decision == "Buy" or bp is None:
                 buy_totals[type_id] = buy_totals.get(type_id, 0) + quantity
                 continue
@@ -1024,7 +1043,8 @@ def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dic
                 gross_needed = _material_qty(base_qty, material_mult, runs)
                 if gross_needed <= 0:
                     continue
-                buffer = cfg.component_overbuild * base_qty * material_mult * parent_base_runs
+                overbuild = 0.0 if material_id in overrides else cfg.component_overbuild
+                buffer = overbuild * base_qty * material_mult * parent_base_runs
                 next_level[material_id] = next_level.get(material_id, 0.0) + gross_needed + buffer
 
         jobs_this_level = {}
@@ -1128,6 +1148,7 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     (see engine.py's own module docstring for that decision)."""
     stock_targets = storage.load_stock_targets()
     manual_stock = storage.load_manual_stock()
+    manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
@@ -1159,7 +1180,7 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     # computed once over every stock target's full target quantity, not just
     # what's currently missing.
     base_runs = _base_runs(cfg, home, jita, cost_memo, selected_decryptors, t2_memo,
-                           cost_indices, adjusted_prices, stock_targets)
+                           cost_indices, adjusted_prices, stock_targets, manual_overrides)
     seed_missing: dict[int, float] = {}
     gross_demand: dict[int, float] = {}
 
@@ -1208,7 +1229,11 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
 
         _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
         skip_due_to_margin = False
-        if bp is not None:
+        # A manual override always wins - if the user has said "always Build"
+        # (or "always Buy") for this type_id, the min_margin gate below (which
+        # only exists to decide whether a modeled Build is worth recommending
+        # at all) doesn't apply: the decision is no longer cost-based.
+        if bp is not None and type_id not in manual_overrides:
             margin = _build_margin(type_id, cost_memo.get(type_id), jita_target, home, jita, cfg)
             if margin is not None and margin < cfg.min_margin:
                 skip_due_to_margin = True
@@ -1219,7 +1244,8 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
         gross_demand[type_id] = gross_demand.get(type_id, 0.0) + quantity
 
     buy_totals, build_runs = _expand_all(seed_missing, cfg, home, jita, cost_memo, selected_decryptors,
-                                         t2_memo, manual_stock, stock_used, base_runs, gross_demand)
+                                         t2_memo, manual_stock, stock_used, base_runs, gross_demand,
+                                         manual_overrides=manual_overrides)
 
     buy_list = _build_buy_list(buy_totals, gross_demand, cfg, home, jita)
     build_list = _build_build_list(build_runs, cost_memo, t2_memo, cfg, home)
@@ -1295,6 +1321,7 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
       sum - matching plan_production's own already-simplified model."""
     stock_targets = storage.load_stock_targets()
     manual_stock = storage.load_manual_stock()
+    manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
@@ -1321,7 +1348,7 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     # consumption.
     stock_used_on_hand: dict[int, float] = {}
     base_runs = _base_runs(cfg, home, jita, cost_memo, selected_decryptors, t2_memo,
-                           cost_indices, adjusted_prices, stock_targets)
+                           cost_indices, adjusted_prices, stock_targets, manual_overrides)
     buffered_parents: set[int] = set()
 
     # Same margin gate as plan_production: a stock target's demand is
@@ -1347,12 +1374,13 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
             continue
         _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
 
-        margin = _build_margin(type_id, cost_memo.get(type_id), jita_target, home, jita, cfg)
-        if margin is not None and margin < cfg.min_margin:
-            margin_excluded.add(type_id)
+        if type_id not in manual_overrides:
+            margin = _build_margin(type_id, cost_memo.get(type_id), jita_target, home, jita, cfg)
+            if margin is not None and margin < cfg.min_margin:
+                margin_excluded.add(type_id)
         if type_id in margin_excluded:
             continue
-        if _buy_or_build_decision(type_id, cfg, home, jita, {}, cost_memo, bp) != "Build":
+        if _buy_or_build_decision(type_id, cfg, home, jita, manual_overrides, cost_memo, bp) != "Build":
             continue
         jobs_this_level[type_id] = jobs_this_level.get(type_id, 0.0) + missing
         stock_coverage_by_id[type_id] = min(1.0, current_stock / quantity) if quantity > 0 else None
@@ -1385,7 +1413,8 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
                 if bare_needed <= 0:
                     continue
                 next_level_claims.setdefault(material_id, []).append((type_id, bare_needed))
-                buffer = cfg.component_overbuild * base_qty * material_mult * parent_base_runs
+                overbuild = 0.0 if material_id in manual_overrides else cfg.component_overbuild
+                buffer = overbuild * base_qty * material_mult * parent_base_runs
                 buffered_demand[material_id] = buffered_demand.get(material_id, 0.0) + bare_needed + buffer
 
         # Phase B: readiness (min_fraction) is allocated across the *bare*
@@ -1415,7 +1444,7 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
             if shortfall <= 0 or m_bp is None:
                 continue
             if material_id not in margin_excluded and _buy_or_build_decision(
-                    material_id, cfg, home, jita, {}, cost_memo, m_bp, depth + 1) == "Build":
+                    material_id, cfg, home, jita, manual_overrides, cost_memo, m_bp, depth + 1) == "Build":
                 jobs_this_level[material_id] = jobs_this_level.get(material_id, 0.0) + shortfall
                 if material_id not in stock_coverage_by_id:
                     stock_coverage_by_id[material_id] = available / buffered_total if buffered_total > 0 else None
@@ -1487,6 +1516,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     target's own quantity gives plan_production's list a stockpile_pct
     denominator - see that function's own row in this module)."""
     manual_stock = storage.load_manual_stock()
+    manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
@@ -1522,7 +1552,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     stock_used: dict[int, float] = {}
     synthetic_stock_targets = [(type_id, type_name, quantity, False) for type_id, type_name, quantity in items]
     base_runs = _base_runs(cfg, home, jita, cost_memo, selected_decryptors, t2_memo,
-                           cost_indices, adjusted_prices, synthetic_stock_targets)
+                           cost_indices, adjusted_prices, synthetic_stock_targets, manual_overrides)
 
     seed_missing: dict[int, float] = {}
     gross_demand: dict[int, float] = {}
@@ -1545,7 +1575,8 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
 
     buy_totals, build_runs = _expand_all(seed_missing, cfg, home, jita, cost_memo, selected_decryptors,
                                          t2_memo, manual_stock, stock_used, base_runs, gross_demand,
-                                         ignore_current_stock=not net_against_stock)
+                                         ignore_current_stock=not net_against_stock,
+                                         manual_overrides=manual_overrides)
 
     buy_list = _build_buy_list(buy_totals, gross_demand, cfg, home, jita)
     build_list = _build_build_list(build_runs, cost_memo, t2_memo, cfg, home)
@@ -1722,6 +1753,54 @@ def _scan_ship_margins(cfg: ProductionConfig) -> list[dict]:
 
     results.sort(key=lambda r: r.get("margin_home") or 0.0, reverse=True)
     return results
+
+
+def item_margin_detail(type_id: int, type_name: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Production Margin page's search: the same row shape discover_ship_
+    margins produces, for one arbitrary already-resolved item (any category,
+    not just ships - see production/actions.py's do_get_item_margin, which
+    resolves a bare type_id/name the same way _resolve_type does before
+    calling this). No caching needed (one item per call, same cheap cost
+    profile as build_material_tree) - a fresh home/Jita price fetch and
+    cost_memo/t2_memo pair every call, unlike discover_ship_margins' whole-
+    catalog scan."""
+    cost_memo: dict[int, Optional[float]] = {}
+    t2_memo: dict[int, T2Mods] = {}
+    selected_decryptors: dict[int, str] = {}
+
+    priced_type_ids = list(structural_material_closure([type_id]))
+    home = pricing.home_prices(priced_type_ids, cfg)
+    jita = pricing.jita_prices(priced_type_ids)
+
+    from ..esi_client import ESIClient  # local import: only needed for this call's live lookups
+    esi_client = ESIClient()
+    cost_indices: CostIndices = {
+        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
+        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+    }
+    try:
+        adjusted_prices = esi_client.get_adjusted_prices()
+    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
+        adjusted_prices = {}
+
+    activity, _bp = classify_activity(type_id)
+    build_cost = _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors,
+                            t2_memo, cost_indices, adjusted_prices)
+    home_quote = home.get(type_id)
+    jita_quote = jita.get(type_id)
+    sde_type = storage.get_sde_type(type_id)
+    return {
+        "type_id": type_id, "type_name": type_name, "activity": activity,
+        "home_price": home_quote.sell if home_quote and home_quote.sell > 0 else None,
+        "jita_price": jita_quote.sell if jita_quote and jita_quote.sell > 0 else None,
+        "build_cost": build_cost,
+        "margin_home": margin_home(type_id, build_cost, home, cfg),
+        "margin_jita": margin_jita(type_id, build_cost, jita, cfg),
+        # Same shape as discover_ship_margins' own rows (both feed
+        # ShipMarginRow) - fetched here too so do_get_item_margin can build
+        # one without a second lookup of its own.
+        "meta_level": sde_type[6] if sde_type else None,
+    }
 
 
 # ------------------------------------------------------- multi-structure logistics
@@ -2039,4 +2118,38 @@ def t1_bpc_invention_needs(invention_list: list[InventionNeedRow],
             stockpile_pct=max(0.0, available / needed * 100) if needed > 0 else 0.0,
         ))
     rows.sort(key=lambda r: -r.missing)
+    return rows
+
+
+# ------------------------------------------------------------- owned blueprints
+def list_owned_blueprints() -> list[OwnedBlueprintRow]:
+    """Every owned blueprint (character + corp), aggregated across identical
+    (type_id, is_original, ME, TE, runs) groups - ported from the parent's
+    do_list_owned_blueprints (kept in engine.py here rather than actions.py,
+    matching this repo's own "no real logic in actions.py" convention: the
+    grouping below is the actual logic, do_list_owned_blueprints is a thin
+    do_* wrapper around it).
+
+    A BPO is identified by runs == -1 (ESI's convention for "original"), not
+    by any explicit is_blueprint_copy flag (that field only exists on the
+    *asset* tables, not the blueprint tables - see esi_sync.py's blueprint
+    sync)."""
+    grouped: dict[tuple, int] = {}
+    for type_id, quantity, material_efficiency, time_efficiency, runs in storage.load_owned_blueprints():
+        is_original = runs == -1
+        key = (type_id, is_original, material_efficiency, time_efficiency, None if is_original else runs)
+        # ESI's `quantity` field for a blueprint item is usually a sentinel
+        # (-1 original / -2 copy), not an actual stack size - only add it
+        # when it looks like a real positive count, else this row is 1 item.
+        grouped[key] = grouped.get(key, 0) + (quantity if quantity and quantity > 0 else 1)
+
+    rows = []
+    for (type_id, is_original, me, te, runs), qty in grouped.items():
+        sde_type = storage.get_sde_type(type_id)
+        name = sde_type[2] if sde_type else str(type_id)
+        rows.append(OwnedBlueprintRow(
+            type_id=type_id, type_name=name, is_original=is_original,
+            quantity=qty, material_efficiency=me, time_efficiency=te, runs=runs,
+        ))
+    rows.sort(key=lambda r: r.type_name)
     return rows

@@ -475,6 +475,37 @@ CREATE TABLE IF NOT EXISTS manual_stock (
     count     REAL NOT NULL DEFAULT 0
 );
 
+-- Manual Build/Buy override: forces "always Build" or "always Buy" for a
+-- specific type_id regardless of what the modeled unit cost would otherwise
+-- decide - ported from the parent's manual_build_buy table (storage.
+-- upsert_manual_build_buy/load_manual_build_buy/delete_manual_build_buy)
+-- minus tenant_id. A genuinely separate table from selected_decryptors
+-- (which this repo doesn't have either - see SYNC.md): that one picks WHICH
+-- decryptor a Tech II/III item uses, this one skips the buy-vs-build cost
+-- comparison entirely for a type_id. Consulted by engine.
+-- _buy_or_build_decision via a manual_overrides dict built from
+-- load_manual_build_buy() - see plan_production/plan_asset_optimized/
+-- discover_build_candidates/discover_ship_margins.
+CREATE TABLE IF NOT EXISTS manual_build_buy (
+    type_id  INTEGER PRIMARY KEY,
+    decision TEXT NOT NULL CHECK (decision IN ('Build', 'Buy'))
+);
+
+-- Structure-name cache: location_id -> human name, resolved once via ESI
+-- (do_resolve_structure_name) and cached indefinitely - ported from the
+-- parent's structure_names table minus tenant_id/RLS. A row with name=NULL
+-- means resolution was attempted and failed (no producer character could
+-- see that structure), distinct from "never attempted" (no row at all) - see
+-- get_cached_structure_name's own (was_cached, name) return shape. One
+-- shared table (not two) since the parent's own do_wallet_transactions and
+-- Production's structure picker both cache the same kind of location_id ->
+-- name lookup.
+CREATE TABLE IF NOT EXISTS structure_names (
+    location_id     INTEGER PRIMARY KEY,
+    name            TEXT,
+    solar_system_id INTEGER
+);
+
 -- Multi-structure production logistics (production/engine.py's
 -- logistics_status/distribution_recommendations - ported from the parent's
 -- job_category_locations/category_location_options, minus tenant_id). One
@@ -1098,6 +1129,35 @@ def get_blueprint_for_product(product_type_id: int,
             "WHERE p.product_type_id = ? AND p.activity_id IN (1, 11) AND t.published = 1 "
             "ORDER BY p.activity_id, p.blueprint_type_id LIMIT 1",
             (product_type_id,),
+        ).fetchone()
+    return tuple(row) if row else None
+
+
+def find_invention_recipe_by_product_name(product_name: str,
+                                          path: Optional[Path] = None) -> Optional[tuple[int, int]]:
+    """Given a T2/T3 blueprint's name (the thing you want to invent), returns
+    (t1_blueprint_type_id, product_type_id) - the invention recipe that
+    produces it. None if `product_name` isn't an invented type. Ported from
+    the parent's function of the same name for do_estimate_invention (see
+    production/actions.py), which needs to resolve a bare product name before
+    it can call invention.compare_recipes_and_decryptors/
+    best_recipe_for_decryptor.
+
+    Case-insensitive and tolerant of incidental leading/trailing whitespace,
+    matching search_sde_types' own .strip()/LOWER() handling elsewhere in
+    this file. Note: for a Tech III product with multiple relic-grade
+    candidates, this returns only one (arbitrary, non-deterministic)
+    t1_blueprint_type_id - callers that need every candidate grade should use
+    find_invention_recipe_candidates_by_product_type_id with the returned
+    product_type_id's blueprint instead (see do_estimate_invention, which
+    only uses this function's product_type_id half for exactly that reason)."""
+    product_name = product_name.strip()
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT p.blueprint_type_id, p.product_type_id FROM sde_blueprint_products p "
+            "JOIN sde_types t ON t.type_id = p.product_type_id "
+            "WHERE p.activity_id = 8 AND LOWER(t.type_name) = LOWER(?)",
+            (product_name,),
         ).fetchone()
     return tuple(row) if row else None
 
@@ -2069,6 +2129,58 @@ def get_owned_bpo_best_me_te(blueprint_type_id: int,
     return (best_me, best_te)
 
 
+def get_product_quantity(blueprint_type_id: int, activity_id: int, product_type_id: int,
+                         path: Optional[Path] = None) -> Optional[float]:
+    """Output quantity per run for one (blueprint, activity, product) triple -
+    ported from the parent's function of the same name, used by
+    jobs.list_current_jobs to turn an industry job's `runs` into an actual
+    output quantity."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT quantity FROM sde_blueprint_products "
+            "WHERE blueprint_type_id = ? AND activity_id = ? AND product_type_id = ?",
+            (blueprint_type_id, activity_id, product_type_id),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def list_industry_jobs(path: Optional[Path] = None) -> list[tuple]:
+    """Every active/paused/ready character + corp industry job, each with the
+    product's type_name joined in: (job_id, activity_id, blueprint_type_id,
+    product_type_id, type_name, runs, output_location_id, status, end_date,
+    start_date, installer_name). Ported from the parent's function of the
+    same name for jobs.list_current_jobs/character_slot_overview - filtered
+    to the three "in progress" statuses here (the parent's own version is
+    unfiltered, but every real caller only ever wants these; a finished job
+    ESI hasn't reported as delivered yet, or a cancelled/reverted one, isn't
+    a *current* job)."""
+    with connect(path) as conn:
+        rows = []
+        for table in _JOB_TABLES:
+            rows.extend(conn.execute(
+                f"SELECT j.job_id, j.activity_id, j.blueprint_type_id, j.product_type_id, "
+                f"t.type_name, j.runs, j.output_location_id, j.status, j.end_date, "
+                f"j.start_date, j.installer_name "
+                f"FROM {table} j LEFT JOIN sde_types t ON t.type_id = j.product_type_id "
+                f"WHERE j.status IN ('active', 'paused', 'ready')"
+            ).fetchall())
+    return [tuple(r) for r in rows]
+
+
+def load_owned_blueprints(path: Optional[Path] = None) -> list[tuple]:
+    """Returns (type_id, quantity, material_efficiency, time_efficiency, runs)
+    across character + corp blueprints, for informational display - ported
+    from the parent's function of the same name for
+    engine.list_owned_blueprints."""
+    with connect(path) as conn:
+        rows = []
+        for table in _BLUEPRINT_TABLES:
+            rows.extend(conn.execute(
+                f"SELECT type_id, quantity, material_efficiency, time_efficiency, runs FROM {table}"
+            ).fetchall())
+    return [tuple(r) for r in rows]
+
+
 def available_blueprint_copies(type_id: int, location_id: Optional[int],
                                tables: tuple[str, str] = _BLUEPRINT_TABLES) -> float:
     """Sums remaining *runs* across owned blueprint copies (quantity == -2,
@@ -2174,6 +2286,133 @@ def list_manual_stock(path: Optional[Path] = None) -> list[tuple[int, str, float
     with connect(path) as conn:
         return [tuple(r) for r in conn.execute(
             "SELECT type_id, type_name, count FROM manual_stock ORDER BY type_name").fetchall()]
+
+
+# --------------------------------------------------- manual Build/Buy override
+def upsert_manual_build_buy(type_id: int, decision: str, path: Optional[Path] = None) -> None:
+    assert decision in ("Build", "Buy")
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO manual_build_buy (type_id, decision) VALUES (?,?) "
+            "ON CONFLICT(type_id) DO UPDATE SET decision=excluded.decision",
+            (type_id, decision),
+        )
+
+
+def delete_manual_build_buy(type_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM manual_build_buy WHERE type_id = ?", (type_id,))
+
+
+def load_manual_build_buy(path: Optional[Path] = None) -> dict[int, str]:
+    """{type_id: "Build"|"Buy"} - see engine._buy_or_build_decision, the one
+    caller that consults this to force a sourcing decision regardless of
+    modeled cost."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT type_id, decision FROM manual_build_buy").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def list_manual_build_buy(path: Optional[Path] = None) -> list[tuple[int, str, str]]:
+    """(type_id, type_name, decision) for every override - CLI listing only;
+    engine.py reads load_manual_build_buy's dict form instead. type_name is
+    joined from sde_types at read time (no type_name column on the table
+    itself, unlike manual_stock) since a name is only ever needed for display,
+    never for the engine's own lookup by type_id."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT b.type_id, COALESCE(t.type_name, '?'), b.decision FROM manual_build_buy b "
+            "LEFT JOIN sde_types t ON t.type_id = b.type_id ORDER BY COALESCE(t.type_name, '?')"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+# --------------------------------------------------------- structure names
+def get_cached_structure_name(location_id: int,
+                              path: Optional[Path] = None) -> tuple[bool, Optional[str]]:
+    """Returns (was_cached, name). was_cached=False means resolution has
+    never been attempted for this location_id - was_cached=True with
+    name=None means it *was* attempted and failed (no producer character
+    could see that structure), so callers know not to silently keep retrying
+    every page load."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT name FROM structure_names WHERE location_id = ?", (location_id,),
+        ).fetchone()
+    if row is None:
+        return False, None
+    return True, row[0]
+
+
+def set_cached_structure_name(location_id: int, name: Optional[str],
+                              solar_system_id: Optional[int] = None,
+                              path: Optional[Path] = None) -> None:
+    """solar_system_id is best-effort - do_resolve_structure_name passes it
+    whenever the ESI response it just resolved `name` from happened to
+    include one; a resolution failure (name=None) never has one. Only ever
+    overwritten with a non-None value (COALESCE) so a later best-effort call
+    with solar_system_id=None can't blow away a value an earlier call already
+    captured."""
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO structure_names (location_id, name, solar_system_id) VALUES (?, ?, ?) "
+            "ON CONFLICT(location_id) DO UPDATE SET name=excluded.name, "
+            "solar_system_id=COALESCE(excluded.solar_system_id, structure_names.solar_system_id)",
+            (location_id, name, solar_system_id),
+        )
+
+
+def list_cached_structure_names(path: Optional[Path] = None) -> list[tuple[int, Optional[str]]]:
+    """Every location_id ever attempted, success or failure - name is None
+    for an attempted-but-failed resolution."""
+    with connect(path) as conn:
+        return conn.execute(
+            "SELECT location_id, name FROM structure_names ORDER BY name").fetchall()
+
+
+def search_item_stock_locations(type_id: int,
+                                path: Optional[Path] = None) -> list[tuple[int, Optional[str], str, float]]:
+    """For `type_id`, every character/corp asset (excluding
+    NON_STOCK_LOCATION_FLAGS - see esi_stock_at_location above), grouped by
+    (resolved_location_id, owner) summing quantity - resolved_location_id is
+    already the outermost station/structure id (see replace_assets).
+
+    Returns [(location_id, location_name, owner_name, quantity), ...] sorted
+    by quantity descending. location_name comes from the structure_names
+    cache (player structures - populated via resolve-structure-name) first,
+    then sde_stations.station_name (NPC stations); None if neither has it
+    yet. owner_name is whichever character or "<corp> (corp)" the sync
+    attributed this asset to - "?" for data synced before owner_name existed."""
+    flag_placeholders = ",".join("?" * len(NON_STOCK_LOCATION_FLAGS))
+    with connect(path) as conn:
+        raw_rows: list[tuple[int, str, float]] = []  # (resolved_location_id, owner_name, quantity)
+        for table in _ASSET_TABLES:
+            raw_rows.extend(conn.execute(
+                f"SELECT resolved_location_id, owner_name, quantity FROM {table} "
+                f"WHERE type_id = ? AND (location_flag IS NULL OR location_flag NOT IN ({flag_placeholders}))",
+                (type_id, *NON_STOCK_LOCATION_FLAGS),
+            ).fetchall())
+
+        grouped: dict[tuple[int, str], float] = {}
+        for location_id, owner_name, quantity in raw_rows:
+            key = (location_id, owner_name or "?")
+            grouped[key] = grouped.get(key, 0.0) + quantity
+
+        results: list[tuple[int, Optional[str], str, float]] = []
+        for (location_id, owner_name), quantity in grouped.items():
+            name_row = conn.execute(
+                "SELECT name FROM structure_names WHERE location_id = ?", (location_id,)
+            ).fetchone()
+            name = name_row[0] if name_row else None
+            if name is None:
+                station_row = conn.execute(
+                    "SELECT station_name FROM sde_stations WHERE station_id = ?", (location_id,)
+                ).fetchone()
+                name = station_row[0] if station_row else None
+            results.append((location_id, name, owner_name, quantity))
+
+    results.sort(key=lambda r: r[3], reverse=True)
+    return results
 
 
 # --------------------------------------------------- category locations

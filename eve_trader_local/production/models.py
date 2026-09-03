@@ -285,3 +285,68 @@ class BuildCandidate:
     daily_movement: float
     potential_daily_profit: float
     meta_level: Optional[int]
+
+
+@dataclass
+class IndustryJobRow:
+    """One active industry job (character or corp), shown individually even
+    if several jobs build the same item - see jobs.list_current_jobs."""
+    job_id: int
+    type_name: str
+    activity: str            # "Manufacturing" | "Reaction" | "Invention" | "TE/ME Research" | "Copying"
+    runs: int
+    quantity: Optional[float]  # runs * product qty/run, None if unknown (e.g. research jobs have no product)
+    status: str
+    start_date: Optional[str]
+    end_date: Optional[str]
+    remaining_seconds: Optional[float]
+    installer_name: str
+    # quantity x unit price, priced the same way engine.stock_value prices
+    # owned stock (home sell quote, falling back to Jita sell quote) - None if
+    # quantity itself is None (no product) or neither market has a quote.
+    output_value: Optional[float]
+
+
+@dataclass
+class CharacterSlotRow:
+    """Per-character, per-slot-category *usage* only - a deliberate reduction
+    from the parent's version (see jobs.character_slot_overview's own
+    docstring): the parent's total_slots/free_slots/excluded_from_planning
+    fields all depend on a live ESI character-skills pull
+    (esi-skills.read_skills.v1), a scope production/esi_sync.py deliberately
+    never requests here (see that module's own docstring for the reasoning).
+    Without a real total, "free_slots"/"excluded_from_planning" (which only
+    ever fed the parent's plan_asset_optimized slot-splitting, not ported
+    here either - see SYNC.md) would have no honest value to show, so this
+    row only ever carries what's actually known from synced industry-job
+    data: how many active/paused/ready jobs each character currently has
+    running, by category."""
+    character_name: str
+    job_type: str             # "Manufacturing" | "Reactions" | "Science"
+    used_slots: int
+
+
+@dataclass
+class AssetLocationRow:
+    """One row of the Asset Search feature: how much of a searched item sits
+    at one specific station/structure, owned by one specific character or
+    corp - see storage.search_item_stock_locations for the nested-container
+    resolution and (location, owner) grouping."""
+    location_id: int
+    location_name: Optional[str]  # None if not yet resolved - see do_resolve_structure_name for player structures
+    owner_name: str
+    quantity: float
+
+
+@dataclass
+class OwnedBlueprintRow:
+    """One owned blueprint (character or corp), aggregated across every
+    location - see engine.list_owned_blueprints (production/actions.py's
+    do_list_owned_blueprints)."""
+    type_id: int
+    type_name: str
+    is_original: bool         # True = BPO (runs == -1 in ESI's model), False = BPC
+    quantity: int              # count of copies at this (type_id, is_original, me, te, runs) grouping
+    material_efficiency: int
+    time_efficiency: int
+    runs: Optional[int]        # None for a BPO (infinite), remaining run count for a BPC

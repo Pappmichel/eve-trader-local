@@ -14,10 +14,11 @@ from .. import storage
 from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError, ConfigError
-from . import engine, esi_sync
+from ..esi_client import ESIClient, ESIError
+from . import engine, esi_sync, invention, jobs, pricing
 from .config import PRODUCTION_CONFIG, ProductionConfig, save_config_overrides
-from .constants import JOB_CATEGORIES
-from .models import BuildCandidate, ShipMarginRow, SpecialOrder
+from .constants import DECRYPTORS, JOB_CATEGORIES
+from .models import AssetLocationRow, BuildCandidate, ShipMarginRow, SpecialOrder
 
 SYNC_SCOPE = "production"
 
@@ -105,6 +106,35 @@ def do_add_stock_target(type_id_or_name: str, quantity: float, jita_target: bool
     return {"type_id": type_id, "type_name": type_name, "quantity": quantity, "jita_target": jita_target}
 
 
+def do_update_stock_target(type_id_or_name: str, quantity: float | None = None,
+                           jita_target: bool | None = None) -> dict:
+    """Edits an *existing* stock target's quantity/jita_target in place
+    (parent's GitHub issue #16 - "should be able to change the targets
+    directly in the table, like the targets on the doctrine table"). Unlike
+    do_add_stock_target, this requires the row to already exist - raises
+    ActionError otherwise, rather than silently creating one (that's what
+    do_add_stock_target is for).
+
+    Each field is genuinely optional: storage.upsert_stock_target here
+    always overwrites both columns (unlike the parent's own COALESCE-based
+    partial-update version - this repo's stock_targets table only has the
+    two, simpler fields, see storage.py's own schema comment), so a field
+    left as None is filled in from the row's current value before the
+    upsert, rather than silently resetting it."""
+    type_id, type_name = _resolve_type(type_id_or_name)
+    existing = {t[0]: t for t in storage.load_stock_targets()}
+    current = existing.get(type_id)
+    if current is None:
+        raise ActionError(f"No stock target for '{type_name}' - use set-stock-target to create one.")
+    _current_type_id, _current_name, current_quantity, current_jita_target = current
+    new_quantity = current_quantity if quantity is None else quantity
+    new_jita_target = current_jita_target if jita_target is None else jita_target
+    if new_quantity < 0:
+        raise ActionError("Stock target quantity cannot be negative.")
+    storage.upsert_stock_target(type_id, type_name, new_quantity, new_jita_target)
+    return {"type_id": type_id, "type_name": type_name, "quantity": new_quantity, "jita_target": new_jita_target}
+
+
 def do_remove_stock_target(type_id_or_name: str) -> dict:
     type_id, type_name = _resolve_type(type_id_or_name)
     storage.delete_stock_target(type_id)
@@ -158,6 +188,182 @@ def do_get_ship_margins(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
         raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
     rows = engine.discover_ship_margins(cfg)
     return {"rows": [ShipMarginRow(**r) for r in rows]}
+
+
+def do_get_item_margin(type_id_or_name: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> ShipMarginRow:
+    """Margin page's search - resolves `type_id_or_name` (same lookup
+    do_add_stock_target/do_build_material_tree/do_search_item_locations use)
+    and returns its current home/Jita price, build cost, and both margins for
+    any category, not just ships. See engine.item_margin_detail - unlike
+    discover_ship_margins' whole-catalog scan, this needs the SDE cache
+    populated only insofar as the resolved type_id has to exist in it, so no
+    separate sde_row_counts precondition is enforced here (an unknown
+    type_id/name already raises via _resolve_type)."""
+    type_id, type_name = _resolve_type(type_id_or_name)
+    return ShipMarginRow(**engine.item_margin_detail(type_id, type_name, cfg))
+
+
+def do_build_material_tree(type_id_or_name: str, quantity: float = 1.0,
+                           cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Resolves `type_id_or_name` (same lookup do_add_stock_target uses - not
+    just invented T2/T3 items like do_estimate_invention, any manufacturable-
+    or-not item) and returns its full recursive material tree. See
+    engine.build_material_tree."""
+    if quantity <= 0:
+        raise ActionError("Quantity must be positive.")
+    type_id, _type_name = _resolve_type(type_id_or_name)
+    type_ids = list(engine.structural_material_closure([type_id]))
+    home = pricing.home_prices(type_ids, cfg)
+    jita = pricing.jita_prices(type_ids)
+    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    t2_memo: dict = {}
+    return engine.build_material_tree(type_id, quantity, cfg, home, jita, selected_decryptors, t2_memo)
+
+
+def do_search_item_locations(type_id_or_name: str) -> dict:
+    """Resolves `type_id_or_name` (same lookup do_add_stock_target/
+    do_build_material_tree use) and returns every station/structure it's
+    currently sitting at, who owns it (character or corp), and how much -
+    see storage.search_item_stock_locations. Reflects the last "Sync ESI
+    Data" run, not a live ESI call."""
+    type_id, type_name = _resolve_type(type_id_or_name)
+    rows = storage.search_item_stock_locations(type_id)
+    locations = [
+        AssetLocationRow(location_id=location_id, location_name=location_name,
+                         owner_name=owner_name, quantity=quantity)
+        for location_id, location_name, owner_name, quantity in rows
+    ]
+    return {"type_id": type_id, "type_name": type_name, "locations": locations}
+
+
+def do_get_system_cost_indices(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Live ESI cost indices for the configured component/manufacturing
+    systems - a display-only hint for Settings' manual override fields (so
+    "what's a sane value here" doesn't require guessing). Never raises -
+    pricing.system_cost_indices_for already degrades to {} on any ESI
+    failure or unset system_id; {} is normalized to None here so a caller
+    can treat "no data" as one falsy value."""
+    esi_client = ESIClient()
+    return {
+        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id) or None,
+        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id) or None,
+    }
+
+
+def do_estimate_invention(product_name: str, decryptor_name: str | None = None,
+                          cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """`product_name` is the T2/T3 blueprint you want (e.g. "Small Shield
+    Booster II Blueprint"), not the T1 base blueprint (or, for Tech III, the
+    relic). If `decryptor_name` is None, compares every (grade, decryptor)
+    combination (invention.compare_recipes_and_decryptors - for Tech III,
+    "grade" means the Intact/Malfunctioning/Wrecked relic tier, not just the
+    decryptor: see that function's own docstring); otherwise estimates just
+    that one decryptor, still auto-picking the cheapest grade for it
+    (invention.best_recipe_for_decryptor).
+
+    Deliberately resolves `product_name` to its product_type_id only (never
+    the arbitrary, non-deterministic t1_blueprint_type_id the same storage
+    lookup also returns) before calling either comparison, matching the
+    parent's own confirmed fix (2026-08-30) for a real bug: taking that
+    arbitrary blueprint_type_id and running every decryptor comparison
+    against just that one grade could show, and the "single decryptor" mode
+    could estimate against, a different relic grade on every call, never
+    letting the user compare or deliberately pick a grade at all."""
+    recipe = storage.find_invention_recipe_by_product_name(product_name.strip())
+    if recipe is None:
+        raise ActionError(
+            f"No invention recipe found for '{product_name}'. Exact name? Refresh SDE first?"
+        )
+    _, product_blueprint_id = recipe
+
+    type_ids = list(engine.structural_material_closure([product_blueprint_id]))
+    home = pricing.home_prices(type_ids, cfg)
+    jita = pricing.jita_prices(type_ids)
+    # activity 1 = Manufacturing: the invented BPC's *own* build materials,
+    # used to weigh ME savings the same way the planner does (see engine.py).
+    reducible_cost = invention.reducible_material_cost(product_blueprint_id, 1, home, jita, cfg)
+
+    if decryptor_name is None:
+        results = invention.compare_recipes_and_decryptors(product_blueprint_id, home, jita, cfg, reducible_cost)
+    else:
+        if decryptor_name not in DECRYPTORS:
+            raise ActionError(f"Unknown decryptor '{decryptor_name}'. Options: {', '.join(DECRYPTORS)}")
+        chosen = invention.best_recipe_for_decryptor(product_blueprint_id, decryptor_name, home, jita, cfg,
+                                                     reducible_cost)
+        results = [chosen] if chosen is not None else []
+
+    return {"results": results}
+
+
+def do_resolve_structure_name(location_id: int, force: bool = False,
+                              oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """Resolves `location_id` to its structure name (and solar_system_id) via
+    ESI, cached indefinitely (storage.get/set_cached_structure_name) unless
+    `force`.
+
+    Tries two paths, in order:
+    1. Each registered character's corp's structure list
+       (ESIClient.corporation_structures - esi-corporations.read_structures.v1
+       + Station_Manager role) - covers every structure that corp owns, with
+       no dependency on any one character having personally docked there.
+       Each distinct corporation is only queried once.
+    2. Per-character docking history (ESIClient.get_structure_name -
+       esi-universe.read_structures.v1) - tries every registered producer
+       character in turn until one can actually "see" the structure (needs
+       docking rights/to have visited it). Only reached if path 1 didn't
+       resolve it.
+
+    A character added before esi-universe.read_structures.v1/
+    esi-corporations.read_structures.v1 existed needs to be re-added (remove
+    + add again, `producer remove`/`producer add`) before either path works
+    for it."""
+    if not force:
+        was_cached, cached_name = storage.get_cached_structure_name(location_id)
+        if was_cached:
+            return {"location_id": location_id, "name": cached_name, "cached": True}
+
+    tm = TokenManager(oauth_cfg)
+    characters = esi_sync.list_producer_characters(tm)
+    if not characters:
+        raise ActionError("No producer character logged in yet.")
+
+    client = ESIClient(tokens=tm)
+    name = None
+    solar_system_id = None
+
+    tried_corporations: set[int] = set()
+    for role, character_id, _character_name in characters:
+        try:
+            corporation_id = client.character_public_info(character_id)["corporation_id"]
+        except ESIError:
+            continue
+        if corporation_id in tried_corporations:
+            continue
+        tried_corporations.add(corporation_id)
+        try:
+            structures = client.corporation_structures(corporation_id, auth_role=role)
+        except ESIError:
+            continue  # this character lacks Station_Manager (or the scope) - try the next one
+        for structure in structures:
+            if structure.get("structure_id") == location_id:
+                name = structure.get("name")
+                solar_system_id = structure.get("solar_system_id")
+                break
+        if name:
+            break
+
+    if name is None:
+        for role, _character_id, _character_name in characters:
+            try:
+                info = client.get_structure_name(location_id, auth_role=role)
+                name = info.get("name")
+                solar_system_id = info.get("solar_system_id")
+                break
+            except ESIError:
+                continue  # this character can't see it - try the next one
+
+    storage.set_cached_structure_name(location_id, name, solar_system_id)
+    return {"location_id": location_id, "name": name, "cached": False}
 
 
 def do_invention_logistics(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
@@ -262,6 +468,56 @@ def do_remove_manual_stock(type_id_or_name: str) -> dict:
 
 def do_list_manual_stock() -> dict:
     return {"rows": storage.list_manual_stock()}
+
+
+# ------------------------------------------------------- manual Build/Buy override
+def do_set_manual_build_buy(type_id_or_name: str, decision: str) -> dict:
+    """Forces `type_id_or_name` to always Build or always Buy, regardless of
+    what the modeled unit cost would otherwise decide - see storage.py's
+    manual_build_buy table comment, and engine._buy_or_build_decision/
+    _base_runs/_expand_all (plan_production/plan_asset_optimized/
+    plan_special_order all consult this via storage.load_manual_build_buy())
+    for where it's actually read."""
+    if decision not in ("Build", "Buy"):
+        raise ActionError(f"Unknown decision {decision!r} - must be 'Build' or 'Buy'.")
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.upsert_manual_build_buy(type_id, decision)
+    return {"type_id": type_id, "type_name": type_name, "decision": decision}
+
+
+def do_clear_manual_build_buy(type_id_or_name: str) -> dict:
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.delete_manual_build_buy(type_id)
+    return {"type_id": type_id, "type_name": type_name, "decision": "Auto"}
+
+
+def do_list_manual_build_buy() -> dict:
+    return {"rows": storage.list_manual_build_buy()}
+
+
+# --------------------------------------------------------------- industry jobs
+def do_list_current_jobs(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Every active/paused/ready character + corp industry job, for the
+    Industry Jobs view. See jobs.list_current_jobs."""
+    return {"rows": jobs.list_current_jobs(cfg)}
+
+
+def do_character_slot_overview() -> dict:
+    """Per-character, per-category count of currently-running industry jobs -
+    a deliberate reduction of the parent's total/free/excluded_from_planning
+    Character Slots tab (see jobs.character_slot_overview's own docstring
+    and SYNC.md for why: no ESI character-skills scope is synced here to
+    derive a real total slot count from)."""
+    return {"rows": jobs.character_slot_overview()}
+
+
+# ------------------------------------------------------------ owned blueprints
+def do_list_owned_blueprints() -> dict:
+    """Every owned blueprint (character + corp), aggregated across identical
+    (type_id, is_original, ME, TE, runs) groups - see engine.
+    list_owned_blueprints. A BPO is identified by runs == -1 (ESI's
+    convention for "original")."""
+    return {"rows": engine.list_owned_blueprints()}
 
 
 # ------------------------------------------------------------- Special Orders
