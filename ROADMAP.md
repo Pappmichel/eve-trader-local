@@ -35,7 +35,12 @@ when the time comes.
 **Either stage updates app code only.** Never touches the local SQLite
 database or `config.yaml` overrides — those are the user's own data, out of
 scope for an "update" by definition (see `SYNC.md`'s scoping rule: user
-data/settings are never a sync or update target).
+data/settings are never a sync or update target). New code running against
+that old, untouched database file is exactly why `storage.py`'s schema
+migration mechanism (`MIGRATIONS`, added 2026-09-04 - see README.md's own
+"Schema migrations" section) exists: Stage 1's `git reset --hard` is what
+turns "a table needs a new column someday" from a theoretical gap into a
+real one, since it's specifically new code meeting an old database file.
 
 ## SDE (Static Data Export) strategy — decoupled from app updates
 

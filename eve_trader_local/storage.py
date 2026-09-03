@@ -16,6 +16,9 @@ Tables, ported from the parent's Postgres schema minus tenant scoping:
                                              candidate_discovery.py)
   shortlist / shortlist_snapshot <- same names (see shortlist.py)
   realized_trades <- same name (see trade_reconciliation.py)
+  schema_version  <- new here, no parent equivalent (Postgres migrations are
+                     applied by hand via docs/phase*_schema.sql there); see
+                     `MIGRATIONS`/`init_db` below for what it's for.
 
 The sde_* tables carried no tenant_id even in the parent (they are CCP's own
 static data, identical for everyone and refreshed globally), so they port
@@ -32,7 +35,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional, Sequence
+from typing import Any, Callable, Iterator, Optional, Sequence
 
 from .models import Candidate, NewCandidateResult, RealizedTrade, ShortlistItem, ShortlistRow
 from .paths import db_path
@@ -773,13 +776,75 @@ def connect(path: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in conn.execute(f"PRAGMA table_info({table})"))
+
+
+# ---------------------------------------------------------- schema migrations
+# `SCHEMA` above (CREATE TABLE IF NOT EXISTS everywhere) is enough for a
+# brand-new table, but does nothing once a table already exists - adding a
+# column to an existing table needs a real `ALTER TABLE`, applied once, to
+# every database that predates that column. `MIGRATIONS` is that mechanism:
+# an ordered list of (version, description, apply(conn)) entries, replayed in
+# order against whatever `schema_version` a given database file is
+# currently at (a fresh install and a five-versions-old one converge on the
+# exact same end state either way).
+#
+# Two rules for adding an entry here, always together:
+#   1. Update `SCHEMA` itself too, so a genuinely fresh `CREATE TABLE IF NOT
+#      EXISTS` already includes the new column - a new install should never
+#      have to "migrate" through history it never lived.
+#   2. Make the migration function itself idempotent (check `_column_exists`,
+#      or the equivalent, before altering) - because of rule 1, the very
+#      same migration will run once against old databases (where it does
+#      real work) and once against every database created after this change
+#      shipped (where the column already exists via `SCHEMA`, so it must be
+#      a safe no-op). This also makes replaying migrations against a
+#      partially-migrated or manually-edited database harmless instead of a
+#      crash.
+#
+# Example shape for the first real entry (kept here, commented out, so the
+# pattern is copy-pasteable instead of reverse-engineered from scratch):
+#
+#   def _migration_0001_add_example_column(conn: sqlite3.Connection) -> None:
+#       if not _column_exists(conn, "shortlist", "example_column"):
+#           conn.execute("ALTER TABLE shortlist ADD COLUMN example_column TEXT")
+#
+#   MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = [
+#       (1, "add example_column to shortlist", _migration_0001_add_example_column),
+#   ]
+MIGRATIONS: list[tuple[int, str, Callable[[sqlite3.Connection], None]]] = []
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)")
+    if conn.execute("SELECT COUNT(*) FROM schema_version").fetchone()[0] == 0:
+        # No row yet: either a genuinely fresh database, or one created
+        # before this table existed at all. Either way, 0 is the correct
+        # starting point - `MIGRATIONS` entries are individually idempotent
+        # (see the module comment above) specifically so this single "start
+        # from 0" rule never needs to special-case "was this DB really
+        # fresh?", which SQLite has no reliable way to answer after the fact.
+        conn.execute("INSERT INTO schema_version (version) VALUES (0)")
+    current = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    for version, _description, apply in MIGRATIONS:
+        if version <= current:
+            continue
+        apply(conn)
+        conn.execute("UPDATE schema_version SET version = ?", (version,))
+        current = version
+
+
 def init_db(path: Optional[Path] = None) -> None:
-    """Idempotent - safe to call on every startup. At this stage there is no
-    migration tool and none is needed: every statement is CREATE TABLE IF NOT
-    EXISTS. Adding a *column* to an existing table later will need more than
-    this; don't quietly assume this function keeps covering that case."""
+    """Idempotent - safe to call on every startup. `SCHEMA` creates every
+    table in its current, latest shape (`CREATE TABLE IF NOT EXISTS`, a
+    no-op on a database that already has them); `_run_migrations` then
+    brings an existing database's *columns* up to date too - see the
+    `MIGRATIONS` comment above for the mechanism and the two rules for
+    adding an entry."""
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        _run_migrations(conn)
 
 
 # ------------------------------------------------------------------- tokens

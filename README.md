@@ -259,11 +259,39 @@ across restarts via `QSettings` (`main_window.py`'s `closeEvent`/
 `restore_state`) — a saved tab whose view class no longer exists is skipped
 with a logged warning, not a crash.
 
+## Schema migrations (added 2026-09-04)
+
+`storage.py`'s `SCHEMA` (`CREATE TABLE IF NOT EXISTS` everywhere) only ever
+covers a brand-new table - it does nothing once a table already exists, so
+adding a *column* to an existing table needed a real mechanism, not just
+another `CREATE TABLE IF NOT EXISTS` line. This became a real (not
+theoretical) problem once the self-update mechanism (see ROADMAP.md) exists:
+`git reset --hard origin/main` pulls new code onto an old, already-populated
+local database file, and a naive schema change would crash the next time
+that older table's new column got touched.
+
+`storage.MIGRATIONS` is an ordered list of `(version, description,
+apply(conn))` entries, replayed against whatever `schema_version` a given
+database file is currently at, every time `init_db()` runs (on every
+startup, same as before). Two rules, always applied together when adding an
+entry (documented at length in `storage.py`'s own comment above
+`MIGRATIONS`): update `SCHEMA` itself too (a fresh install should never
+"migrate" through history it never lived), and write the migration function
+to check before it alters (`_column_exists`, or the equivalent) - because of
+the first rule, the *same* migration runs once for real against an old
+database and once as a guaranteed-safe no-op against every database created
+after the change shipped. `schema_version` starts at 0 for any database that
+doesn't have a row yet (fresh or pre-existing - there's deliberately no
+"was this really fresh?" heuristic; idempotent migrations make that
+question moot) and is never rewound.
+
+No real migration has been needed yet - `MIGRATIONS` is currently empty,
+with a commented-out example in `storage.py` showing the exact shape to
+copy the first time one actually is.
+
 Explicitly **not** done yet:
 
 - Packaging/installer.
-- Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
-  adding a column to an existing table later will need real migration handling.
 
 ## Why the OAuth flow needed no rearchitecting
 

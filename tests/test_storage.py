@@ -259,3 +259,62 @@ def test_explicit_path_argument_is_honoured(tmp_path):
         # A file that was never init_db'd has no tables - proves the path
         # argument really is what selected the database above.
         storage.load_all_tokens(path=tmp_path / "empty.sqlite3")
+
+
+# --------------------------------------------------------- schema migrations
+def test_fresh_db_starts_at_the_latest_schema_version(db):
+    storage.init_db()
+    with storage.connect() as conn:
+        version = conn.execute("SELECT version FROM schema_version").fetchone()[0]
+    assert version == len(storage.MIGRATIONS)
+
+
+def test_migration_is_applied_to_a_pre_existing_database_missing_a_column(db, monkeypatch):
+    """Simulates the real scenario this mechanism exists for: a database
+    created before some migration existed gets brought up to date the next
+    time init_db() runs, without anyone manually intervening."""
+    with storage.connect() as conn:
+        conn.execute("CREATE TABLE probe_table (id INTEGER PRIMARY KEY)")
+
+    def _add_probe_column(conn: sqlite3.Connection) -> None:
+        if not storage._column_exists(conn, "probe_table", "probe_column"):
+            conn.execute("ALTER TABLE probe_table ADD COLUMN probe_column TEXT")
+
+    monkeypatch.setattr(storage, "MIGRATIONS", [(1, "add probe_column to probe_table", _add_probe_column)])
+    storage.init_db()
+
+    with storage.connect() as conn:
+        assert storage._column_exists(conn, "probe_table", "probe_column")
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 1
+
+
+def test_migrations_are_not_reapplied_once_the_version_matches(db, monkeypatch):
+    calls = []
+
+    def _tracked_migration(conn: sqlite3.Connection) -> None:
+        calls.append(1)
+
+    monkeypatch.setattr(storage, "MIGRATIONS", [(1, "tracked", _tracked_migration)])
+    storage.init_db()
+    storage.init_db()
+    assert calls == [1]
+
+
+def test_migration_functions_must_be_idempotent_even_if_replayed(db, monkeypatch):
+    """The real safety net: even if `schema_version` somehow lagged behind
+    (a manually edited database, a partially-applied migration from a crash),
+    a migration written the documented way - checking `_column_exists` first -
+    must not blow up on a column that's already there."""
+    with storage.connect() as conn:
+        conn.execute("CREATE TABLE probe_table (id INTEGER PRIMARY KEY, probe_column TEXT)")
+
+    def _add_probe_column(conn: sqlite3.Connection) -> None:
+        if not storage._column_exists(conn, "probe_table", "probe_column"):
+            conn.execute("ALTER TABLE probe_table ADD COLUMN probe_column TEXT")
+
+    monkeypatch.setattr(storage, "MIGRATIONS", [(1, "add probe_column to probe_table", _add_probe_column)])
+    # schema_version starts at 0 even though the column already exists here
+    # (mimicking a database created after SCHEMA already had the column, but
+    # before this test's monkeypatched MIGRATIONS list existed) - must not
+    # raise "duplicate column name".
+    storage.init_db()
