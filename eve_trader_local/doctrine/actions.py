@@ -307,6 +307,10 @@ def do_get_stockpile_status(doctrine_id: Optional[str] = None) -> dict:
     }
 
 
+def do_get_shopping_list(doctrine_id: Optional[str] = None, cfg: DoctrineConfig = DOCTRINE_CONFIG) -> dict:
+    return {"rows": [asdict(r) for r in engine.shopping_list_rows(doctrine_id, cfg)]}
+
+
 def do_list_contracts(fitting_id: Optional[str] = None, status: Optional[str] = None) -> dict:
     contracts = engine.contract_rows_from_db(storage.list_doctrine_contracts(fitting_id=fitting_id, status=status))
 

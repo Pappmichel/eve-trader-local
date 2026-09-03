@@ -22,6 +22,7 @@
     eve-trader-local list-fittings [doctrine_id]
     eve-trader-local sync-doctrine / validate-contracts
     eve-trader-local doctrine-status [doctrine_id] / stockpile-status [doctrine_id]
+    eve-trader-local shopping-list [doctrine_id]
     eve-trader-local list-contracts [--status]
     eve-trader-local add-ore-to-shortlist / refresh-ore-shortlist / list-ore-shortlist
     eve-trader-local quote-reprocessing <paste-file>
@@ -420,6 +421,23 @@ def cmd_stockpile_status(args: argparse.Namespace) -> None:
               f"short {r['shortfall']:>8,.0f}   severity {r['severity'] or '-'}")
 
 
+def _fmt_isk(v: Optional[float]) -> str:
+    return f"{v:>12,.0f}" if v is not None else f"{'-':>12}"
+
+
+def cmd_shopping_list(args: argparse.Namespace) -> None:
+    rows = doctrine_actions.do_get_shopping_list(args.doctrine_id)["rows"]
+    if not rows:
+        print("Nothing short of target.")
+        return
+    print(f"{'Item':<40} {'Short':>8} {'Build':>12} {'C-J':>12} {'Jita':>12}   Cheapest   Total cost")
+    for r in rows:
+        total = f"{r['total_cost']:,.0f}" if r["total_cost"] is not None else "no price available"
+        print(f"{r['type_name']:<40} {r['shortfall']:>8,.0f} {_fmt_isk(r['build_cost'])} "
+              f"{_fmt_isk(r['cj_price'])} {_fmt_isk(r['jita_landed_price'])}   "
+              f"{r['recommended_source'] or '-':<8}   {total}")
+
+
 def cmd_list_contracts(args: argparse.Namespace) -> None:
     rows = doctrine_actions.do_list_contracts(status=args.status)["rows"]
     if not rows:
@@ -668,6 +686,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_stockpile_status.add_argument("doctrine_id", nargs="?", default=None)
     p_stockpile_status.set_defaults(func=cmd_stockpile_status)
+
+    p_shopping_list = sub.add_parser(
+        "shopping-list", help="every stockpile shortfall priced Build vs. Buy-C-J vs. Buy-Jita"
+    )
+    p_shopping_list.add_argument("doctrine_id", nargs="?", default=None)
+    p_shopping_list.set_defaults(func=cmd_shopping_list)
 
     p_list_contracts = sub.add_parser("list-contracts", help="list every synced Doctrine contract")
     p_list_contracts.add_argument("--status", default=None,

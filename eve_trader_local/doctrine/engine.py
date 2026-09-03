@@ -4,13 +4,15 @@ docstrings). Contract<->Fitting matching, status/ampel aggregation, and
 Stockpile Soll/Ist all live here, on top of storage.py's plain-tuple reads
 and validation.py's pure scoring/deviation functions.
 
-Deliberately not ported (see doctrine/esi_sync.py's own docstring and
-SYNC.md): the Shopping List's build-vs-buy comparison - it needs a
-DoctrineConfig.import_cost_per_m3 field and Production's real build-cost
-engine (production.pricing/production.engine.unit_cost_detail), a
-meaningful chunk of extra wiring with no consumer here yet beyond itself.
-Left as a documented candidate for a future pass, same status as
-Production's plan_asset_optimized.
+The Shopping List's build-vs-buy comparison (shopping_list_rows/
+_shopping_prices below) reuses Production's real build-cost engine directly
+(production.pricing/production.engine.unit_cost_detail) rather than a
+second, possibly-divergent estimate, so a user's owned-BPO/ME/TE/structure
+config gives the exact same build-cost number here as it would in the
+Production tool itself. Only pure, stateless price/cost computation is
+imported - no shared mutable state or tables, so this doesn't reintroduce
+the kind of doctrine<->production coupling constants.py's own docstring
+otherwise avoids.
 """
 from __future__ import annotations
 
@@ -18,10 +20,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .. import storage
+from ..esi_client import ESIClient
+from ..production.config import PRODUCTION_CONFIG
+from ..production import pricing as production_pricing
+from ..production.engine import CostIndices, T2Mods, _haul_volume, structural_material_closure, unit_cost_detail
 from .constants import AMPEL_GRAY
 from .models import (
     AggregatedStockpileRow, ContractItemRow, ContractRow, DeviationRow, Doctrine, DoctrineStatus, Fitting,
-    FittingItem, FittingStatus, ParsedFitting, ParsedIssue, ParsedItem, StockpileRow,
+    FittingItem, FittingStatus, ParsedFitting, ParsedIssue, ParsedItem, ShoppingListRow, StockpileRow,
 )
 from . import parser, validation
 from .config import DOCTRINE_CONFIG, DoctrineConfig
@@ -264,6 +270,96 @@ def aggregate_stockpile_rows(rows: list[StockpileRow]) -> list[AggregatedStockpi
     ]
     aggregated.sort(key=lambda r: r.shortfall, reverse=True)
     return aggregated
+
+
+def _shopping_prices(type_id: int, home: dict, jita: dict, volume: Optional[float],
+                     cfg: DoctrineConfig) -> tuple[Optional[float], Optional[float]]:
+    """(cj_price, jita_landed_price) for the Shopping List's own Buy columns -
+    mirrors production.pricing's own buy-candidate formula (_candidate_prices),
+    but uses Doctrine's own cfg.import_cost_per_m3 for the Jita leg instead of
+    Production's haul_cost_per_m3 (see DoctrineConfig.import_cost_per_m3's own
+    comment). The broker fee is the same real per-character fee either way, so
+    that part is still read off PRODUCTION_CONFIG - no reason to duplicate it
+    as a second Doctrine setting nobody asked for.
+
+    Unlike the parent, there's no separate live-order-book presence check
+    here (its GitHub issue #10): home/jita already come from production_
+    pricing.home_prices/jita_prices, which are themselves ESI order-book-
+    first (see those functions' own docstrings) - a Goonmetrics quote with no
+    real backing order book, the bug #10 fixed, can't reach this function in
+    the first place."""
+    broker_fee = PRODUCTION_CONFIG.jita_buy_broker_fee
+    cj = None
+    home_quote = home.get(type_id)
+    if home_quote and home_quote.sell > 0:
+        cj = home_quote.sell * (1 + broker_fee)
+    jita_landed = None
+    jita_quote = jita.get(type_id)
+    if jita_quote and jita_quote.sell > 0:
+        jita_landed = jita_quote.sell * (1 + broker_fee) + cfg.import_cost_per_m3 * (volume or 0)
+    return cj, jita_landed
+
+
+def shopping_list_rows(doctrine_id: Optional[str] = None,
+                       cfg: DoctrineConfig = DOCTRINE_CONFIG) -> list[ShoppingListRow]:
+    """Every item with a real stockpile shortfall (across every doctrine,
+    same aggregation as the Stockpile page's own combined view -
+    aggregate_stockpile_rows), each with a Build-vs-Buy-C-J-vs-Buy-Jita
+    comparison. Build cost reuses Production's real cost engine directly
+    (unit_cost_detail) - see this module's own import comment for why - so
+    it reflects the user's actual owned-BPO/ME/TE/structure config, not a
+    second, possibly-divergent estimate."""
+    rows, _assets_available = stockpile_rows_for_doctrine(doctrine_id, cfg)
+    aggregated = [r for r in aggregate_stockpile_rows(rows) if r.shortfall > 0]
+    if not aggregated:
+        return []
+
+    cost_memo: dict[int, Optional[float]] = {}
+    t2_memo: dict[int, T2Mods] = {}
+    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists yet - see SYNC.md
+
+    type_ids = [row.type_id for row in aggregated]
+    # Bounded, price-agnostic universe to price up front - same reasoning as
+    # production.engine._scan_build_candidates: a shortfall item can itself
+    # be a build recipe whose materials also need a price before
+    # unit_cost_detail can cost it.
+    priced_type_ids = list(structural_material_closure(type_ids))
+    home = production_pricing.home_prices(priced_type_ids, PRODUCTION_CONFIG)
+    jita = production_pricing.jita_prices(priced_type_ids)
+
+    esi_client = ESIClient()
+    cost_indices: CostIndices = {
+        "component": production_pricing.system_cost_indices_for(esi_client, PRODUCTION_CONFIG.component_system_id),
+        "manufacturing": production_pricing.system_cost_indices_for(
+            esi_client, PRODUCTION_CONFIG.manufacturing_system_id),
+    }
+    try:
+        adjusted_prices = esi_client.get_adjusted_prices()
+    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
+        adjusted_prices = {}
+
+    result = []
+    for row in aggregated:
+        _best, build_cost, _buy = unit_cost_detail(
+            row.type_id, PRODUCTION_CONFIG, home, jita, cost_memo, selected_decryptors, t2_memo,
+            cost_indices, adjusted_prices)
+        # _haul_volume (not raw sde_type volume) so ships/capital modules use
+        # their packaged volume for the Jita haul leg, not the much larger
+        # flight/assembled volume.
+        volume = _haul_volume(row.type_id, PRODUCTION_CONFIG)
+        cj_price, jita_landed_price = _shopping_prices(row.type_id, home, jita, volume, cfg)
+
+        candidates = {"Build": build_cost, "C-J": cj_price, "Jita": jita_landed_price}
+        priced = {k: v for k, v in candidates.items() if v is not None}
+        recommended_source = min(priced, key=priced.get) if priced else None
+        total_cost = priced[recommended_source] * row.shortfall if recommended_source else None
+
+        result.append(ShoppingListRow(
+            type_id=row.type_id, type_name=row.type_name, shortfall=row.shortfall,
+            build_cost=build_cost, cj_price=cj_price, jita_landed_price=jita_landed_price,
+            recommended_source=recommended_source, total_cost=total_cost,
+        ))
+    return result
 
 
 # ---------------------------------------------------------------- status / ampel

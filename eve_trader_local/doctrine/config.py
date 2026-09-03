@@ -41,6 +41,17 @@ class DoctrineConfig:
     # treats it as "tolerable" instead, for an operator who wants to enforce
     # clean, exact contracts.
     strict_extras: bool = False
+    # ISK/m3 to haul a Shopping List item bought at Jita back to C-J -
+    # deliberately a separate setting from ProductionConfig.haul_cost_per_m3,
+    # not a read of that same value: fitted modules/ships bought for
+    # Doctrine plausibly have different freight logistics than raw
+    # production materials (matches the parent's own DoctrineConfig.
+    # import_cost_per_m3, kept independent of Production's own haul-cost
+    # field there too). Same name/default as TradingConfig.import_cost_per_m3
+    # purely as a starting point - editing one never touches the other, and
+    # the shared _FIELD_RANGES entry for this field name (config.py) applies
+    # here for free since range-checking is keyed by field name, not class.
+    import_cost_per_m3: float = 900.0
 
     @property
     def effective_structure_id(self) -> Optional[int]:
