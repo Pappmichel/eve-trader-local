@@ -16,7 +16,7 @@ from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError
 from . import engine, esi_sync
 from .config import PRODUCTION_CONFIG, ProductionConfig
-from .models import BuildCandidate
+from .models import BuildCandidate, SpecialOrder
 
 SYNC_SCOPE = "production"
 
@@ -111,3 +111,93 @@ def do_plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     if not storage.load_stock_targets():
         raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
     return engine.plan_production(cfg)
+
+
+# ------------------------------------------------------------- Special Orders
+# One-off build orders, tracked separately from the permanent stock_targets
+# list - see engine.plan_special_order's own docstring for the two
+# deliberate differences from plan_production (no margin gate,
+# net_against_stock replacing stock-target-driven netting).
+
+def _special_order_to_model(row: tuple, item_count: int) -> SpecialOrder:
+    order_id, note, net_against_stock, status, created_at = row
+    return SpecialOrder(order_id=order_id, note=note, net_against_stock=net_against_stock,
+                        status=status, created_at=created_at, item_count=item_count)
+
+
+def do_create_special_order(items: list[dict], note: str | None = None,
+                            net_against_stock: bool = False) -> dict:
+    """`items`: [{"type_id": int, "quantity": float}, ...] - at least one,
+    each validated the same way do_add_stock_target validates an existing
+    type_id (storage.get_sde_type(type_id) is not None). Raises on the first
+    invalid item rather than silently skipping it."""
+    if not items:
+        raise ActionError("A special order needs at least one item.")
+    resolved: list[tuple[int, str, float]] = []
+    for item in items:
+        type_id = item["type_id"]
+        quantity = item["quantity"]
+        if quantity <= 0:
+            raise ActionError(f"Quantity for type_id {type_id} must be positive.")
+        sde_type = storage.get_sde_type(type_id)
+        if sde_type is None:
+            raise ActionError(f"Unknown type_id {type_id} - refresh SDE first?")
+        resolved.append((type_id, sde_type[2], quantity))
+
+    order_id = storage.create_special_order(note, net_against_stock)
+    for type_id, type_name, quantity in resolved:
+        storage.upsert_special_order_item(order_id, type_id, type_name, quantity)
+    return {"order_id": order_id}
+
+
+def do_list_special_orders() -> list[SpecialOrder]:
+    return [_special_order_to_model(row, len(storage.list_special_order_items(row[0])))
+            for row in storage.list_special_orders()]
+
+
+def do_get_special_order(order_id: str) -> dict:
+    row = storage.get_special_order(order_id)
+    if row is None:
+        raise ActionError(f"Special order {order_id} not found.")
+    items = storage.list_special_order_items(order_id)
+    return {
+        "order": _special_order_to_model(row, len(items)),
+        "items": [{"type_id": t, "type_name": n, "quantity": q} for t, n, q in items],
+    }
+
+
+def do_update_special_order(order_id: str, status: str | None = None, note: str | None = None) -> dict:
+    """Partial update - same dynamic-dict shape as doctrine/actions.py's
+    do_update_fitting/storage.update_doctrine. Used for both "mark complete"
+    (status="done") and "reopen" (status="open")."""
+    if storage.get_special_order(order_id) is None:
+        raise ActionError(f"Special order {order_id} not found.")
+    if status is not None and status not in ("open", "done"):
+        raise ActionError(f"Unknown status {status!r} - must be 'open' or 'done'.")
+    updates = {}
+    if status is not None:
+        updates["status"] = status
+    if note is not None:
+        updates["note"] = note
+    storage.update_special_order(order_id, updates)
+    return do_get_special_order(order_id)
+
+
+def do_remove_special_order(order_id: str) -> dict:
+    storage.delete_special_order(order_id)
+    return {"removed": order_id}
+
+
+def do_compute_special_order(order_id: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Runs engine.plan_special_order for one order's current line items.
+    Raises under the same SDE-cache-empty precondition as do_plan_production
+    - a special order has no stock_targets-equivalent precondition (it
+    always has >=1 item, enforced at creation)."""
+    if not storage.sde_row_counts().get("sde_types"):
+        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+    row = storage.get_special_order(order_id)
+    if row is None:
+        raise ActionError(f"Special order {order_id} not found.")
+    _order_id, _note, net_against_stock, _status, _created_at = row
+    items = storage.list_special_order_items(order_id)
+    return engine.plan_special_order(items, cfg, net_against_stock=net_against_stock)

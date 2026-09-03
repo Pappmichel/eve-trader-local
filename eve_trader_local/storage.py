@@ -455,6 +455,32 @@ CREATE TABLE IF NOT EXISTS stock_targets (
     jita_target INTEGER NOT NULL DEFAULT 0
 );
 
+-- Special Orders (production/engine.py's plan_special_order): one-off build
+-- orders, tracked separately from the permanent stock_targets list above -
+-- ported from the parent's docs/special_orders_schema.sql minus tenant_id/
+-- RLS, same "plain TEXT UUID generated in Python" convention the Doctrine
+-- tables below already use. No composite (order_id, type_id) PK needed for
+-- the natural-key reason the parent's own schema comment gives (a type_id
+-- appears at most once per order) - single-user, so order_id alone would
+-- have worked too, but keeping the same natural key as the parent avoids
+-- silently diverging on the one thing that actually differs (tenant_id).
+CREATE TABLE IF NOT EXISTS special_orders (
+    order_id           TEXT PRIMARY KEY,
+    note               TEXT,
+    net_against_stock  INTEGER NOT NULL DEFAULT 0,
+    status             TEXT NOT NULL DEFAULT 'open',
+    created_at         TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS special_order_items (
+    order_id   TEXT NOT NULL,
+    type_id    INTEGER NOT NULL,
+    type_name  TEXT NOT NULL,
+    quantity   REAL NOT NULL,
+    PRIMARY KEY (order_id, type_id)
+);
+CREATE INDEX IF NOT EXISTS idx_special_order_items_order ON special_order_items (order_id);
+
 -- ------------------------------------------------------------------ Doctrine
 -- Ported from the parent's docs/doctrine_schema.sql minus tenant_id/RLS - see
 -- that file for the full multi-tenant reasoning behind each shape. ids are
@@ -1870,6 +1896,86 @@ def load_stock_targets(path: Optional[Path] = None) -> list[tuple[int, str, floa
             "SELECT type_id, type_name, quantity, jita_target FROM stock_targets"
         ).fetchall()
     return [(r[0], r[1], r[2], bool(r[3])) for r in rows]
+
+
+# -------------------------------------------------------------- special orders
+# One-off build orders, tracked separately from the permanent stock_targets
+# list (production/engine.py's plan_special_order) - see the special_orders/
+# special_order_items schema comment above. Header/child pair, same CRUD
+# shape as the Doctrine tables below.
+
+_SPECIAL_ORDER_COLUMNS = ("order_id", "note", "net_against_stock", "status", "created_at")
+
+
+def create_special_order(note: Optional[str], net_against_stock: bool, path: Optional[Path] = None) -> str:
+    order_id = str(uuid.uuid4())
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO special_orders (order_id, note, net_against_stock) VALUES (?, ?, ?)",
+            (order_id, note, int(net_against_stock)),
+        )
+    return order_id
+
+
+def list_special_orders(path: Optional[Path] = None) -> list[tuple]:
+    """(order_id, note, net_against_stock, status, created_at), most-recently-
+    created first."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join(_SPECIAL_ORDER_COLUMNS)} FROM special_orders ORDER BY created_at DESC"
+        ).fetchall()
+    return [(r[0], r[1], bool(r[2]), r[3], r[4]) for r in rows]
+
+
+def get_special_order(order_id: str, path: Optional[Path] = None) -> Optional[tuple]:
+    with connect(path) as conn:
+        row = conn.execute(
+            f"SELECT {', '.join(_SPECIAL_ORDER_COLUMNS)} FROM special_orders WHERE order_id = ?",
+            (order_id,),
+        ).fetchone()
+    return (row[0], row[1], bool(row[2]), row[3], row[4]) if row else None
+
+
+def update_special_order(order_id: str, updates: dict, path: Optional[Path] = None) -> None:
+    """`updates` keys must be a subset of {"note", "net_against_stock",
+    "status"} - caller (production/actions.py's do_update_special_order) is
+    responsible for only passing real fields, same "thin storage layer"
+    convention as storage.update_doctrine."""
+    if not updates:
+        return
+    cols = ", ".join(f"{k} = ?" for k in updates)
+    values = [int(v) if k == "net_against_stock" else v for k, v in updates.items()]
+    with connect(path) as conn:
+        conn.execute(f"UPDATE special_orders SET {cols} WHERE order_id = ?", (*values, order_id))
+
+
+def delete_special_order(order_id: str, path: Optional[Path] = None) -> None:
+    """Deletes the order's own items first - no DB-level cascade, matching
+    this codebase's explicit-not-implicit convention for cross-table deletes
+    (see delete_doctrine/delete_fitting precedent)."""
+    with connect(path) as conn:
+        conn.execute("DELETE FROM special_order_items WHERE order_id = ?", (order_id,))
+        conn.execute("DELETE FROM special_orders WHERE order_id = ?", (order_id,))
+
+
+def upsert_special_order_item(order_id: str, type_id: int, type_name: str, quantity: float,
+                              path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO special_order_items (order_id, type_id, type_name, quantity) VALUES (?,?,?,?) "
+            "ON CONFLICT(order_id, type_id) DO UPDATE SET "
+            "type_name=excluded.type_name, quantity=excluded.quantity",
+            (order_id, type_id, type_name, quantity),
+        )
+
+
+def list_special_order_items(order_id: str, path: Optional[Path] = None) -> list[tuple[int, str, float]]:
+    """(type_id, type_name, quantity), name-ordered."""
+    with connect(path) as conn:
+        return conn.execute(
+            "SELECT type_id, type_name, quantity FROM special_order_items WHERE order_id = ? ORDER BY type_name",
+            (order_id,),
+        ).fetchall()
 
 
 # -------------------------------------------------------------------- Doctrine

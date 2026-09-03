@@ -1,0 +1,254 @@
+"""Tests for engine.plan_special_order (the ad-hoc one-off build order
+planner) and its CRUD layer (production/actions.py's do_*_special_order
+family + storage.py's special_orders/special_order_items tables). Same
+synthetic-SDE pattern as test_production_planner.py, whose BOM this reuses:
+
+    FINISHED_A --(2x)--> COMPONENT --(10x)--> MINERAL (Input, buy only)
+    FINISHED_B --(3x)-->/
+"""
+from __future__ import annotations
+
+import pytest
+
+from eve_trader_local import storage
+from eve_trader_local.errors import ActionError
+from eve_trader_local.goonmetrics_client import CurrentPrice
+from eve_trader_local.production import actions, engine
+from eve_trader_local.production.config import ProductionConfig
+
+MINERAL = 34            # Input - no blueprint at all
+COMPONENT = 91201
+FINISHED_A = 91202
+FINISHED_B = 91203
+COMPONENT_BP, FINISHED_A_BP, FINISHED_B_BP = 92201, 92202, 92203
+
+
+def _seed():
+    storage.replace_sde_data(
+        types=[
+            (MINERAL, 18, "Tritanium", 0.01, 1, 100, 0, 1, 1),
+            (COMPONENT, 18, "Widget Component", 1.0, 1, 200, 0, 1, 1),
+            (FINISHED_A, 18, "Finished Widget A", 1.0, 1, 200, 0, 1, 1),
+            (FINISHED_B, 18, "Finished Widget B", 1.0, 1, 200, 0, 1, 1),
+            (COMPONENT_BP, 9, "Widget Component Blueprint", 0.01, 1, None, 0, None, 1),
+            (FINISHED_A_BP, 9, "Finished Widget A Blueprint", 0.01, 1, None, 0, None, 1),
+            (FINISHED_B_BP, 9, "Finished Widget B Blueprint", 0.01, 1, None, 0, None, 1),
+        ],
+        groups=[(18, 4, "Mineral"), (9, 9, "Blueprint")],
+        market_groups=[(100, None, "Manufacture & Research"), (200, None, "Ship Equipment")],
+        blueprint_time=[],
+        blueprint_materials=[
+            (COMPONENT_BP, 1, MINERAL, 10),
+            (FINISHED_A_BP, 1, COMPONENT, 2),
+            (FINISHED_B_BP, 1, COMPONENT, 3),
+        ],
+        blueprint_products=[
+            (COMPONENT_BP, 1, COMPONENT, 1),
+            (FINISHED_A_BP, 1, FINISHED_A, 1),
+            (FINISHED_B_BP, 1, FINISHED_B, 1),
+        ],
+        categories=[(4, "Material")],
+    )
+
+
+def _cfg(**overrides) -> ProductionConfig:
+    cfg = ProductionConfig(jita_buy_broker_fee=0.0, haul_cost_per_m3=0.0,
+                           facility_tax_rate=0.0, market_fees=0.0,
+                           component_overbuild=0.0, min_margin=0.0)
+    for key, value in overrides.items():
+        setattr(cfg, key, value)
+    return cfg
+
+
+# Only MINERAL has a home quote - COMPONENT/FINISHED_A/FINISHED_B are never
+# listed at home, so buy_price() returns None for them and
+# _buy_or_build_decision picks "Build" for anything with a real recipe.
+HOME = {MINERAL: CurrentPrice(type_id=MINERAL, updated="", buy=4.5, sell=5.0)}
+
+
+@pytest.fixture
+def order_sde(db, monkeypatch):
+    _seed()
+    monkeypatch.setattr(engine.pricing, "home_prices", lambda type_ids, cfg=None, client=None: HOME)
+    monkeypatch.setattr(engine.pricing, "jita_prices", lambda type_ids, client=None, trading_cfg=None: {})
+
+    class _FakeESIClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_adjusted_prices(self):
+            return {}
+
+    import eve_trader_local.esi_client as esi_client_module
+    monkeypatch.setattr(esi_client_module, "ESIClient", _FakeESIClient)
+    return db
+
+
+# ------------------------------------------------------------------- CRUD
+
+
+def test_create_and_get_special_order(order_sde):
+    _seed()
+    result = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], note="test batch")
+    order_id = result["order_id"]
+
+    detail = actions.do_get_special_order(order_id)
+    assert detail["order"].note == "test batch"
+    assert detail["order"].net_against_stock is False
+    assert detail["order"].status == "open"
+    assert detail["order"].item_count == 1
+    assert detail["items"] == [{"type_id": FINISHED_A, "type_name": "Finished Widget A", "quantity": 10.0}]
+
+
+def test_create_special_order_requires_items(order_sde):
+    with pytest.raises(ActionError):
+        actions.do_create_special_order([])
+
+
+def test_create_special_order_rejects_unknown_type(order_sde):
+    with pytest.raises(ActionError):
+        actions.do_create_special_order([{"type_id": 999999, "quantity": 1.0}])
+
+
+def test_create_special_order_rejects_nonpositive_quantity(order_sde):
+    with pytest.raises(ActionError):
+        actions.do_create_special_order([{"type_id": FINISHED_A, "quantity": 0}])
+
+
+def test_list_special_orders(order_sde):
+    actions.do_create_special_order([{"type_id": FINISHED_A, "quantity": 5.0}])
+    actions.do_create_special_order([{"type_id": FINISHED_B, "quantity": 3.0}], net_against_stock=True)
+
+    rows = actions.do_list_special_orders()
+    assert len(rows) == 2
+    assert {r.item_count for r in rows} == {1}
+    assert any(r.net_against_stock for r in rows)
+    assert any(not r.net_against_stock for r in rows)
+
+
+def test_update_special_order_status_and_note(order_sde):
+    order_id = actions.do_create_special_order([{"type_id": FINISHED_A, "quantity": 5.0}])["order_id"]
+    updated = actions.do_update_special_order(order_id, status="done", note="shipped")
+    assert updated["order"].status == "done"
+    assert updated["order"].note == "shipped"
+
+
+def test_update_special_order_rejects_unknown_status(order_sde):
+    order_id = actions.do_create_special_order([{"type_id": FINISHED_A, "quantity": 5.0}])["order_id"]
+    with pytest.raises(ActionError):
+        actions.do_update_special_order(order_id, status="bogus")
+
+
+def test_update_special_order_unknown_id_raises(order_sde):
+    with pytest.raises(ActionError):
+        actions.do_update_special_order("nonexistent", status="done")
+
+
+def test_remove_special_order(order_sde):
+    order_id = actions.do_create_special_order([{"type_id": FINISHED_A, "quantity": 5.0}])["order_id"]
+    actions.do_remove_special_order(order_id)
+    with pytest.raises(ActionError):
+        actions.do_get_special_order(order_id)
+    assert storage.list_special_order_items(order_id) == []
+
+
+def test_get_special_order_unknown_id_raises(order_sde):
+    with pytest.raises(ActionError):
+        actions.do_get_special_order("nonexistent")
+
+
+# --------------------------------------------------------------- computation
+
+
+def test_compute_special_order_from_scratch(order_sde):
+    """No stock synced at all - net_against_stock=False (the default) plans
+    the order's full quantity regardless, and the shared COMPONENT demand
+    from a single line item still expands through the same BOM engine
+    plan_production uses."""
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+
+    plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+
+    assert plan["line_items"][0].type_id == FINISHED_A
+    assert plan["line_items"][0].quantity == 10.0
+    build_by_type = {row.type_id: row for row in plan["build_list"]}
+    assert build_by_type[FINISHED_A].job_runs == 10
+    # ceil(2*0.9*10) = 18 units of COMPONENT -> 18 runs (product_qty=1;
+    # 0.9 is Tech I's flat perfect-research material multiplier, same as
+    # test_production_planner.py's identical BOM); component_overbuild=0.0
+    # in _cfg() so no buffer is added on top.
+    assert build_by_type[COMPONENT].job_runs == 18
+    buy_by_type = {row.type_id: row for row in plan["buy_list"]}
+    assert MINERAL in buy_by_type
+    assert plan["stock_overlap_warning"] == []
+
+
+def test_net_against_stock_changes_the_result(order_sde):
+    """Same order, same synced stock: net_against_stock=False ignores it
+    entirely (plans from scratch), net_against_stock=True nets it off -
+    confirms the flag actually changes plan_special_order's output, not just
+    its bookkeeping."""
+    storage.replace_assets("character_assets", [
+        (1, FINISHED_A, 60003760, "Hangar", 6, 0, "Test Character"),
+    ])
+
+    order_id_scratch = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], net_against_stock=False)["order_id"]
+    order_id_netted = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], net_against_stock=True)["order_id"]
+
+    plan_scratch = actions.do_compute_special_order(order_id_scratch)
+    plan_netted = actions.do_compute_special_order(order_id_netted)
+
+    scratch_runs = {row.type_id: row.job_runs for row in plan_scratch["build_list"]}
+    netted_runs = {row.type_id: row.job_runs for row in plan_netted["build_list"]}
+
+    assert scratch_runs[FINISHED_A] == 10  # ignores the 6 units on hand
+    assert netted_runs[FINISHED_A] == 4    # 10 - 6 on hand = 4 still needed
+    assert scratch_runs != netted_runs
+
+
+def test_net_against_stock_flags_overlap_with_configured_stock_targets(order_sde):
+    """net_against_stock=True's stock_overlap_warning fires when the order's
+    own material tree overlaps a *configured* stock target's tree and stock
+    is actually on hand; net_against_stock=False never computes it at all."""
+    storage.upsert_stock_target(FINISHED_B, "Finished Widget B", 5.0)
+    storage.replace_assets("character_assets", [
+        (1, COMPONENT, 60003760, "Hangar", 50, 0, "Test Character"),
+    ])
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], net_against_stock=True)["order_id"]
+
+    plan = actions.do_compute_special_order(order_id)
+
+    overlap_types = {row.type_id for row in plan["stock_overlap_warning"]}
+    assert COMPONENT in overlap_types  # shared between FINISHED_A's tree and FINISHED_B's
+
+
+def test_no_margin_gate_unlike_plan_production(order_sde):
+    """A build with a margin below cfg.min_margin is still fully planned for
+    a special order (no margin gate) - plan_production would drop it."""
+    cfg = _cfg(min_margin=0.99)  # would gate out virtually everything in plan_production
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    row = storage.get_special_order(order_id)
+    items = storage.list_special_order_items(order_id)
+
+    plan = engine.plan_special_order(items, cfg, net_against_stock=row[2])
+
+    build_by_type = {b.type_id: b for b in plan["build_list"]}
+    assert FINISHED_A in build_by_type
+    assert build_by_type[FINISHED_A].job_runs == 10
+
+
+def test_compute_special_order_raises_without_sde(db):
+    order_id = "does-not-matter"
+    with pytest.raises(ActionError):
+        actions.do_compute_special_order(order_id)
+
+
+def test_compute_special_order_unknown_id_raises(order_sde):
+    with pytest.raises(ActionError):
+        actions.do_compute_special_order("nonexistent")

@@ -14,6 +14,9 @@
     eve-trader-local discover-build-candidates
     eve-trader-local set-stock-target <item> <quantity> [--jita] / remove-stock-target <item> / list-stock-targets
     eve-trader-local plan-production
+    eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--net-against-stock]
+    eve-trader-local list-special-orders / remove-special-order <order_id>
+    eve-trader-local compute-special-order <order_id>
     eve-trader-local pipeline [--rebuild-universe]
     eve-trader-local parse-fitting <path>
     eve-trader-local auth --role doctrine
@@ -307,6 +310,89 @@ def cmd_plan_production(args: argparse.Namespace) -> None:
                   f"on hand {row.on_hand_pct:5.1f}%")
     if not plan["build_list"] and not plan["buy_list"]:
         print("\nEvery stock target is already fully covered.")
+
+
+def _resolve_type_for_cli(type_id_or_name: str) -> int:
+    """NAME_OR_TYPE_ID -> type_id, same lookup shape as production/actions.py's
+    own module-private _resolve_type (duplicated rather than imported - that
+    helper is intentionally module-private, same "duplicate this small
+    resolver rather than cross-import a private name" precedent
+    refining/actions.py's own copy already sets)."""
+    stripped = type_id_or_name.strip()
+    if stripped.isdigit():
+        type_id = int(stripped)
+        if storage.get_sde_type(type_id) is None:
+            raise ActionError(f"Unknown type_id {type_id} - refresh SDE first?")
+        return type_id
+    matches = storage.search_sde_types(stripped, limit=2)
+    exact = [m for m in matches if m[1].lower() == stripped.lower()]
+    if not exact:
+        if not matches:
+            raise ActionError(f"No type found for '{stripped}'. Refresh SDE first?")
+        raise ActionError(f"No exact match for '{stripped}'. Did you mean: {matches[0][1]}?")
+    return exact[0][0]
+
+
+def cmd_create_special_order(args: argparse.Namespace) -> None:
+    items = []
+    for spec in args.item:
+        if ":" not in spec:
+            raise ActionError(f"Invalid item '{spec}' - expected NAME_OR_TYPE_ID:QUANTITY")
+        name_or_id, qty_str = spec.rsplit(":", 1)
+        try:
+            quantity = float(qty_str)
+        except ValueError:
+            raise ActionError(f"Invalid quantity in '{spec}'")
+        items.append({"type_id": _resolve_type_for_cli(name_or_id), "quantity": quantity})
+    result = production_actions.do_create_special_order(
+        items, note=args.note, net_against_stock=args.net_against_stock)
+    print(f"Created special order {result['order_id']} with {len(items)} item(s).")
+
+
+def cmd_list_special_orders(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_special_orders()
+    if not rows:
+        print("No special orders.")
+        return
+    for row in rows:
+        net = "nets against stock" if row.net_against_stock else "from scratch"
+        note = f" - {row.note}" if row.note else ""
+        print(f"  {row.order_id}  [{row.status}]  {row.item_count} item(s)  ({net}){note}")
+
+
+def cmd_remove_special_order(args: argparse.Namespace) -> None:
+    result = production_actions.do_remove_special_order(args.order_id)
+    print(f"Removed special order {result['removed']}.")
+
+
+def cmd_update_special_order(args: argparse.Namespace) -> None:
+    result = production_actions.do_update_special_order(args.order_id, status=args.status, note=args.note)
+    print(f"Special order {result['order'].order_id} updated - status: {result['order'].status}.")
+
+
+def cmd_compute_special_order(args: argparse.Namespace) -> None:
+    plan = production_actions.do_compute_special_order(args.order_id)
+    print("Line Items:")
+    for row in plan["line_items"]:
+        print(f"  {row.type_name:<40} {row.quantity:>10,.0f} units")
+    if plan["build_list"]:
+        print("\nBuild List:")
+        for row in plan["build_list"]:
+            margin = f"{row.margin * 100:6.1f}%" if row.margin is not None else "     -"
+            print(f"  {row.type_name:<40} {row.job_runs:>6,} runs   "
+                  f"cost/unit {row.unit_build_cost or 0:>14,.2f}   margin {margin}")
+    if plan["buy_list"]:
+        print("\nBuy List:")
+        for row in plan["buy_list"]:
+            total = f"{row.total_price:>16,.0f}" if row.total_price is not None else "               -"
+            print(f"  {row.type_name:<40} {row.quantity:>10,.0f} units   {total} ISK   "
+                  f"on hand {row.on_hand_pct:5.1f}%")
+    if not plan["build_list"] and not plan["buy_list"]:
+        print("\nEvery line item is already fully covered.")
+    if plan["stock_overlap_warning"]:
+        print("\nStock overlap warning (shared with configured stock targets):")
+        for row in plan["stock_overlap_warning"]:
+            print(f"  {row.type_name:<40} {row.current_stock:>10,.0f} units on hand")
 
 
 def cmd_parse_fitting(args: argparse.Namespace) -> None:
@@ -628,6 +714,35 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "plan-production", help="run the stock-aware buy/build planner against configured stock targets"
     ).set_defaults(func=cmd_plan_production)
+
+    p_create_order = sub.add_parser(
+        "create-special-order", help="create a one-off build order for an ad-hoc list of items"
+    )
+    p_create_order.add_argument("item", nargs="+", help="one or more NAME_OR_TYPE_ID:QUANTITY pairs")
+    p_create_order.add_argument("--note", default=None, help="optional free-text note")
+    p_create_order.add_argument("--net-against-stock", dest="net_against_stock", action="store_true",
+                                help="net against current ESI-synced stock instead of planning from scratch")
+    p_create_order.set_defaults(func=cmd_create_special_order)
+
+    sub.add_parser(
+        "list-special-orders", help="list every special order"
+    ).set_defaults(func=cmd_list_special_orders)
+
+    p_remove_order = sub.add_parser("remove-special-order", help="delete a special order")
+    p_remove_order.add_argument("order_id")
+    p_remove_order.set_defaults(func=cmd_remove_special_order)
+
+    p_update_order = sub.add_parser("update-special-order", help="update a special order's status/note")
+    p_update_order.add_argument("order_id")
+    p_update_order.add_argument("--status", choices=("open", "done"), default=None)
+    p_update_order.add_argument("--note", default=None)
+    p_update_order.set_defaults(func=cmd_update_special_order)
+
+    p_compute_order = sub.add_parser(
+        "compute-special-order", help="run the buy/build planner for one special order's current line items"
+    )
+    p_compute_order.add_argument("order_id")
+    p_compute_order.set_defaults(func=cmd_compute_special_order)
 
     p_pipeline = sub.add_parser("pipeline", help="run the daily workflow (each step isolated)")
     p_pipeline.add_argument("--safe", dest="safe", action="store_true", default=True,
