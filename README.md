@@ -20,7 +20,7 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production backend fully done (CLI); Doctrine works end to end (CLI); Ore & Minerals works end to end (CLI)
+## Status: Trading pipeline works end to end (CLI); Production backend fully done (CLI); Doctrine works end to end (CLI); Ore & Minerals works end to end (CLI); Station Trading works end to end (CLI)
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
@@ -59,6 +59,16 @@ refining tax), a Reprocessing-tab-style quote for a pasted inventory list
 real linear program (`scipy.optimize.linprog`) across every compressed ore/ice
 type at once, picking whichever mix of buy-ore-and-refine vs. buy-mineral-
 outright is cheapest for a saved (or ad-hoc) list of required minerals.
+
+The **Station Trading** tool (market-making at Jita's own trade hub — buying
+and selling *within the same station*, unlike the other four tools' Jita-
+import-to-your-own-structure model) is fully ported and runnable from the CLI
+too: a Goonmetrics-driven candidate scan across the whole Jita market
+(bid-ask spread + real average daily traded volume, never order-book depth),
+a persisted shortlist that live-confirms its prices against the real ESI
+order book on every read, a bidirectional undercut/outbid check across every
+registered trader character's own buy and sell orders, and a live trade-skill
+summary (order-slot count derived from Trade/Retail/Wholesale/Tycoon).
 
 What exists:
 
@@ -111,6 +121,14 @@ What exists:
   `quote.py` (the Reprocessing-tab's sell-as-is-vs-refine quote calculation),
   `optimizer.py` (the Mineral Shopping List's LP solver), `config.py`
   (`RefiningConfig`) and `actions.py`.
+- `station_trading/` — the Station Trading tool (buy-low-sell-high within
+  Jita's own trade hub station): `constants.py` (trade-skill type_ids and the
+  order-slot-count formula), `candidate_discovery.py` (the Goonmetrics-spread/
+  real-volume market scan, plus the bounded live-ESI shortlist confirmation),
+  `undercut.py` (bidirectional own-order undercut/outbid checking, pooled
+  across every registered trader character), `esi_sync.py` (trader character
+  registration only — nothing here is worth caching ahead of time),
+  `config.py` (`StationTradingConfig`) and `actions.py`.
 - `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
@@ -129,7 +147,9 @@ What exists:
   `add-ore-to-shortlist`,
   `refresh-ore-shortlist`, `list-ore-shortlist`, `quote-reprocessing`,
   `set-mineral-requirement`, `remove-mineral-requirement`,
-  `list-mineral-requirements`, `solve-shopping-list`.
+  `list-mineral-requirements`, `solve-shopping-list`,
+  `refresh-station-shortlist`, `list-station-shortlist`,
+  `check-station-undercut`, `station-trading-skills`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.

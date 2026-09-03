@@ -35,6 +35,10 @@
     eve-trader-local quote-reprocessing <paste-file>
     eve-trader-local set-mineral-requirement <item> <qty> / list-mineral-requirements
     eve-trader-local solve-shopping-list
+    eve-trader-local auth --role trader
+    eve-trader-local refresh-station-shortlist / list-station-shortlist
+    eve-trader-local check-station-undercut
+    eve-trader-local station-trading-skills
     eve-trader-local check-update / update
 
 No logic lives here: every command calls one actions.do_* function and prints
@@ -60,6 +64,9 @@ from .paths import config_path, db_path
 from .production import actions as production_actions
 from .production import config as production_config
 from .production import esi_sync
+from .station_trading import actions as station_trading_actions
+from .station_trading import config as station_trading_config
+from .station_trading import esi_sync as station_trading_esi_sync
 
 
 def cmd_init_db(args: argparse.Namespace) -> None:
@@ -77,6 +84,8 @@ def cmd_auth(args: argparse.Namespace) -> None:
         scopes = esi_sync.PRODUCTION_SCOPES
     elif args.role == doctrine_esi_sync.DOCTRINE_ROLE_PREFIX:
         scopes = doctrine_esi_sync.DOCTRINE_SCOPES
+    elif args.role == station_trading_esi_sync.STATION_TRADING_ROLE_PREFIX:
+        scopes = station_trading_esi_sync.STATION_TRADING_SCOPES
     else:
         scopes = None
     record = TokenManager().login(args.role, scopes)
@@ -108,6 +117,9 @@ def cmd_config(args: argparse.Namespace) -> None:
         print(f"  {key} = {value!r}")
     print("\n[refining]")
     for key, value in vars(refining_config.reload()).items():
+        print(f"  {key} = {value!r}")
+    print("\n[station_trading]")
+    for key, value in vars(station_trading_config.reload()).items():
         print(f"  {key} = {value!r}")
 
 
@@ -719,6 +731,60 @@ def cmd_solve_shopping_list(args: argparse.Namespace) -> None:
         print(f"Savings vs. buying everything outright: {plan['savings_vs_all_direct']:,.0f} ISK")
 
 
+def cmd_refresh_station_shortlist(args: argparse.Namespace) -> None:
+    print("Refreshing Station Trading's Jita spread/volume candidates (this can take a while)...")
+    result = station_trading_actions.do_refresh_shortlist()
+    print(f"Discovered {result['discovered']:,} candidate(s).")
+    _print_station_shortlist_rows(result["rows"])
+
+
+def cmd_list_station_shortlist(args: argparse.Namespace) -> None:
+    rows = station_trading_actions.do_get_shortlist()
+    if not rows:
+        print("Station Trading shortlist is empty - run refresh-station-shortlist.")
+        return
+    _print_station_shortlist_rows(rows)
+
+
+def _print_station_shortlist_rows(rows: list[dict]) -> None:
+    for r in rows:
+        state = "" if r["active"] else "  [inactive]"
+        margin = f"{r['margin'] * 100:6.1f}%" if r["margin"] is not None else "     -"
+        per_day = f"{r['profit_per_day']:>16,.0f}" if r["profit_per_day"] is not None else "               -"
+        print(f"  {r['name']:<40} margin {margin}   {per_day} ISK/day{state}")
+
+
+def cmd_check_station_undercut(args: argparse.Namespace) -> None:
+    result = station_trading_actions.do_check_undercut()
+    if not result["sell"] and not result["buy"]:
+        print("None of your Jita orders are currently undercut/outbid.")
+        return
+    if result["sell"]:
+        print(f"{len(result['sell'])} sell order(s) undercut:")
+        for r in result["sell"]:
+            print(f"  {r['name']:<40} yours {r['my_price']:>14,.2f}  vs {r['competitor_price']:>14,.2f}  "
+                  f"(-{r['difference']:,.2f})")
+    if result["buy"]:
+        print(f"{len(result['buy'])} buy order(s) outbid:")
+        for r in result["buy"]:
+            print(f"  {r['name']:<40} yours {r['my_price']:>14,.2f}  vs {r['competitor_price']:>14,.2f}  "
+                  f"(+{r['difference']:,.2f})")
+
+
+def cmd_station_trading_skills(args: argparse.Namespace) -> None:
+    summaries = station_trading_actions.do_get_skill_summary()
+    if not summaries:
+        print("No trader characters registered yet. Run: eve-trader-local auth --role trader")
+        return
+    for s in summaries:
+        if "error" in s:
+            print(f"  {s['character_name']:<24} {s['error']}")
+            continue
+        print(f"  {s['character_name']:<24} order slots: {s['order_slots']:>4}")
+        for label, level in s["levels"].items():
+            print(f"      {label:<28} level {level}")
+
+
 def cmd_pipeline(args: argparse.Namespace) -> None:
     results = actions.do_pipeline(safe=args.safe, rebuild_universe=args.rebuild_universe)
     for step, result in results.items():
@@ -746,7 +812,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-db", help="create the SQLite database/tables (idempotent)").set_defaults(func=cmd_init_db)
 
     p_auth = sub.add_parser("auth", help="run the interactive EVE SSO login for a role")
-    p_auth.add_argument("--role", required=True, help="role prefix: buyer / seller / producer / doctrine")
+    p_auth.add_argument("--role", required=True, help="role prefix: buyer / seller / producer / doctrine / trader")
     p_auth.set_defaults(func=cmd_auth)
 
     sub.add_parser("whoami", help="list authorized characters").set_defaults(func=cmd_whoami)
@@ -1000,6 +1066,22 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_solve_shopping_list)
 
     sub.add_parser(
+        "refresh-station-shortlist",
+        help="re-scan Jita for spread/volume candidates and re-price the Station Trading shortlist",
+    ).set_defaults(func=cmd_refresh_station_shortlist)
+    sub.add_parser(
+        "list-station-shortlist", help="show the current Station Trading shortlist"
+    ).set_defaults(func=cmd_list_station_shortlist)
+    sub.add_parser(
+        "check-station-undercut",
+        help="check whether any of your Jita trade-hub orders (buy or sell) have been beaten on price",
+    ).set_defaults(func=cmd_check_station_undercut)
+    sub.add_parser(
+        "station-trading-skills",
+        help="show each trader character's trade-skill levels and derived order-slot count",
+    ).set_defaults(func=cmd_station_trading_skills)
+
+    sub.add_parser(
         "check-update", help="check GitHub for a newer commit (read-only)"
     ).set_defaults(func=cmd_check_update)
     sub.add_parser(
@@ -1022,6 +1104,7 @@ def main(argv: list[str] | None = None) -> int:
     production_config.reload()
     doctrine_config.reload()
     refining_config.reload()
+    station_trading_config.reload()
     try:
         args.func(args)
     except ActionError as e:
