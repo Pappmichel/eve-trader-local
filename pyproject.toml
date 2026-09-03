@@ -23,6 +23,10 @@ dev = ["pytest>=8.0"]
 # the right license for a tool that may eventually be packaged and
 # redistributed as a binary (see ROADMAP.md's Stage 2 update mechanism).
 gui = ["PySide6>=6.7"]
+# Only needed to build the packaged executable (see packaging/eve-trader-local.spec
+# and .github/workflows/build-windows.yml) - never a runtime dependency of the
+# app itself, so it's its own extra rather than folded into `gui`.
+build = ["pyinstaller>=6.0"]
 
 [project.scripts]
 eve-trader-local = "eve_trader_local.cli:main"

@@ -1,0 +1,84 @@
+name: Build Windows executable
+
+# Two triggers:
+#   - a version tag (v1.2.3) - the real release path: builds, smoke-tests, and
+#     attaches the .exe to a GitHub Release. This is the "tagged releases"
+#     half of ROADMAP.md's Stage 2 self-update mechanism - the release this
+#     creates is exactly what a future updater component would poll
+#     `/releases/latest` for. It does NOT yet build that updater component
+#     itself; this workflow only produces the artifact the updater will
+#     eventually fetch.
+#   - workflow_dispatch - build on demand (e.g. to sanity-check packaging
+#     changes on a branch) without cutting a real release.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+# Only the tag-triggered run needs to create a release; workflow_dispatch
+# runs still get the build artifact via actions/upload-artifact, no
+# elevated permissions required for that path.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install eve-trader-local with GUI + build extras
+        run: pip install -e ".[gui,build]"
+
+      - name: Build the frozen executable
+        run: pyinstaller packaging/eve-trader-local.spec --distpath packaging/dist --workpath packaging/build
+
+      - name: Smoke-test the frozen executable
+        # Mirrors this repo's own "live-verify before declaring done" rule
+        # (CLAUDE.md) applied to the packaged binary specifically: a build
+        # that merely *completes* proved nothing the one Linux dry run
+        # during development didn't already show (that dry run is exactly
+        # what caught the real "ModuleNotFoundError: No module named
+        # 'eve_trader_local'" bug packaging/eve-trader-local.spec's own
+        # comment describes - a build succeeding was never sufficient
+        # evidence the binary actually runs). QT_QPA_PLATFORM=offscreen lets
+        # a real PySide6 window construct and tear down with no display
+        # attached, same trick used by this repo's own GUI test suite
+        # (tests/test_gui.py). A clean timeout-triggered exit (code 124 on
+        # Windows' PowerShell wrapper, since the process is still running
+        # when the timeout fires) counts as success - a crash exits
+        # immediately with a different code instead.
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:EVE_TRADER_LOCAL_DATA_DIR = "$env:RUNNER_TEMP\eve-trader-local-smoketest"
+          $proc = Start-Process -FilePath "packaging\dist\eve-trader-local.exe" -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc.HasExited) {
+            Write-Error "eve-trader-local.exe exited on its own within 8 seconds (exit code $($proc.ExitCode)) - it should still be running the GUI event loop."
+            exit 1
+          }
+          Stop-Process -Id $proc.Id -Force
+          $dbPath = Join-Path $env:EVE_TRADER_LOCAL_DATA_DIR "eve-trader-local.sqlite3"
+          if (-not (Test-Path $dbPath)) {
+            Write-Error "Expected database file was never created at $dbPath - storage.init_db() likely never ran inside the frozen build."
+            exit 1
+          }
+          Write-Host "Smoke test passed: process stayed alive and initialized its database."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eve-trader-local-windows
+          path: packaging/dist/eve-trader-local.exe
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packaging/dist/eve-trader-local.exe
+          generate_release_notes: true

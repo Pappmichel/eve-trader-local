@@ -151,8 +151,20 @@ coverage).
   full per-view breakdown. This is the point where every gap the audit
   found is resolved — Production's GUI now covers its full backend surface,
   cross-checked against `SYNC.md`'s current Production section.
-- Packaging/installer once the above is far enough along to be worth
-  packaging (feeds directly into Stage 2 of the update mechanism above).
+- **Packaging — started 2026-09-04.** `packaging/eve-trader-local.spec`
+  (PyInstaller) builds the GUI into a single portable Windows `.exe`, and
+  `.github/workflows/build-windows.yml` builds + smoke-tests it on a real
+  Windows runner on every `vX.Y.Z` tag push, attaching the result to a
+  GitHub Release. See README.md's "Packaging" section and
+  `packaging/README.md` for the two real bugs this setup already caught
+  (an editable install's package not getting bundled by PyInstaller at all;
+  a windowed build's crash silently having nowhere to print to). Still
+  missing: an actual installer (Inno Setup or similar - Start Menu entry +
+  uninstaller, vs. today's plain portable `.exe`), and the Stage-2
+  self-updater component itself described above - this packaging step
+  produces the tagged-release artifact that updater would need, but the
+  updater that actually checks `/releases/latest` and applies it doesn't
+  exist yet.
 
 ## Android (standalone, no server) — noted, not decided (2026-09-03)
 

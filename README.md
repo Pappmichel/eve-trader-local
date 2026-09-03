@@ -334,9 +334,31 @@ No real migration has been needed yet - `MIGRATIONS` is currently empty,
 with a commented-out example in `storage.py` showing the exact shape to
 copy the first time one actually is.
 
+## Packaging (added 2026-09-04)
+
+`packaging/eve-trader-local.spec` builds the native GUI into a single
+portable Windows `.exe` via [PyInstaller](https://pyinstaller.org/) (`pip
+install -e ".[gui,build]"` for the new `build` extra); see
+`packaging/README.md` for local build instructions and two real bugs that
+setup already caught (an editable install's package silently not getting
+bundled, and a windowed build's crash-report visibility). No installer yet -
+a portable, no-install-step `.exe` is deliberately the first milestone; an
+actual installer (Inno Setup, Start Menu entry + uninstaller) is future work.
+
+`.github/workflows/build-windows.yml` builds and smoke-tests this on a real
+Windows GitHub Actions runner on every `vX.Y.Z` tag push, uploads the result
+as a build artifact, and attaches it to a GitHub Release - this is also the
+artifact ROADMAP.md's Stage-2 self-updater will eventually poll
+`/releases/latest` for, once that updater component itself is built (a
+separate, not-yet-started piece - this workflow only produces what it would
+fetch).
+
 Explicitly **not** done yet:
 
-- Packaging/installer.
+- A real installer (Inno Setup or similar).
+- The Stage-2 self-updater component itself (see ROADMAP.md) - this
+  packaging step produces the release artifact it would need, but the
+  updater that checks for and applies it doesn't exist yet.
 
 ## Why the OAuth flow needed no rearchitecting
 
