@@ -56,7 +56,11 @@ from .views.refining_ore_shortlist import OreShortlistView
 from .views.refining_reprocessing_quote import ReprocessingQuoteView
 from .views.station_trading_shortlist import StationShortlistView
 from .views.station_trading_undercut_skills import UndercutSkillsView
+from .views.trading_candidate_discovery import CandidateDiscoveryView
+from .views.trading_price_history import PriceHistoryView
+from .views.trading_realized_transactions import RealizedTransactionsView
 from .views.trading_shortlist import TradingShortlistView
+from .views.trading_unlisted_undercut import UnlistedUndercutView
 
 # Declarative menu structure: {tool menu label: [(view menu-item label, view class), ...]}.
 # Extend this as more views are ported - see each view module's own docstring
@@ -65,6 +69,10 @@ from .views.trading_shortlist import TradingShortlistView
 _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
     "Trading": [
         ("Shortlist", TradingShortlistView),
+        ("Candidate Discovery", CandidateDiscoveryView),
+        ("Realized Trades && Transactions", RealizedTransactionsView),
+        ("Unlisted Stock && Undercut Check", UnlistedUndercutView),
+        ("Price History", PriceHistoryView),
     ],
     "Production": [
         ("Build Candidates", BuildCandidatesView),

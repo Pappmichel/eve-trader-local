@@ -59,6 +59,16 @@ def test_main_window_has_one_menu_per_tool(qapp, db):
     assert menu_labels == ["App", "Trading", "Production", "Doctrine", "Ore && Minerals", "Station Trading"]
 
 
+def test_trading_menu_lists_its_views_not_the_placeholder(qapp, db):
+    from eve_trader_local.gui.main_window import _TOOL_MENUS
+
+    labels = [label for label, _view_class in _TOOL_MENUS["Trading"]]
+    assert labels == [
+        "Shortlist", "Candidate Discovery", "Realized Trades && Transactions",
+        "Unlisted Stock && Undercut Check", "Price History",
+    ]
+
+
 def test_production_menu_lists_its_views_not_the_placeholder(qapp, db):
     from eve_trader_local.gui.main_window import _TOOL_MENUS
 

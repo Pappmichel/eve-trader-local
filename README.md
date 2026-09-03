@@ -195,7 +195,18 @@ All five tools now have real views built out on that foundation, grouping
 several of today's CLI commands into each tab per the navigation model
 below (never a 1:1 CLI-command mirror):
 
-- **Trading** — Shortlist (`views/trading_shortlist.py`).
+- **Trading** — Shortlist (`views/trading_shortlist.py`, the live import/sell
+  decision table); Candidate Discovery (`views/trading_candidate_discovery.py`,
+  build-universe/build-focused plus find-new-candidates and Add Recommended
+  To Shortlist — the "find new things to import" setup workflow that feeds
+  the shortlist); Realized Trades & Transactions
+  (`views/trading_realized_transactions.py`, matched buy/sell P&L plus raw
+  per-character wallet transaction history — both "what actually happened"
+  reads); Unlisted Stock & Undercut Check
+  (`views/trading_unlisted_undercut.py`, two live one-shot seller-side
+  checks); Price History (`views/trading_price_history.py`, margin-momentum
+  trends over cached price history — `do_shortlist_trends` existed in
+  `actions.py` with no caller until this view).
 - **Production** — Build Candidates, Planner, Asset-Optimized Planner,
   Logistics, Special Orders, Ship Margins & Market Status.
 - **Doctrine** — Fittings, Stockpile Status, Shopping List, Contract History.
