@@ -40,6 +40,7 @@
     eve-trader-local check-station-undercut
     eve-trader-local station-trading-skills
     eve-trader-local check-update / update
+    eve-trader-local portfolio-overview
 
 No logic lives here: every command calls one actions.do_* function and prints
 its result. This is not the intended long-term interface (a native GUI is -
@@ -60,7 +61,9 @@ from .refining import actions as refining_actions
 from .refining import config as refining_config
 from .doctrine import esi_sync as doctrine_esi_sync
 from .errors import ActionError
+from .logging_setup import configure_logging
 from .paths import config_path, db_path
+from .portfolio import portfolio_overview
 from .production import actions as production_actions
 from .production import config as production_config
 from .production import esi_sync
@@ -121,6 +124,21 @@ def cmd_config(args: argparse.Namespace) -> None:
     print("\n[station_trading]")
     for key, value in vars(station_trading_config.reload()).items():
         print(f"  {key} = {value!r}")
+
+
+def cmd_portfolio_overview(args: argparse.Namespace) -> None:
+    result = portfolio_overview()
+    print(f"Trading realized profit:  {result['trading_realized_profit']:>15,.0f} ISK "
+          f"({result['trading_trade_count']} matched trade(s), "
+          f"avg margin {result['trading_average_margin'] * 100:.1f}%)")
+    volatility = result["trading_daily_profit_volatility"]
+    print(f"Daily profit volatility:  {volatility:>15,.0f} ISK" if volatility is not None
+          else "Daily profit volatility:  - (fewer than 2 days of realized trades)")
+    if result["production_stock_targets_configured"]:
+        print(f"Production stock value:   {result['production_stock_value']:>15,.0f} ISK")
+    else:
+        print("Production stock value:   - (no stock targets configured)")
+    print(f"Combined value:           {result['combined_value']:>15,.0f} ISK")
 
 
 def cmd_check_update(args: argparse.Namespace) -> None:
@@ -1087,11 +1105,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "update", help="update this checkout to origin/main and reinstall dependencies"
     ).set_defaults(func=cmd_update)
+    sub.add_parser(
+        "portfolio-overview", help="combined Trading realized P&L + Production stock value summary"
+    ).set_defaults(func=cmd_portfolio_overview)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    configure_logging()
     # Every command needs the tables to exist, and init_db is idempotent -
     # cheaper than making each command remember to check.
     storage.init_db()

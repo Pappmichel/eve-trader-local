@@ -96,6 +96,16 @@ What exists:
   (`do_pipeline`, `do_build_universe`, `do_find_new_candidates`,
   `do_refresh_and_prune_candidates`, `do_check_undercut`, `do_reconcile_trades`,
   …), each step isolated so one failure doesn't block the others.
+- `portfolio.py` — the one cross-cutting view spanning Trading and
+  Production: `portfolio_overview` combines Trading's realized P&L with
+  Production's stock value into one read-only summary, plus a day-to-day
+  profit volatility signal, degrading each half independently to zero/None
+  when that tool has no data yet.
+- `logging_setup.py` — a small rotating-file-handler log under the same data
+  directory as the SQLite DB, so a `pipeline`/`sync-esi` run's best-effort
+  swallowed errors leave a real trail after the fact (a much simpler cut of
+  the parent's version — see `SYNC.md` for why the console-handler half
+  doesn't apply here).
 - `production/` — `constants.py`, `engine.py` (classification, buy-vs-build
   cost/margin, build-candidate discovery), `pricing.py`, `invention.py`,
   `esi_sync.py` (producer character blueprints/assets/industry jobs),
@@ -149,7 +159,8 @@ What exists:
   `set-mineral-requirement`, `remove-mineral-requirement`,
   `list-mineral-requirements`, `solve-shopping-list`,
   `refresh-station-shortlist`, `list-station-shortlist`,
-  `check-station-undercut`, `station-trading-skills`.
+  `check-station-undercut`, `station-trading-skills`,
+  `portfolio-overview`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
@@ -245,6 +256,8 @@ eve-trader-local set-mineral-requirement <item> <qty>   # set/update a shopping-
 eve-trader-local remove-mineral-requirement <item>      # remove a requirement
 eve-trader-local list-mineral-requirements              # list configured requirements
 eve-trader-local solve-shopping-list         # solve the cheapest buy-ore-and-refine-vs-buy-direct mix
+
+eve-trader-local portfolio-overview          # combined Trading realized P&L + Production stock value
 ```
 
 `<item>` above accepts either a numeric type_id or an exact (case-insensitive)
