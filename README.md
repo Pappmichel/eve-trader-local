@@ -182,26 +182,38 @@ same `do_*` actions the CLI calls — never storage or the network clients
 directly — so the CLI and GUI can never drift apart, matching the parent
 repo's own CLI/API-both-call-actions.py rule.
 
-Foundation built so far: `main.py` (entry point), `main_window.py` (the
+Foundation: `main.py` (entry point), `main_window.py` (the
 menu-bar/tab-workspace shell), `workers.py` (runs a `do_*` call on a
 background `QThread` so a multi-second ESI/Goonmetrics round trip never
 freezes the window — see its module docstring for the `_ResultBridge`
 mechanism that makes the worker-thread-to-UI-thread handoff actually safe,
 a real PySide gotcha it works around), and `views/base.py` (`BaseView`/
 `TableView`, the shared "busy state + error display + table population"
-shape most views need). One real view exists end-to-end as the reference
-implementation: `views/trading_shortlist.py` (Trading's Shortlist tab —
-loads the last saved snapshot immediately on open with no network call,
-then Refresh/Refresh & Prune buttons wired to `do_refresh_shortlist`/
-`do_refresh_and_prune_candidates`). Every other tool's menu exists with a
-"(not built yet)" placeholder; building out their views (grouping several
-of today's CLI commands into one tab each, per this file's own navigation
-model — not a 1:1 CLI-command mirror) is the immediate next step.
+shape most views need).
+
+All five tools now have real views built out on that foundation, grouping
+several of today's CLI commands into each tab per the navigation model
+below (never a 1:1 CLI-command mirror):
+
+- **Trading** — Shortlist (`views/trading_shortlist.py`).
+- **Production** — Build Candidates, Planner, Asset-Optimized Planner,
+  Logistics, Special Orders, Ship Margins & Market Status.
+- **Doctrine** — Fittings, Stockpile Status, Shopping List, Contract History.
+- **Ore & Minerals** — Ore Shortlist, Reprocessing Quote, Mineral Shopping List.
+- **Station Trading** — Shortlist (`views/station_trading_shortlist.py`,
+  discover/refresh + the live-ESI-confirmed persisted shortlist) and
+  Undercut & Skills (`views/station_trading_undercut_skills.py`, the
+  bidirectional own-orders undercut/outbid check plus the live trade-skill/
+  order-slot summary — two small independent read-only reports grouped
+  into one tab, same reasoning as Production's own Ship Margins & Market
+  Status grouping).
 
 Explicitly **not** done yet:
 
-- The rest of the GUI's views (Production, Doctrine, Ore & Minerals,
-  Station Trading — only Trading's Shortlist exists so far).
+- Cross-view/app-level features: no persistent Settings dialog in the GUI
+  itself (Settings changes still go through the CLI/`config.yaml`), no
+  in-app OAuth/character-login flow (`eve-trader-local auth` on the CLI is
+  still how a character gets registered).
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.

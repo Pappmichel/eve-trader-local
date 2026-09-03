@@ -29,6 +29,8 @@ from .views.production_special_orders import SpecialOrdersView
 from .views.refining_mineral_shopping_list import MineralShoppingListView
 from .views.refining_ore_shortlist import OreShortlistView
 from .views.refining_reprocessing_quote import ReprocessingQuoteView
+from .views.station_trading_shortlist import StationShortlistView
+from .views.station_trading_undercut_skills import UndercutSkillsView
 from .views.trading_shortlist import TradingShortlistView
 
 # Declarative menu structure: {tool menu label: [(view menu-item label, view class), ...]}.
@@ -58,7 +60,10 @@ _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
         ("Reprocessing Quote", ReprocessingQuoteView),
         ("Mineral Shopping List", MineralShoppingListView),
     ],
-    "Station Trading": [],
+    "Station Trading": [
+        ("Shortlist", StationShortlistView),
+        ("Undercut && Skills", UndercutSkillsView),
+    ],
 }
 
 

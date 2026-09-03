@@ -88,8 +88,10 @@ PyQt6 specifically (same Qt bindings, LGPL rather than GPL/commercial —
 matters once this is packaged and redistributed as a binary, see Stage 2
 above). Foundation is in `eve_trader_local/gui/` — see README.md's own "Native
 GUI" section for what exists (menu-bar/tab-workspace shell, the
-background-thread action runner, one full reference view for Trading's
-Shortlist) and what's still a placeholder (every other tool's menu).
+background-thread action runner) and the full list of views now built for
+all five tools (Trading, Production, Doctrine, Ore & Minerals, Station
+Trading — Station Trading finished last, completing the GUI's tool-menu
+coverage).
 
 **Navigation model** (researched 2026-09-02, jEveAssets as the reference
   point — a Java out-of-game asset manager, embedded SQLite, no server,
@@ -117,14 +119,16 @@ Shortlist) and what's still a placeholder (every other tool's menu).
 
 ## Deferred (not started, tracked here so it isn't lost)
 
-- The rest of the GUI's views — Production, Doctrine, Ore & Minerals,
-  Station Trading all still show an empty "(not built yet)" tool menu; only
-  Trading's Shortlist exists so far. Build one tool at a time, following
-  `views/trading_shortlist.py`'s pattern (group several CLI commands into
-  one tab per the navigation model above, call the same `do_*` actions,
-  never storage/network clients directly).
-- Packaging/installer once there's a full GUI to package (feeds directly
-  into Stage 2 of the update mechanism above).
+- All five tools now have real GUI views (see README.md's "Native GUI"
+  section) — what's left is cross-view/app-level GUI work, not another
+  tool's menu: a persistent Settings dialog (Settings changes still go
+  through the CLI/`config.yaml`), an in-app OAuth/character-login flow
+  (`eve-trader-local auth` on the CLI is still how a character gets
+  registered — the GUI has no way to add/remove a character itself), and
+  general polish (column widths/sorting defaults, remembering window/tab
+  state between launches).
+- Packaging/installer once the above is far enough along to be worth
+  packaging (feeds directly into Stage 2 of the update mechanism above).
 
 ## Android (standalone, no server) — noted, not decided (2026-09-03)
 
