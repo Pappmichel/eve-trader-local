@@ -8,7 +8,9 @@ by arithmetic in the docstring of each test. No network, no SQLite.
 from __future__ import annotations
 
 import itertools
+import math
 import random
+import time
 
 import pytest
 
@@ -16,8 +18,8 @@ from eve_trader_local.errors import ActionError
 from eve_trader_local.refining.models import MineralOption, MineralRequirement, OreOption
 from eve_trader_local.refining.optimizer import optimize_shopping_list
 
-TRIT, PYE, MEX = 34, 35, 36
-NAMES = {TRIT: "Tritanium", PYE: "Pyerite", MEX: "Mexallon"}
+TRIT, PYE, MEX, ISO = 34, 35, 36, 37
+NAMES = {TRIT: "Tritanium", PYE: "Pyerite", MEX: "Mexallon", ISO: "Isogen"}
 
 
 def _req(type_id, qty):
@@ -263,34 +265,146 @@ def test_random_plans_always_cover_every_requirement(seed):
     assert plan.total_cost <= plan.all_direct_cost + 1e-6
 
 
-@pytest.mark.parametrize("seed", range(15))
-def test_small_plans_match_brute_force_over_whole_portions(seed):
-    """The strongest available check on the round-up/trim heuristics: on a
-    small enough problem, enumerate every whole-portion combination (with the
-    leftover gap priced at the direct rate, exactly as `_plan_cost` does) and
-    confirm the optimizer's plan costs no more than the true discrete
-    optimum."""
-    rng = random.Random(1000 + seed)
-    minerals = [TRIT, PYE]
-    requirements = [_req(m, rng.randint(500, 4_000)) for m in minerals]
-    required = {r.type_id: r.required_qty for r in requirements}
-    ores = [_ore(i + 1, rng.uniform(500, 5_000),
-                 {m: rng.choice([0, rng.randint(200, 2_000)]) for m in minerals})
-            for i in range(2)]
-    for ore in ores:
-        if not any(ore.yield_per_portion.values()):
-            ore.yield_per_portion[TRIT] = 1_000
-    prices = {m: rng.uniform(1.0, 8.0) for m in minerals}
-    plan = optimize_shopping_list(requirements, ores, _minerals(prices))
+# ---------------------------------------------------------------------------
+# Regression test for the relax-then-round optimality gap (fixed by solving
+# with `linprog`'s `integrality` param instead - see optimizer.py's module
+# docstring, decision 1; ported from the parent's commit 90c669b, which fixed
+# this same bug there first). The old code only ever *dropped* portions from
+# the ore set the continuous relaxation gave non-zero weight to, so it could
+# never discover that a single portion of a relaxation-excluded ore was the
+# true whole-unit optimum. This brute-forces every small case's real answer
+# independently (by enumerating every whole-portion/whole-unit combination,
+# using the exact same "ceil the direct-buy gap" pricing the real app uses)
+# and asserts the solver actually finds it - not just a feasible plan.
 
-    best = float("inf")
-    for combo in itertools.product(range(0, 12), repeat=len(ores)):
-        cost = sum(n * o.landed_cost_per_portion for n, o in zip(combo, ores))
-        for m in minerals:
-            got = sum(n * o.yield_per_portion.get(m, 0) for n, o in zip(combo, ores))
-            gap = required[m] - got
-            if gap > 0:
-                cost += -(-gap // 1) * prices[m]  # ceil(gap) units bought outright
-        best = min(best, cost)
+def _real_cost(ores, portions, mineral_ids, required, direct_price):
+    """Mirrors optimizer.py's own real-world costing: portions*ore price plus
+    a whole-unit ceil'd direct purchase for whatever gap is left - the same
+    arithmetic `optimize_shopping_list` uses to build the plan it returns."""
+    delivered = {m: 0 for m in mineral_ids}
+    cost = 0.0
+    for qty, ore in zip(portions, ores):
+        cost += qty * ore.landed_cost_per_portion
+        for m in mineral_ids:
+            delivered[m] += qty * ore.yield_per_portion.get(m, 0)
+    for m in mineral_ids:
+        gap = required[m] - delivered[m]
+        if gap > 1e-9:
+            if m not in direct_price:
+                return None  # infeasible: nothing left to cover this mineral
+            cost += math.ceil(gap - 1e-9) * direct_price[m]
+    return cost
 
-    assert plan.total_cost <= best + 1e-6
+
+def _brute_force_optimum(ores, mineral_ids, required, direct_price):
+    # A single portion can yield as little as 1 unit of a mineral (see
+    # _random_case), so the ceiling on portions needed has to scale with the
+    # largest requirement, not a fixed small constant - otherwise brute force
+    # itself misses the true (and only) feasible combination.
+    max_portion = max(1, math.ceil(max(required.values())))
+    best = None
+    for combo in itertools.product(range(max_portion + 1), repeat=len(ores)):
+        cost = _real_cost(ores, combo, mineral_ids, required, direct_price)
+        if cost is None:
+            continue
+        if best is None or cost < best:
+            best = cost
+    return best
+
+
+def _random_case(rng):
+    """A small synthetic ore/requirement scenario, deliberately sized so
+    `_brute_force_optimum` can exhaustively enumerate it (<=3 ores, each
+    portion size 1 so "portions" and "real units" coincide)."""
+    minerals = rng.sample([TRIT, PYE, MEX, ISO], rng.randint(1, 2))
+    ores = []
+    for i in range(rng.randint(1, 3)):
+        yields = {m: rng.randint(1, 20) for m in minerals if rng.random() < 0.8}
+        if not yields:
+            yields = {minerals[0]: rng.randint(1, 20)}
+        ores.append(_ore(i + 1, rng.uniform(1, 50), yields, portion_size=1))
+    # Kept small deliberately: `_brute_force_optimum` enumerates every
+    # portions^n_ores combination, so this needs to stay cheap enough to run
+    # 200 times in a normal test suite while still being large enough that a
+    # relaxation-excluded ore can plausibly be the true optimum.
+    required = {m: rng.uniform(1, 20) for m in minerals}
+    direct_price = {m: rng.uniform(0.5, 10) for m in minerals if rng.random() < 0.7}
+    reachable = all(m in direct_price or any(o.yield_per_portion.get(m, 0) > 0 for o in ores)
+                     for m in minerals)
+    if not reachable:
+        return None
+    return ores, minerals, required, direct_price
+
+
+def test_matches_brute_force_optimum_on_random_small_cases():
+    rng = random.Random(20260903)  # fixed seed: deterministic, reproducible failures
+    checked = 0
+    while checked < 200:
+        case = _random_case(rng)
+        if case is None:
+            continue
+        ores, minerals, required, direct_price = case
+        checked += 1
+
+        requirements = [_req(m, required[m]) for m in minerals]
+        mineral_options = _minerals({m: direct_price.get(m) for m in minerals})
+        plan = optimize_shopping_list(requirements, ores, mineral_options)
+
+        # Every requirement must still be covered - the one thing that must
+        # never regress, fix or no fix.
+        for coverage in plan.coverage:
+            assert coverage.delivered + 1e-6 >= coverage.required
+
+        optimum = _brute_force_optimum(ores, minerals, required, direct_price)
+        assert optimum is not None, "brute force found no feasible combination at all"
+        # Within float tolerance of the TRUE discrete optimum, not merely
+        # feasible - this is what the old relax-then-round approach failed at
+        # roughly 8% of the time (see optimizer.py's module docstring).
+        assert plan.total_cost <= optimum + 1e-6, (
+            f"plan cost {plan.total_cost} exceeds true optimum {optimum} "
+            f"(case: ores={ores}, required={required}, direct_price={direct_price})"
+        )
+
+
+def test_realistic_scale_solves_quickly():
+    """Sanity-checks solve time at the tool's realistic scale: dozens of ore
+    candidates, requirements never exceeding the 8 real EVE minerals. Called
+    at request time (refining/actions.py's do_optimize_mineral_shopping_list),
+    so it needs to stay fast even though it's now a real MIP rather than a
+    relaxed LP."""
+    rng = random.Random(1)
+    minerals = [34, 35, 36, 37, 38, 39, 40, 11399]  # the 8 real EVE minerals
+    mineral_price = {m: rng.uniform(1, 80) for m in minerals}
+    ores = []
+    for i in range(60):
+        yields = {m: rng.randint(50, 3000) for m in minerals if rng.random() < 0.4}
+        if not yields:
+            yields = {rng.choice(minerals): rng.randint(50, 3000)}
+        # Ore price roughly tracks its refined mineral value (as real market
+        # prices do) plus noise - the structure that actually stresses a MIP
+        # solver (many near-tied choices), not pure uniform randomness.
+        base_value = sum(qty * mineral_price[m] for m, qty in yields.items())
+        markup = rng.uniform(0.85, 1.15)
+        ores.append(_ore(i + 1, base_value * markup, yields, portion_size=100))
+    required = {m: rng.uniform(10_000, 2_000_000) for m in minerals}
+    requirements = [MineralRequirement(type_id=m, name=str(m), required_qty=required[m]) for m in minerals]
+    mineral_options = {m: MineralOption(type_id=m, name=str(m),
+                                        landed_cost_per_unit=mineral_price[m] * rng.uniform(0.95, 1.3),
+                                        source="Jita")
+                       for m in minerals}
+
+    start = time.monotonic()
+    plan = optimize_shopping_list(requirements, ores, mineral_options)
+    elapsed = time.monotonic() - start
+
+    for coverage in plan.coverage:
+        assert coverage.delivered + 1e-6 >= coverage.required
+    # Generous ceiling - a bit above optimizer.py's own `_MIP_TIME_LIMIT_SECONDS`
+    # (5s) worst-case solver cutoff, so this fails loudly rather than the
+    # solver silently eating its own timeout every run. Typical real solves
+    # are well under 1s; this only guards against the realistic-scale case
+    # regressing to multi-second territory unnoticed.
+    assert elapsed < 8.0, (
+        f"realistic-scale solve took {elapsed:.2f}s - see optimizer.py's "
+        "module docstring on MIP solve time before assuming this is fine"
+    )
