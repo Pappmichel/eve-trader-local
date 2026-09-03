@@ -156,6 +156,14 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "scrapmetal_processing_skill_level": (0, 5),
     "security_status": (-1.0, 1.0),
     "refining_tax_rate": (0, 1),
+    # Station Trading (station_trading/config.py's StationTradingConfig -
+    # listed here for the same "_check_range is keyed by field name" reason
+    # as Production's fields above).
+    "station_id": (1, None),
+    "broker_fee_rate": (0, 1),
+    "sales_tax_rate": (0, 1),
+    "min_spread_threshold": (0, 1),
+    "min_daily_volume": (0, None),
 }
 
 

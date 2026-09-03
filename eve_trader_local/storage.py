@@ -699,6 +699,21 @@ CREATE TABLE IF NOT EXISTS mineral_requirements (
     mineral_name    TEXT NOT NULL,
     required_qty    REAL NOT NULL
 );
+
+-- Station Trading shortlist - the live membership list of Jita spread/
+-- volume candidates (station_trading.candidate_discovery.discover_
+-- candidates), same single-table-live-list shape as ore_shortlist above
+-- (no append-only snapshot counterpart - unlike Trading/Ore & Minerals,
+-- nothing here needs a "what did this look like on an earlier run" history:
+-- every row is re-priced live off the current order book on every read, see
+-- station_trading/actions.py's _build_shortlist_rows).
+CREATE TABLE IF NOT EXISTS station_trading_shortlist (
+    type_id          INTEGER PRIMARY KEY,
+    spread_pct       REAL,
+    avg_daily_volume REAL,
+    discovered_at    TEXT,
+    active           INTEGER NOT NULL DEFAULT 1
+);
 """
 
 # Insert order matters only for readability; the tuple arity per table is what
@@ -1292,6 +1307,57 @@ def activate_ore_shortlist_items(item_ids: Sequence[int], path: Optional[Path] =
         return
     with connect(path) as conn:
         conn.executemany("UPDATE ore_shortlist SET active = 1 WHERE item_id = ?", [(i,) for i in item_ids])
+
+
+# ------------------------------------------------ Station Trading shortlist
+def upsert_station_trading_shortlist(
+        rows: Sequence[tuple[int, float, float, str]], path: Optional[Path] = None) -> None:
+    """rows: (type_id, spread_pct, avg_daily_volume, discovered_at). `active`
+    is deliberately never touched on conflict - a re-discovery run must not
+    silently reactivate a type_id the user explicitly deactivated (matches
+    do_refresh_shortlist's own documented contract: newly-discovered rows
+    all start active, a previously-deactivated one stays deactivated)."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO station_trading_shortlist "
+            "(type_id, spread_pct, avg_daily_volume, discovered_at, active) VALUES (?,?,?,?,1) "
+            "ON CONFLICT(type_id) DO UPDATE SET spread_pct=excluded.spread_pct, "
+            "avg_daily_volume=excluded.avg_daily_volume, discovered_at=excluded.discovered_at",
+            list(rows),
+        )
+
+
+def load_station_trading_shortlist(path: Optional[Path] = None) -> list[tuple[int, float, float, str, bool]]:
+    """Returns (type_id, spread_pct, avg_daily_volume, discovered_at, active)
+    rows, active or not - same "an inactive item still comes back, only its
+    decision short-circuits" contract Trading's own load_shortlist has."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT type_id, spread_pct, avg_daily_volume, discovered_at, active "
+            "FROM station_trading_shortlist"
+        ).fetchall()
+    return [(r["type_id"], r["spread_pct"], r["avg_daily_volume"], r["discovered_at"], bool(r["active"]))
+            for r in rows]
+
+
+def deactivate_station_trading_shortlist_items(type_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    type_ids = list(type_ids)
+    if not type_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany(
+            "UPDATE station_trading_shortlist SET active = 0 WHERE type_id = ?", [(i,) for i in type_ids])
+
+
+def activate_station_trading_shortlist_items(type_ids: Sequence[int], path: Optional[Path] = None) -> None:
+    """Reactivation counterpart - same reasoning as Trading's own
+    activate_shortlist_items/Ore & Minerals' activate_ore_shortlist_items."""
+    type_ids = list(type_ids)
+    if not type_ids:
+        return
+    with connect(path) as conn:
+        conn.executemany(
+            "UPDATE station_trading_shortlist SET active = 1 WHERE type_id = ?", [(i,) for i in type_ids])
 
 
 def save_ore_shortlist_snapshot(rows: list[tuple], run_ts: str, path: Optional[Path] = None) -> None:
