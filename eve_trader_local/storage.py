@@ -472,6 +472,26 @@ CREATE TABLE IF NOT EXISTS manual_stock (
     count     REAL NOT NULL DEFAULT 0
 );
 
+-- Multi-structure production logistics (production/engine.py's
+-- logistics_status/distribution_recommendations - ported from the parent's
+-- job_category_locations/category_location_options, minus tenant_id). One
+-- location per job_category (JOB_CATEGORIES) - which structure a user has
+-- assigned that category's jobs to for the Logistik-tab material-netting
+-- view - kept separate from category_location_options below (the parent's
+-- own separation): this table is "which one is active right now", the other
+-- is "the pick-list of locations this category has ever been pointed at"
+-- (a quick-switch convenience - do_set_category_location upserts into both).
+CREATE TABLE IF NOT EXISTS job_category_locations (
+    category    TEXT PRIMARY KEY,
+    location_id INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS category_location_options (
+    category    TEXT NOT NULL,
+    location_id INTEGER NOT NULL,
+    PRIMARY KEY (category, location_id)
+);
+
 -- Special Orders (production/engine.py's plan_special_order): one-off build
 -- orders, tracked separately from the permanent stock_targets list above -
 -- ported from the parent's docs/special_orders_schema.sql minus tenant_id/
@@ -2089,6 +2109,55 @@ def list_manual_stock(path: Optional[Path] = None) -> list[tuple[int, str, float
     with connect(path) as conn:
         return [tuple(r) for r in conn.execute(
             "SELECT type_id, type_name, count FROM manual_stock ORDER BY type_name").fetchall()]
+
+
+# --------------------------------------------------- category locations
+def upsert_category_location(category: str, location_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO job_category_locations (category, location_id) VALUES (?,?) "
+            "ON CONFLICT(category) DO UPDATE SET location_id=excluded.location_id",
+            (category, location_id),
+        )
+
+
+def load_category_locations(path: Optional[Path] = None) -> dict[str, int]:
+    with connect(path) as conn:
+        rows = conn.execute("SELECT category, location_id FROM job_category_locations").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def delete_category_location(category: str, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM job_category_locations WHERE category = ?", (category,))
+
+
+def add_category_location_option(category: str, location_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO category_location_options (category, location_id) VALUES (?,?) "
+            "ON CONFLICT(category, location_id) DO NOTHING",
+            (category, location_id),
+        )
+
+
+def load_category_location_options(path: Optional[Path] = None) -> dict[str, list[int]]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT category, location_id FROM category_location_options ORDER BY category, location_id"
+        ).fetchall()
+    result: dict[str, list[int]] = {}
+    for category, location_id in rows:
+        result.setdefault(category, []).append(location_id)
+    return result
+
+
+def delete_category_location_option(category: str, location_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "DELETE FROM category_location_options WHERE category = ? AND location_id = ?",
+            (category, location_id),
+        )
 
 
 # -------------------------------------------------------------- special orders

@@ -151,6 +151,55 @@ def test_delete_manual_stock_is_idempotent(db):
     assert storage.load_manual_stock() == {}
 
 
+# ------------------------------------------------- category locations (issue #4)
+def test_category_location_round_trip(db):
+    storage.upsert_category_location("Reactions", 1000000000001)
+    storage.upsert_category_location("Advanced Components", 1000000000002)
+
+    assert storage.load_category_locations() == {
+        "Reactions": 1000000000001, "Advanced Components": 1000000000002,
+    }
+
+
+def test_category_location_upsert_overwrites_existing_row(db):
+    storage.upsert_category_location("Reactions", 1000000000001)
+    storage.upsert_category_location("Reactions", 1000000000002)
+
+    assert storage.load_category_locations() == {"Reactions": 1000000000002}
+
+
+def test_delete_category_location_is_idempotent(db):
+    storage.upsert_category_location("Reactions", 1000000000001)
+    storage.delete_category_location("Reactions")
+    storage.delete_category_location("Reactions")  # no error on a second delete
+    assert storage.load_category_locations() == {}
+
+
+def test_category_location_options_round_trip(db):
+    storage.add_category_location_option("Reactions", 1000000000001)
+    storage.add_category_location_option("Reactions", 1000000000002)
+    storage.add_category_location_option("Equipment", 1000000000003)
+
+    assert storage.load_category_location_options() == {
+        "Reactions": [1000000000001, 1000000000002],
+        "Equipment": [1000000000003],
+    }
+
+
+def test_category_location_option_add_is_idempotent(db):
+    storage.add_category_location_option("Reactions", 1000000000001)
+    storage.add_category_location_option("Reactions", 1000000000001)  # same (category, location) twice
+
+    assert storage.load_category_location_options() == {"Reactions": [1000000000001]}
+
+
+def test_delete_category_location_option_is_idempotent(db):
+    storage.add_category_location_option("Reactions", 1000000000001)
+    storage.delete_category_location_option("Reactions", 1000000000001)
+    storage.delete_category_location_option("Reactions", 1000000000001)
+    assert storage.load_category_location_options() == {}
+
+
 def test_available_blueprint_copies_sums_runs_not_copy_count(db):
     """Confirmed real bug in the parent this ports the fix for: a single
     300-run copy supports 300 invention attempts, not 1 - COUNT(*) would

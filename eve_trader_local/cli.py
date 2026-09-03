@@ -17,6 +17,10 @@
     eve-trader-local market-status / stock-value
     eve-trader-local discover-ship-margins
     eve-trader-local invention-logistics / t1-bpc-invention-needs
+    eve-trader-local logistics-status / distribution-recommendations
+    eve-trader-local set-category-location <category> <location_id> / clear-category-location <category>
+    eve-trader-local add-category-location-option <category> <location_id> / remove-category-location-option <category> <location_id>
+    eve-trader-local list-category-locations
     eve-trader-local set-manual-stock <item> <count> / remove-manual-stock <item> / list-manual-stock
     eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--net-against-stock]
     eve-trader-local list-special-orders / remove-special-order <order_id>
@@ -67,6 +71,7 @@ from .portfolio import portfolio_overview
 from .production import actions as production_actions
 from .production import config as production_config
 from .production import esi_sync
+from .production.constants import JOB_CATEGORIES
 from .station_trading import actions as station_trading_actions
 from .station_trading import config as station_trading_config
 from .station_trading import esi_sync as station_trading_esi_sync
@@ -412,6 +417,63 @@ def cmd_t1_bpc_invention_needs(args: argparse.Namespace) -> None:
         bpo = "BPO on site" if row.bpo_present else ""
         print(f"  {row.name:<40} needed {row.needed:>6,}   available {row.available:>6,}   "
               f"missing {row.missing:>6,}   {row.stockpile_pct:5.1f}%  {bpo}")
+
+
+def cmd_logistics_status(args: argparse.Namespace) -> None:
+    rows = production_actions.do_get_logistics_status()["rows"]
+    if not rows:
+        print("No category has both an assigned location and planned jobs right now.")
+        return
+    for row in rows:
+        pull = ""
+        if row.pull_from_location_id is not None:
+            pull = f"   pull from {row.pull_from_location_id} ({row.pull_from_available:,.0f} avail.)"
+        print(f"  [{row.category:<14}] {row.type_name:<40} needed {row.needed:>8,.0f}   "
+              f"available {row.available:>8,.0f}   missing {row.missing:>8,.0f}{pull}")
+
+
+def cmd_distribution_recommendations(args: argparse.Namespace) -> None:
+    rows = production_actions.do_get_distribution_recommendations()["rows"]
+    if not rows:
+        print("Nothing to move - either every category is covered, or no distribution source is configured.")
+        return
+    for row in rows:
+        print(f"  {row.quantity:>8,.0f}x {row.type_name:<40} {row.from_location_id} -> "
+              f"{row.to_category} @ {row.to_location_id}")
+
+
+def cmd_set_category_location(args: argparse.Namespace) -> None:
+    result = production_actions.do_set_category_location(args.category, args.location_id)
+    print(f"Category '{result['category']}' now builds at location {result['location_id']}.")
+
+
+def cmd_clear_category_location(args: argparse.Namespace) -> None:
+    result = production_actions.do_clear_category_location(args.category)
+    print(f"Cleared the assigned location for category '{result['category']}'.")
+
+
+def cmd_add_category_location_option(args: argparse.Namespace) -> None:
+    result = production_actions.do_add_category_location_option(args.category, args.location_id)
+    print(f"Added location {result['location_id']} as an option for category '{result['category']}'.")
+
+
+def cmd_remove_category_location_option(args: argparse.Namespace) -> None:
+    result = production_actions.do_remove_category_location_option(args.category, args.location_id)
+    print(f"Removed location {result['location_id']} from category '{result['category']}''s options.")
+
+
+def cmd_list_category_locations(args: argparse.Namespace) -> None:
+    result = production_actions.do_list_category_locations()
+    assigned, options = result["assigned"], result["options"]
+    if not assigned and not options:
+        print("No category locations configured.")
+        return
+    for category in JOB_CATEGORIES:
+        active = assigned.get(category)
+        active_str = f"active: {active}" if active is not None else "active: -"
+        opts = options.get(category, [])
+        opts_str = f"options: {', '.join(str(o) for o in opts)}" if opts else "options: -"
+        print(f"  {category:<14} {active_str:<20} {opts_str}")
 
 
 def cmd_set_manual_stock(args: argparse.Namespace) -> None:
@@ -927,6 +989,47 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "t1-bpc-invention-needs", help="T1-blueprint(-or-relic)-only slice of invention-logistics"
     ).set_defaults(func=cmd_t1_bpc_invention_needs)
+
+    sub.add_parser(
+        "logistics-status",
+        help="per job-category material needed vs. available at its assigned location, with pull-from hints",
+    ).set_defaults(func=cmd_logistics_status)
+
+    sub.add_parser(
+        "distribution-recommendations",
+        help="what to move from the configured distribution source to whichever category is short",
+    ).set_defaults(func=cmd_distribution_recommendations)
+
+    p_set_cat_loc = sub.add_parser(
+        "set-category-location", help="assign a job category to build its jobs at a structure"
+    )
+    p_set_cat_loc.add_argument("category", choices=JOB_CATEGORIES)
+    p_set_cat_loc.add_argument("location_id", type=int)
+    p_set_cat_loc.set_defaults(func=cmd_set_category_location)
+
+    p_clear_cat_loc = sub.add_parser(
+        "clear-category-location", help="clear a job category's assigned location"
+    )
+    p_clear_cat_loc.add_argument("category", choices=JOB_CATEGORIES)
+    p_clear_cat_loc.set_defaults(func=cmd_clear_category_location)
+
+    p_add_cat_opt = sub.add_parser(
+        "add-category-location-option", help="add a location to a job category's quick-switch option list"
+    )
+    p_add_cat_opt.add_argument("category", choices=JOB_CATEGORIES)
+    p_add_cat_opt.add_argument("location_id", type=int)
+    p_add_cat_opt.set_defaults(func=cmd_add_category_location_option)
+
+    p_remove_cat_opt = sub.add_parser(
+        "remove-category-location-option", help="remove a location from a job category's quick-switch option list"
+    )
+    p_remove_cat_opt.add_argument("category", choices=JOB_CATEGORIES)
+    p_remove_cat_opt.add_argument("location_id", type=int)
+    p_remove_cat_opt.set_defaults(func=cmd_remove_category_location_option)
+
+    sub.add_parser(
+        "list-category-locations", help="list every job category's assigned location and quick-switch options"
+    ).set_defaults(func=cmd_list_category_locations)
 
     p_set_manual = sub.add_parser(
         "set-manual-stock", help="record a manually-counted stock override, on top of ESI-synced assets"

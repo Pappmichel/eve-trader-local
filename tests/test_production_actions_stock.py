@@ -120,3 +120,64 @@ def test_do_t1_bpc_invention_needs_requires_invention_location(db):
     from eve_trader_local.production.config import ProductionConfig
     with pytest.raises(ActionError):
         actions.do_t1_bpc_invention_needs(ProductionConfig(invention_location_id=None))
+
+
+def test_do_get_logistics_status_requires_stock_targets(db):
+    _seed_sde()
+    with pytest.raises(ActionError):
+        actions.do_get_logistics_status()
+
+
+def test_do_get_distribution_recommendations_requires_stock_targets(db):
+    _seed_sde()
+    with pytest.raises(ActionError):
+        actions.do_get_distribution_recommendations()
+
+
+# ------------------------------------------------- category locations (issue #4)
+def test_set_category_location(db):
+    result = actions.do_set_category_location("Reactions", 1000000000001)
+    assert result == {"category": "Reactions", "location_id": 1000000000001}
+    assert storage.load_category_locations() == {"Reactions": 1000000000001}
+    # setting a category active also remembers it as a quick-switch option
+    assert storage.load_category_location_options() == {"Reactions": [1000000000001]}
+
+
+def test_set_category_location_unknown_category_raises(db):
+    with pytest.raises(ActionError):
+        actions.do_set_category_location("Not A Real Category", 1000000000001)
+
+
+def test_clear_category_location(db):
+    actions.do_set_category_location("Reactions", 1000000000001)
+    result = actions.do_clear_category_location("Reactions")
+    assert result == {"category": "Reactions"}
+    assert storage.load_category_locations() == {}
+    # the quick-switch option itself is untouched by clearing the active assignment
+    assert storage.load_category_location_options() == {"Reactions": [1000000000001]}
+
+
+def test_add_and_remove_category_location_option(db):
+    result = actions.do_add_category_location_option("Reactions", 1000000000001)
+    assert result == {"category": "Reactions", "location_id": 1000000000001}
+    assert storage.load_category_location_options() == {"Reactions": [1000000000001]}
+
+    result = actions.do_remove_category_location_option("Reactions", 1000000000001)
+    assert result == {"category": "Reactions", "location_id": 1000000000001}
+    assert storage.load_category_location_options() == {}
+
+
+def test_add_category_location_option_unknown_category_raises(db):
+    with pytest.raises(ActionError):
+        actions.do_add_category_location_option("Not A Real Category", 1000000000001)
+
+
+def test_list_category_locations(db):
+    actions.do_set_category_location("Reactions", 1000000000001)
+    actions.do_add_category_location_option("Reactions", 1000000000002)
+
+    result = actions.do_list_category_locations()
+    assert result == {
+        "assigned": {"Reactions": 1000000000001},
+        "options": {"Reactions": [1000000000001, 1000000000002]},
+    }

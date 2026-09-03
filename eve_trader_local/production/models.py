@@ -216,20 +216,45 @@ class ShipMarginRow:
 
 @dataclass
 class LogisticsRow:
-    """One row of engine.invention_logistics: how much of a datacore/
-    decryptor/T1-BPC-or-relic is needed for the currently-recommended
-    invention attempts vs. what's sitting at cfg.invention_location_id.
-    Reuses the parent's own row shape (needed/available/missing at one
-    location) - the parent's pull_from_location_id/pull_from_available
-    fields are dropped here, since those exist only for its multi-structure
-    Logistik tab (see engine.py's module docstring), which this repo doesn't
-    have an equivalent of."""
+    """One row of either engine.logistics_status (multi-structure: how much
+    of a direct material a job_category's currently-planned jobs need at the
+    structure that category is assigned to, netted against what's actually
+    there) or engine.invention_logistics (single-location: datacores/
+    decryptors/T1-BPC-or-relic needed vs. what's at cfg.invention_location_id,
+    category="Invention"). Ported from the parent's own row shape in full
+    (previously a reduced single-location subset here, before a single
+    eve-trader-local tenant's own multi-character/multi-structure setup made
+    the parent's full shape apply here too - see SYNC.md) - pull_from_
+    location_id/pull_from_available are the GitHub issue #4 "where to pull a
+    shortfall from" hint logistics_status computes; invention_logistics never
+    sets them (nothing else configured shares its one invention station)."""
+    category: str
+    location_id: int
     type_id: int
     type_name: str
-    location_id: int
     needed: float
     available: float
     missing: float
+    pull_from_location_id: Optional[int] = None
+    pull_from_available: Optional[float] = None
+
+
+@dataclass
+class DistributionRow:
+    """One row of engine.distribution_recommendations' Distribution section
+    (GitHub issue #4): a recommended move of `quantity` units of `type_id`
+    from the configured distribution source
+    (ProductionConfig.distribution_source_location_id, falls back to
+    home_location_id) to a category's own assigned station, where that
+    category is currently short. See engine.distribution_recommendations -
+    when the source can't cover every shortfall for the same item, the
+    largest one is covered first."""
+    type_id: int
+    type_name: str
+    from_location_id: int
+    to_category: str
+    to_location_id: int
+    quantity: float
 
 
 @dataclass

@@ -92,8 +92,8 @@ from .constants import (
     STORYLINE_META_GROUP_ID, SUBSYSTEM_GROUP_IDS, rig_security_multiplier, structure_rig_multiplier,
 )
 from .models import (
-    AssetPlanJob, BuildJobEntry, BuyListEntry, InventionNeedRow, InventionResult, InventoryRow, LogisticsRow,
-    MarketStatusRow, ShipMarginRow, SpecialOrderLineItem, StockOverlapWarningRow, T1BpcInventionNeedRow,
+    AssetPlanJob, BuildJobEntry, BuyListEntry, DistributionRow, InventionNeedRow, InventionResult, InventoryRow,
+    LogisticsRow, MarketStatusRow, ShipMarginRow, SpecialOrderLineItem, StockOverlapWarningRow, T1BpcInventionNeedRow,
 )
 
 # Guards against an unexpected SDE cycle (a blueprint whose materials
@@ -1724,6 +1724,215 @@ def _scan_ship_margins(cfg: ProductionConfig) -> list[dict]:
     return results
 
 
+# ------------------------------------------------------- multi-structure logistics
+def _direct_material_mult(type_id: int, activity: str, decryptor_name: Optional[str],
+                          cfg: ProductionConfig, blueprint_id: Optional[int] = None) -> float:
+    """Material multiplier (ME) for `type_id`'s own blueprint, for logistics
+    purposes - independent of live prices, unlike _tech_ii_mods (which also
+    has to pick the best decryptor *economically*): here the decryptor is
+    already decided (BuildJobEntry.decryptor, from the last computed plan),
+    so this just looks up its ME bonus directly (constants.DECRYPTORS)
+    instead of re-running the pricing pipeline for a value that never
+    actually depended on it. Falls back to the flat activity baseline
+    (_activity_mods, which itself prefers your owned BPO's real ME if
+    `blueprint_id` is given and you own it) for Tech I/Reaction, or Tech II
+    with no decryptor decided (no invention recipe found - mirrors
+    _tech_ii_mods' own fallback)."""
+    if activity == "Tech II" and decryptor_name is not None and decryptor_name in DECRYPTORS:
+        structure_profile = _structure_profile("Tech II", type_id)
+        structure_type, rig_tier = _structure_rig(structure_profile, cfg)
+        security_multiplier = _security_multiplier_for(structure_profile, cfg)
+        _, me_mult, _ = structure_rig_multiplier(structure_type, rig_tier, security_multiplier)
+        return (1 - DECRYPTORS[decryptor_name].me_bonus / 100) * me_mult
+    material_mult, _, _ = _activity_mods(activity, type_id, cfg, {}, blueprint_id)
+    return material_mult
+
+
+def _category_material_demand(build_list: list[BuildJobEntry], category_locations: dict[str, int],
+                              cfg: ProductionConfig) -> dict[tuple[str, int], float]:
+    """Shared by logistics_status and distribution_recommendations: how much
+    of each *direct* material (one level only, not the full recursive chain
+    _expand_all walks) is needed for every currently-planned job in each
+    category that has an assigned location. Categories with no assigned
+    location are skipped entirely (nothing to net against either way)."""
+    demand: dict[tuple[str, int], float] = {}
+    for entry in build_list:
+        category = entry.job_category
+        if category is None or category not in category_locations:
+            continue
+        activity, bp = classify_activity(entry.type_id)
+        if bp is None:
+            continue
+        blueprint_id, activity_id, _ = bp
+        material_mult = _direct_material_mult(entry.type_id, activity, entry.decryptor, cfg, blueprint_id)
+        for material_id, base_qty in storage.get_blueprint_materials(blueprint_id, activity_id):
+            qty = _material_qty(base_qty, material_mult, entry.job_runs)
+            if qty > 0:
+                key = (category, material_id)
+                demand[key] = demand.get(key, 0.0) + qty
+    return demand
+
+
+def logistics_status(build_list: list[BuildJobEntry], cfg: ProductionConfig = PRODUCTION_CONFIG) -> list[LogisticsRow]:
+    """Per job_category, how much of each direct material is needed for every
+    currently-planned job in that category, netted against what's actually
+    sitting at the structure the user assigned that category to (storage.
+    job_category_locations) - not stock *anywhere* the way _current_stock's
+    corp-wide default works, since the whole point here is "is it at *this
+    specific* structure". Reads `build_list` from an already-computed plan
+    rather than recomputing one - this doesn't need its own ESI/pricing
+    round-trip, just the already-synced asset snapshot (storage.
+    esi_stock_at_location, a plain DB read) against whatever plan is already
+    on screen.
+
+    A row with missing > 0 also gets a "pull from" hint (GitHub issue #4) -
+    the configured warehouse (cfg.distribution_source_location_id, falling
+    back to home_location_id - "the home market acts as the central
+    warehouse" by default) if it has any stock, else whichever *other*
+    configured category location currently has surplus (stock beyond its
+    own demand), largest surplus first. Purely informational/independent
+    per row - unlike distribution_recommendations below, this doesn't need
+    to track stock already "claimed" by an earlier row, since it's just a
+    hint for the user to read, not a set of recommendations that must sum
+    to no more than what's actually there."""
+    category_locations = storage.load_category_locations()
+    demand = _category_material_demand(build_list, category_locations, cfg)
+    warehouse_location_id = cfg.distribution_source_location_id or cfg.home_location_id
+    other_locations_by_category = {
+        category: sorted({loc for cat, loc in category_locations.items() if cat != category})
+        for category in category_locations
+    }
+
+    rows = []
+    for (category, material_id), needed in demand.items():
+        location_id = category_locations[category]
+        available = storage.esi_stock_at_location(material_id, location_id)
+        missing = max(0.0, needed - available)
+        sde_type = storage.get_sde_type(material_id)
+        name = sde_type[2] if sde_type else str(material_id)
+
+        pull_from_location_id = None
+        pull_from_available = None
+        if missing > 0:
+            if warehouse_location_id is not None and warehouse_location_id != location_id:
+                warehouse_stock = storage.esi_stock_at_location(material_id, warehouse_location_id)
+                if warehouse_stock > 0:
+                    pull_from_location_id, pull_from_available = warehouse_location_id, warehouse_stock
+            if pull_from_location_id is None:
+                for other_location_id in other_locations_by_category[category]:
+                    if other_location_id == warehouse_location_id:
+                        continue
+                    other_category = next(c for c, loc in category_locations.items() if loc == other_location_id)
+                    other_demand = demand.get((other_category, material_id), 0.0)
+                    stock = storage.esi_stock_at_location(material_id, other_location_id)
+                    surplus = max(0.0, stock - other_demand)
+                    if surplus > 0 and (pull_from_available is None or surplus > pull_from_available):
+                        pull_from_location_id, pull_from_available = other_location_id, surplus
+
+        rows.append(LogisticsRow(
+            category=category, location_id=location_id, type_id=material_id, type_name=name,
+            needed=needed, available=available, missing=missing,
+            pull_from_location_id=pull_from_location_id, pull_from_available=pull_from_available,
+        ))
+    rows.sort(key=lambda r: (r.category, -r.missing))
+    return rows
+
+
+def distribution_recommendations(build_list: list[BuildJobEntry],
+                                 cfg: ProductionConfig = PRODUCTION_CONFIG) -> list[DistributionRow]:
+    """What to move from the configured distribution source (cfg.
+    distribution_source_location_id, falling back to home_location_id - "the
+    home market acts as the central warehouse" by default, GitHub issue #4)
+    to whichever category stations are currently short of it. When several
+    categories are short on the same material and the source can't cover all
+    of them, the largest shortfall is covered first (source stock is
+    limited) - consistent with logistics_status' own -missing sort.
+
+    Whatever the warehouse still can't cover after that is filled from other
+    category locations' surplus (stock beyond their own demand), largest
+    surplus first, same "warehouse first, then surplus" priority as
+    logistics_status' own pull-from hint. Unlike that hint (informational,
+    independent per row), the recommendations here are a commitment - two
+    categories short of the same material can't both be recommended to pull
+    more than a shared surplus location actually has, so surplus_remaining
+    tracks what's already been committed to an earlier category in this same
+    material's loop and decrements as it's consumed (confirmed real bug in
+    an earlier attempt at this: recomputing each category's candidate
+    surplus independently, straight off the unmodified DB stock figure,
+    let two categories each get recommended the same units).
+
+    Returns [] if no distribution source is configured at all."""
+    source_location_id = cfg.distribution_source_location_id or cfg.home_location_id
+    if source_location_id is None:
+        return []
+
+    category_locations = storage.load_category_locations()
+    demand = _category_material_demand(build_list, category_locations, cfg)
+
+    shortfalls_by_material: dict[int, list[tuple[str, float]]] = {}
+    for (category, material_id), needed in demand.items():
+        location_id = category_locations[category]
+        if location_id == source_location_id:
+            continue  # already sourced locally, nothing to move
+        available = storage.esi_stock_at_location(material_id, location_id)
+        missing = max(0.0, needed - available)
+        if missing > 0:
+            shortfalls_by_material.setdefault(material_id, []).append((category, missing))
+
+    rows = []
+    for material_id, shortfalls in shortfalls_by_material.items():
+        remaining_from_warehouse = storage.esi_stock_at_location(material_id, source_location_id)
+        sde_type = storage.get_sde_type(material_id)
+        name = sde_type[2] if sde_type else str(material_id)
+
+        # Phase 1: cover as much as possible from the warehouse, largest
+        # shortfall first. Whatever's left per category (0 if the warehouse
+        # fully covered it) carries into phase 2.
+        still_needed: dict[str, float] = {}
+        for category, missing in sorted(shortfalls, key=lambda x: -x[1]):
+            move_qty = min(missing, remaining_from_warehouse) if remaining_from_warehouse > 0 else 0.0
+            if move_qty > 0:
+                remaining_from_warehouse -= move_qty
+                rows.append(DistributionRow(
+                    type_id=material_id, type_name=name, from_location_id=source_location_id,
+                    to_category=category, to_location_id=category_locations[category], quantity=move_qty,
+                ))
+            left = missing - move_qty
+            if left > 0:
+                still_needed[category] = left
+
+        # Phase 2: whatever the warehouse couldn't cover, pull from other
+        # category locations' surplus - largest remaining shortfall first,
+        # largest remaining surplus first within that.
+        surplus_remaining: dict[int, float] = {}
+        for category, needed_qty in sorted(still_needed.items(), key=lambda x: -x[1]):
+            candidate_ids = []
+            for other_category, other_location_id in category_locations.items():
+                if other_location_id == source_location_id or other_location_id == category_locations[category]:
+                    continue
+                if other_location_id not in surplus_remaining:
+                    other_demand = demand.get((other_category, material_id), 0.0)
+                    other_stock = storage.esi_stock_at_location(material_id, other_location_id)
+                    surplus_remaining[other_location_id] = max(0.0, other_stock - other_demand)
+                candidate_ids.append(other_location_id)
+            for loc_id in sorted(candidate_ids, key=lambda l: -surplus_remaining[l]):
+                if needed_qty <= 0:
+                    break
+                avail = surplus_remaining[loc_id]
+                if avail <= 0:
+                    continue
+                move_qty = min(needed_qty, avail)
+                surplus_remaining[loc_id] -= move_qty
+                needed_qty -= move_qty
+                rows.append(DistributionRow(
+                    type_id=material_id, type_name=name, from_location_id=loc_id,
+                    to_category=category, to_location_id=category_locations[category], quantity=move_qty,
+                ))
+
+    rows.sort(key=lambda r: r.quantity, reverse=True)
+    return rows
+
+
 # --------------------------------------------------------------- invention logistics
 def invention_logistics(invention_list: list[InventionNeedRow],
                         cfg: ProductionConfig = PRODUCTION_CONFIG) -> list[LogisticsRow]:
@@ -1783,7 +1992,7 @@ def invention_logistics(invention_list: list[InventionNeedRow],
         sde_type = storage.get_sde_type(type_id)
         name = sde_type[2] if sde_type else str(type_id)
         rows.append(LogisticsRow(
-            type_id=type_id, type_name=name, location_id=cfg.invention_location_id,
+            category="Invention", type_id=type_id, type_name=name, location_id=cfg.invention_location_id,
             needed=needed, available=available, missing=max(0.0, needed - available),
         ))
     rows.sort(key=lambda r: -r.missing)

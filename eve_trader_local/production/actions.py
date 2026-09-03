@@ -16,6 +16,7 @@ from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError
 from . import engine, esi_sync
 from .config import PRODUCTION_CONFIG, ProductionConfig
+from .constants import JOB_CATEGORIES
 from .models import BuildCandidate, ShipMarginRow, SpecialOrder
 
 SYNC_SCOPE = "production"
@@ -165,6 +166,69 @@ def do_t1_bpc_invention_needs(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict
         raise ActionError("No invention_location_id configured.")
     plan = do_plan_production(cfg)
     return {"rows": engine.t1_bpc_invention_needs(plan["invention_list"], cfg)}
+
+
+# --------------------------------------------------- multi-structure logistics
+# GitHub issue #4, ported from the parent's Logistik tab - see storage.py's
+# job_category_locations table comment and engine.py's logistics_status/
+# distribution_recommendations docstrings for the underlying computation.
+
+def do_get_logistics_status(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Per job_category, how much of each direct material the currently-
+    planned jobs in that category need at the structure it's assigned to,
+    netted against what's actually there, plus a "pull from" hint where
+    short. Re-runs plan_production to get the current build_list (no cached
+    "last plan" table exists here yet, same shape as do_invention_logistics
+    above)."""
+    plan = do_plan_production(cfg)
+    return {"rows": engine.logistics_status(plan["build_list"], cfg)}
+
+
+def do_get_distribution_recommendations(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """What to move from the configured distribution source to whichever
+    category stations are currently short, for the currently-planned jobs.
+    Same re-run-the-planner shape as do_get_logistics_status above."""
+    plan = do_plan_production(cfg)
+    return {"rows": engine.distribution_recommendations(plan["build_list"], cfg)}
+
+
+def do_set_category_location(category: str, location_id: int) -> dict:
+    """Assigns `category` (one of constants.JOB_CATEGORIES) to build its jobs
+    at `location_id`. Also remembers it as a quick-switch option - setting a
+    category active shouldn't require a separate "save as option" step too
+    (matches the parent's own do_set_category_location)."""
+    if category not in JOB_CATEGORIES:
+        raise ActionError(f"Unknown category '{category}'. Options: {', '.join(JOB_CATEGORIES)}")
+    storage.upsert_category_location(category, location_id)
+    storage.add_category_location_option(category, location_id)
+    return {"category": category, "location_id": location_id}
+
+
+def do_clear_category_location(category: str) -> dict:
+    storage.delete_category_location(category)
+    return {"category": category}
+
+
+def do_add_category_location_option(category: str, location_id: int) -> dict:
+    if category not in JOB_CATEGORIES:
+        raise ActionError(f"Unknown category '{category}'. Options: {', '.join(JOB_CATEGORIES)}")
+    storage.add_category_location_option(category, location_id)
+    return {"category": category, "location_id": location_id}
+
+
+def do_remove_category_location_option(category: str, location_id: int) -> dict:
+    storage.delete_category_location_option(category, location_id)
+    return {"category": category, "location_id": location_id}
+
+
+def do_list_category_locations() -> dict:
+    """Every job_category's currently-assigned location plus its saved
+    quick-switch options (storage.category_location_options) - no parent
+    equivalent action exists (the parent's frontend reads both tables via
+    two separate endpoints), but this repo's CLI wants one combined listing."""
+    assigned = storage.load_category_locations()
+    options = storage.load_category_location_options()
+    return {"assigned": assigned, "options": options}
 
 
 # ---------------------------------------------------------------- manual stock

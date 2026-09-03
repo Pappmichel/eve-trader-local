@@ -36,11 +36,12 @@ jobs, plus a real manual-stock override and an invention-needs list), a
 second readiness-focused asset-optimized planner (which jobs are startable
 right now vs. blocked on an upstream shortfall), cheap market-status/
 stock-value reads, invention-location logistics (datacores/decryptors/T1 BPCs
-needed vs. on hand), and Special Orders (ad-hoc one-off build orders priced
-with the same buy-vs-build engine, optionally netted against synced stock).
-Only the parent's multi-structure Logistik-tab helpers
-(`logistics_status`/`distribution_recommendations`) are left out, as a
-deliberate single-structure simplification rather than a gap — see `SYNC.md`.
+needed vs. on hand), the multi-structure Logistik-tab helpers (per-category
+material logistics status with pull-from hints, plus distribution
+recommendations for moving stock from a configured warehouse — or another
+category's own surplus — to whichever category is short), and Special Orders
+(ad-hoc one-off build orders priced with the same buy-vs-build engine,
+optionally netted against synced stock).
 
 The **Doctrine** tool (fitted-ship contract/stockpile tracking against EFT
 fittings) is fully ported and runnable from the CLI too: paste-and-store EFT
@@ -147,7 +148,10 @@ What exists:
   `discover-ship-margins`, `set-stock-target`, `remove-stock-target`,
   `list-stock-targets`, `plan-production`, `plan-asset-optimized`,
   `market-status`, `stock-value`, `invention-logistics`,
-  `t1-bpc-invention-needs`, `set-manual-stock`, `remove-manual-stock`,
+  `t1-bpc-invention-needs`, `logistics-status`, `distribution-recommendations`,
+  `set-category-location`, `clear-category-location`,
+  `add-category-location-option`, `remove-category-location-option`,
+  `list-category-locations`, `set-manual-stock`, `remove-manual-stock`,
   `list-manual-stock`, `create-special-order`, `list-special-orders`,
   `update-special-order`, `remove-special-order`, `compute-special-order`,
   `pipeline`,
@@ -170,11 +174,6 @@ Explicitly **not** done yet:
 - Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test
   and a working end-to-end proof, not the intended interface — see
   `ROADMAP.md` for the planned menu/tab navigation model.
-- Production's multi-structure Logistik-tab helpers
-  (`logistics_status`/`distribution_recommendations`) — per-category
-  structure assignments, a genuine multi-structure routing concept with no
-  single-structure equivalent; judged out of scope rather than deferred, see
-  `SYNC.md`.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
