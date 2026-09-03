@@ -40,6 +40,7 @@ from . import actions, config, sde, storage, updater
 from .auth import TokenManager
 from .doctrine import actions as doctrine_actions
 from .doctrine import config as doctrine_config
+from .refining import config as refining_config
 from .doctrine import esi_sync as doctrine_esi_sync
 from .errors import ActionError
 from .paths import config_path, db_path
@@ -91,6 +92,9 @@ def cmd_config(args: argparse.Namespace) -> None:
         print(f"  {key} = {value!r}")
     print("\n[doctrine]")
     for key, value in vars(doctrine_config.reload()).items():
+        print(f"  {key} = {value!r}")
+    print("\n[refining]")
+    for key, value in vars(refining_config.reload()).items():
         print(f"  {key} = {value!r}")
 
 
@@ -606,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     # only patch, since the same gap applied to Production too.
     production_config.reload()
     doctrine_config.reload()
+    refining_config.reload()
     try:
         args.func(args)
     except ActionError as e:

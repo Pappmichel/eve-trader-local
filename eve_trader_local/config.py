@@ -146,6 +146,14 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     # required build margin above 100% is a legitimate setting here too.
     "min_margin": (0, None),
     "min_daily_profit": (0, None),
+    # Ore & Minerals (refining/config.py's RefiningConfig - listed here for
+    # the same reason as Production's fields above). Skill levels capped at
+    # 5, EVE's own hard ceiling. security_status is the SDE's raw true-sec
+    # scale, -1.0 (deep null/wormhole) .. 1.0 (highsec).
+    "reprocessing_skill_level": (0, 5),
+    "reprocessing_efficiency_skill_level": (0, 5),
+    "scrapmetal_processing_skill_level": (0, 5),
+    "security_status": (-1.0, 1.0),
 }
 
 

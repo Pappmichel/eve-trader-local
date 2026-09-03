@@ -795,6 +795,33 @@ def get_sde_type(type_id: int, path: Optional[Path] = None) -> Optional[tuple]:
     return tuple(row) if row else None
 
 
+def get_portion_size(type_id: int, path: Optional[Path] = None) -> Optional[int]:
+    """The SDE's `portionSize` for `type_id` (GitHub issue #90, "Ore &
+    Minerals") - reprocessing rounds down to whole portions before applying
+    yield% (see refining/reprocessing.py's apply_reprocessing_yield), not a
+    continuous approximation. None if the type isn't in the SDE cache or
+    predates this field."""
+    row = get_sde_type(type_id, path)
+    return row[8] if row else None
+
+
+def get_type_materials(type_id: int, path: Optional[Path] = None) -> list[tuple[int, float]]:
+    """Returns [(material_type_id, quantity_per_portion), ...] from the SDE's
+    invTypeMaterials.csv - GitHub issue #90's "Ore & Minerals" feature. Used
+    by both the ore/ice and scrapmetal reprocessing paths (refining/
+    reprocessing.py) - both are "type -> material yield" lookups against this
+    same table. `quantity_per_portion` is the raw SDE quantity, before any
+    yield% or portion-size-batch rounding is applied (see
+    apply_reprocessing_yield). Not cached - see get_sde_type's own docstring
+    for why."""
+    with connect(path) as conn:
+        return conn.execute(
+            "SELECT material_type_id, quantity FROM sde_type_materials WHERE type_id = ? "
+            "ORDER BY material_type_id",
+            (type_id,),
+        ).fetchall()
+
+
 def get_type_category(type_id: int, path: Optional[Path] = None) -> Optional[int]:
     """The SDE category_id for a type (via its group), or None if either the
     type or its group is missing from the cache. Category - not group - is

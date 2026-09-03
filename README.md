@@ -20,7 +20,7 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine works end to end (CLI); Ore&Minerals not started
+## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine works end to end (CLI); Ore&Minerals started
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
@@ -41,6 +41,13 @@ fittings under a named doctrine, sync outstanding contracts + synced-asset
 stock from ESI, match each contract against your fitting definitions, and get
 a contract/stockpile deviation report with red/yellow/green ampel status.
 Only the Shopping List's build-vs-buy comparison is still missing.
+
+The **Ore & Minerals** tool (ore/ice import-refine-sell, reprocessing quotes,
+mineral shopping list) has just started: the fixed reprocessing-yield game
+constants and the real ore/ice + scrapmetal yield math (structure/rig/
+security/skill/implant bonuses, whole-portion batching, per-material
+rounding) are ported and tested, plus the inventory-paste parser. No pricing,
+candidate discovery, shopping-list optimizer or CLI command yet.
 
 What exists:
 
