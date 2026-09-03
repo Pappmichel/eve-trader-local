@@ -81,11 +81,17 @@ database on it, so "whoever has the tool may use it" is just the plain
 single-user reality, not a policy decision enforced in code. Already
 reflected in `SYNC.md`'s "Never sync" list (`access_gate.py`, `admin.py`).
 
-## Deferred (not started, tracked here so it isn't lost)
+## Native GUI — started 2026-09-04
 
-- Native GUI (PyQt/PySide) replacing the CLI as the primary interface —
-  discussed and decided in favor of "real native," not Electron/Tauri.
-  **Navigation model** (researched 2026-09-02, jEveAssets as the reference
+Decided in favor of "real native," not Electron/Tauri, and PySide6 over
+PyQt6 specifically (same Qt bindings, LGPL rather than GPL/commercial —
+matters once this is packaged and redistributed as a binary, see Stage 2
+above). Foundation is in `eve_trader_local/gui/` — see README.md's own "Native
+GUI" section for what exists (menu-bar/tab-workspace shell, the
+background-thread action runner, one full reference view for Trading's
+Shortlist) and what's still a placeholder (every other tool's menu).
+
+**Navigation model** (researched 2026-09-02, jEveAssets as the reference
   point — a Java out-of-game asset manager, embedded SQLite, no server,
   which is the closest existing example of this repo's own target shape):
   jEveAssets does *not* keep every view permanently visible as its own tab
@@ -108,10 +114,17 @@ reflected in `SYNC.md`'s "Never sync" list (`access_gate.py`, `admin.py`).
   reasonably be sub-sections of one "Blueprints" view rather than three
   separate menu entries) rather than reproducing every existing route as
   its own item.
-- Actual Trading/Production/Doctrine/Ore&Minerals business logic — see
-  `SYNC.md`'s candidate table for what ports over and from where.
-- Packaging/installer once there's a GUI to package (feeds directly into
-  Stage 2 of the update mechanism above).
+
+## Deferred (not started, tracked here so it isn't lost)
+
+- The rest of the GUI's views — Production, Doctrine, Ore & Minerals,
+  Station Trading all still show an empty "(not built yet)" tool menu; only
+  Trading's Shortlist exists so far. Build one tool at a time, following
+  `views/trading_shortlist.py`'s pattern (group several CLI commands into
+  one tab per the navigation model above, call the same `do_*` actions,
+  never storage/network clients directly).
+- Packaging/installer once there's a full GUI to package (feeds directly
+  into Stage 2 of the update mechanism above).
 
 ## Android (standalone, no server) — noted, not decided (2026-09-03)
 

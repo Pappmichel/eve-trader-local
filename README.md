@@ -17,7 +17,7 @@ native desktop GUI and a plain installer.
 | Storage | Postgres + RLS | embedded SQLite (WAL) |
 | Users | multi-tenant | exactly one, no tenant concept |
 | Process model | uvicorn + Vite dev server | none — commands run and exit |
-| UI | React web app | CLI today, native GUI planned |
+| UI | React web app | CLI + native GUI (PySide6, in progress) |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
 ## Status: Trading pipeline works end to end (CLI); Production backend fully done (CLI); Doctrine works end to end (CLI); Ore & Minerals works end to end (CLI); Station Trading works end to end (CLI)
@@ -169,11 +169,39 @@ What exists:
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
 
+## Native GUI (started 2026-09-04)
+
+`eve_trader_local/gui/` — a PySide6 desktop app, `eve-trader-local-gui`
+(`pip install -e ".[gui]"` to pull in PySide6, a deliberate optional extra
+so the CLI/backend keep their otherwise dependency-light footprint). Follows
+the jEveAssets-style navigation model from `ROADMAP.md`: one top-level menu
+per tool, each listing its views as menu items; picking one opens it as a
+closable tab in a shared workspace, and opening an already-open view
+re-focuses its tab instead of duplicating it. Every view calls the exact
+same `do_*` actions the CLI calls — never storage or the network clients
+directly — so the CLI and GUI can never drift apart, matching the parent
+repo's own CLI/API-both-call-actions.py rule.
+
+Foundation built so far: `main.py` (entry point), `main_window.py` (the
+menu-bar/tab-workspace shell), `workers.py` (runs a `do_*` call on a
+background `QThread` so a multi-second ESI/Goonmetrics round trip never
+freezes the window — see its module docstring for the `_ResultBridge`
+mechanism that makes the worker-thread-to-UI-thread handoff actually safe,
+a real PySide gotcha it works around), and `views/base.py` (`BaseView`/
+`TableView`, the shared "busy state + error display + table population"
+shape most views need). One real view exists end-to-end as the reference
+implementation: `views/trading_shortlist.py` (Trading's Shortlist tab —
+loads the last saved snapshot immediately on open with no network call,
+then Refresh/Refresh & Prune buttons wired to `do_refresh_shortlist`/
+`do_refresh_and_prune_candidates`). Every other tool's menu exists with a
+"(not built yet)" placeholder; building out their views (grouping several
+of today's CLI commands into one tab each, per this file's own navigation
+model — not a 1:1 CLI-command mirror) is the immediate next step.
+
 Explicitly **not** done yet:
 
-- Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test
-  and a working end-to-end proof, not the intended interface — see
-  `ROADMAP.md` for the planned menu/tab navigation model.
+- The rest of the GUI's views (Production, Doctrine, Ore & Minerals,
+  Station Trading — only Trading's Shortlist exists so far).
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.

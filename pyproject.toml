@@ -19,9 +19,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+# PySide6, not PyQt6: same Qt bindings, but LGPL rather than GPL/commercial -
+# the right license for a tool that may eventually be packaged and
+# redistributed as a binary (see ROADMAP.md's Stage 2 update mechanism).
+gui = ["PySide6>=6.7"]
 
 [project.scripts]
 eve-trader-local = "eve_trader_local.cli:main"
+eve-trader-local-gui = "eve_trader_local.gui.main:main"
 
 [tool.setuptools.packages.find]
 include = ["eve_trader_local*"]
