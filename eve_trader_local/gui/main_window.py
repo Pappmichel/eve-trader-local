@@ -26,6 +26,9 @@ from .views.production_logistics import LogisticsView
 from .views.production_margins_market import MarginsMarketView
 from .views.production_planner import ProductionPlannerView
 from .views.production_special_orders import SpecialOrdersView
+from .views.refining_mineral_shopping_list import MineralShoppingListView
+from .views.refining_ore_shortlist import OreShortlistView
+from .views.refining_reprocessing_quote import ReprocessingQuoteView
 from .views.trading_shortlist import TradingShortlistView
 
 # Declarative menu structure: {tool menu label: [(view menu-item label, view class), ...]}.
@@ -50,7 +53,11 @@ _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
         ("Shopping List", ShoppingListView),
         ("Contract History", ContractHistoryView),
     ],
-    "Ore && Minerals": [],
+    "Ore && Minerals": [
+        ("Ore Shortlist", OreShortlistView),
+        ("Reprocessing Quote", ReprocessingQuoteView),
+        ("Mineral Shopping List", MineralShoppingListView),
+    ],
     "Station Trading": [],
 }
 

@@ -53,6 +53,13 @@ def test_doctrine_menu_lists_its_views_not_the_placeholder(qapp, db):
     assert labels == ["Fittings", "Stockpile Status", "Shopping List", "Contract History"]
 
 
+def test_ore_and_minerals_menu_lists_its_views_not_the_placeholder(qapp, db):
+    from eve_trader_local.gui.main_window import _TOOL_MENUS
+
+    labels = [label for label, _view_class in _TOOL_MENUS["Ore && Minerals"]]
+    assert labels == ["Ore Shortlist", "Reprocessing Quote", "Mineral Shopping List"]
+
+
 def test_opening_same_view_twice_refocuses_not_duplicates(qapp, db):
     from eve_trader_local.gui.main_window import MainWindow
     from eve_trader_local.gui.views.trading_shortlist import TradingShortlistView
