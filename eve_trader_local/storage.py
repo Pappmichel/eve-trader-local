@@ -437,6 +437,22 @@ CREATE TABLE IF NOT EXISTS sde_refresh_state (
     refreshed_at TEXT NOT NULL,
     dump_etag    TEXT
 );
+
+-- What the stock-aware planner (production/engine.py's plan_production) plans
+-- for: "I want `quantity` units of `type_id` kept in stock". Deliberately
+-- simpler than the parent repo's three-way backup/home-market/Jita-market
+-- split (three independent target quantities plus live sell-order-listing
+-- nets against each) - the user confirmed the simplest useful shape instead:
+-- one target quantity, plus jita_target as the whole "where would this sell"
+-- distinction, feeding engine._build_margin's home-vs-Jita dispatch. Nothing
+-- here tracks live market-listing volume the way the parent's
+-- sell_order_qty_at_location/_in_region checks do.
+CREATE TABLE IF NOT EXISTS stock_targets (
+    type_id     INTEGER PRIMARY KEY,
+    type_name   TEXT NOT NULL,
+    quantity    REAL NOT NULL,
+    jita_target INTEGER NOT NULL DEFAULT 0
+);
 """
 
 # Insert order matters only for readability; the tuple arity per table is what
@@ -1433,3 +1449,31 @@ def get_owned_bpo_best_me_te(blueprint_type_id: int,
     if best_me is None or best_te is None:
         return None
     return (best_me, best_te)
+
+
+# -------------------------------------------------------------- stock targets
+def upsert_stock_target(type_id: int, type_name: str, quantity: float, jita_target: bool = False,
+                        path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO stock_targets (type_id, type_name, quantity, jita_target) VALUES (?,?,?,?) "
+            "ON CONFLICT(type_id) DO UPDATE SET type_name=excluded.type_name, "
+            "quantity=excluded.quantity, jita_target=excluded.jita_target",
+            (type_id, type_name, quantity, int(jita_target)),
+        )
+
+
+def delete_stock_target(type_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM stock_targets WHERE type_id = ?", (type_id,))
+
+
+def load_stock_targets(path: Optional[Path] = None) -> list[tuple[int, str, float, bool]]:
+    """(type_id, type_name, quantity, jita_target) for every configured stock
+    target - see engine.plan_production and discover_build_candidates's
+    existing_target_ids exclusion."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT type_id, type_name, quantity, jita_target FROM stock_targets"
+        ).fetchall()
+    return [(r[0], r[1], r[2], bool(r[3])) for r in rows]

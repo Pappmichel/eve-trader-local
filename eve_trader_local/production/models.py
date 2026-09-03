@@ -42,6 +42,47 @@ class InventionResult:
 
 
 @dataclass
+class InventoryRow:
+    """Target vs. current stock for one configured stock target - see
+    engine.plan_production. current_stock is ESI-derived assets/incoming
+    industry jobs (engine._current_stock) - no manual-stock override table
+    exists here (see SYNC.md)."""
+    type_id: int
+    type_name: str
+    activity: str        # "Reaction" | "Tech I" | "Tech II" | "Input" (no known blueprint)
+    target: float
+    current_stock: float
+    total_missing: float
+
+
+@dataclass
+class BuyListEntry:
+    type_id: int
+    type_name: str
+    quantity: float      # already net of on-hand stock - see on_hand_pct
+    unit_price: Optional[float]
+    total_price: Optional[float]
+    # % of this item's *total* demand (quantity + whatever's already covered
+    # by stock) already covered - 0-100.
+    on_hand_pct: float
+    buy_from: Optional[str]
+
+
+@dataclass
+class BuildJobEntry:
+    type_id: int
+    type_name: str
+    blueprint_type_id: int
+    activity: str         # "Manufacturing" | "Reaction"
+    quantity: float
+    job_runs: int
+    unit_build_cost: Optional[float]
+    decryptor: Optional[str]
+    job_category: Optional[str]
+    margin: Optional[float]  # engine.margin_home - Production sells only at home, never Jita
+
+
+@dataclass
 class BuildCandidate:
     """One manufacturable SDE item where building clearly beats buying right
     now - see engine.discover_build_candidates. Ranked by

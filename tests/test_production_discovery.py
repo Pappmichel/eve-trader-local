@@ -156,6 +156,16 @@ def test_top_n_slices_the_already_ranked_results(discovery_sde):
     assert results[0]["type_id"] == GOOD_ITEM  # highest potential_daily_profit
 
 
+def test_existing_stock_targets_are_excluded_from_discovery(discovery_sde):
+    from eve_trader_local import storage
+
+    storage.upsert_stock_target(GOOD_ITEM, "Good Widget", 10.0)
+
+    results = engine.discover_build_candidates(_cfg(), client=_FakeGoonmetricsClient())
+
+    assert GOOD_ITEM not in {r["type_id"] for r in results}
+
+
 def test_do_discover_build_candidates_raises_without_an_sde_cache(db):
     from eve_trader_local.production.actions import do_discover_build_candidates
     from eve_trader_local.errors import ActionError

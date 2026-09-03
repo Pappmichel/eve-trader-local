@@ -129,9 +129,22 @@ eve-trader-local reconcile-trades           # match realized buy/sell pairs, com
 eve-trader-local auth --role producer       # authorize an industry character (assets/blueprints/jobs)
 eve-trader-local sync-esi                   # refresh what your producers own: assets, BPOs, jobs
 eve-trader-local discover-build-candidates  # scan the SDE for build-vs-buy opportunities
+eve-trader-local set-stock-target <item> <qty> [--jita]  # keep <qty> units of an item in stock
+eve-trader-local remove-stock-target <item>              # stop tracking a stock target
+eve-trader-local list-stock-targets                      # show every configured stock target
+eve-trader-local plan-production            # stock-aware buy/build plan against your stock targets
 eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile
 eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
 ```
+
+`<item>` above accepts either a numeric type_id or an exact (case-insensitive)
+item name, e.g. `set-stock-target Tritanium 50000` or `set-stock-target 34
+50000`. `--jita` marks a target as sold at Jita rather than at home - it
+feeds the buy-vs-build margin gate (`margin_jita` vs `margin_home`), it
+doesn't change where `plan-production` recommends sourcing materials from.
+`plan-production` needs `sync-esi` to have run at least once for accurate
+current-stock numbers (otherwise every target reads as fully unstocked) and
+live ESI/Goonmetrics access for pricing, same as `discover-build-candidates`.
 
 `update` is manual and confirmed interactively, and refuses to run unless the
 checkout is exactly a clean install (on `main`, no uncommitted or untracked

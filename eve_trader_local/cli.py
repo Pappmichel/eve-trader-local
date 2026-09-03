@@ -12,6 +12,8 @@
     eve-trader-local reconcile-trades
     eve-trader-local sync-esi
     eve-trader-local discover-build-candidates
+    eve-trader-local set-stock-target <item> <quantity> [--jita] / remove-stock-target <item> / list-stock-targets
+    eve-trader-local plan-production
     eve-trader-local pipeline [--rebuild-universe]
     eve-trader-local check-update / update
 
@@ -230,6 +232,50 @@ def cmd_discover_build_candidates(args: argparse.Namespace) -> None:
               f"{r.potential_daily_profit:>15,.0f} ISK/day")
 
 
+def cmd_set_stock_target(args: argparse.Namespace) -> None:
+    result = production_actions.do_add_stock_target(args.item, args.quantity, jita_target=args.jita)
+    where = "Jita" if result["jita_target"] else "home"
+    print(f"Stock target set: {result['type_name']} -> {result['quantity']:,.0f} units (sells at {where}).")
+
+
+def cmd_remove_stock_target(args: argparse.Namespace) -> None:
+    result = production_actions.do_remove_stock_target(args.item)
+    print(f"Removed stock target: {result['type_name']}")
+
+
+def cmd_list_stock_targets(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_stock_targets()["rows"]
+    if not rows:
+        print("No stock targets configured.")
+        return
+    for type_id, type_name, quantity, jita_target in rows:
+        where = "Jita" if jita_target else "home"
+        print(f"  {type_name:<40} {quantity:>10,.0f} units   sells at {where}")
+
+
+def cmd_plan_production(args: argparse.Namespace) -> None:
+    print("Planning production against configured stock targets (this can take a while)...")
+    plan = production_actions.do_plan_production()
+    print("\nInventory:")
+    for row in plan["inventory"]:
+        print(f"  {row.type_name:<40} target {row.target:>10,.0f}   on hand {row.current_stock:>10,.0f}   "
+              f"missing {row.total_missing:>10,.0f}")
+    if plan["build_list"]:
+        print("\nBuild List:")
+        for row in plan["build_list"]:
+            margin = f"{row.margin * 100:6.1f}%" if row.margin is not None else "     -"
+            print(f"  {row.type_name:<40} {row.job_runs:>6,} runs   "
+                  f"cost/unit {row.unit_build_cost or 0:>14,.2f}   margin {margin}")
+    if plan["buy_list"]:
+        print("\nBuy List:")
+        for row in plan["buy_list"]:
+            total = f"{row.total_price:>16,.0f}" if row.total_price is not None else "               -"
+            print(f"  {row.type_name:<40} {row.quantity:>10,.0f} units   {total} ISK   "
+                  f"on hand {row.on_hand_pct:5.1f}%")
+    if not plan["build_list"] and not plan["buy_list"]:
+        print("\nEvery stock target is already fully covered.")
+
+
 def cmd_pipeline(args: argparse.Namespace) -> None:
     results = actions.do_pipeline(safe=args.safe, rebuild_universe=args.rebuild_universe)
     for step, result in results.items():
@@ -307,6 +353,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_discover.add_argument("--top-n", dest="top_n", type=int, default=200,
                             help="max rows to return, already ranked (default 200)")
     p_discover.set_defaults(func=cmd_discover_build_candidates)
+
+    p_set_target = sub.add_parser(
+        "set-stock-target", help="set (or update) how many units of an item to keep in stock"
+    )
+    p_set_target.add_argument("item", help="type_id or exact item name")
+    p_set_target.add_argument("quantity", type=float, help="target quantity to keep in stock")
+    p_set_target.add_argument("--jita", action="store_true",
+                              help="this target sells at Jita, not home (feeds the build-margin gate)")
+    p_set_target.set_defaults(func=cmd_set_stock_target)
+
+    p_remove_target = sub.add_parser("remove-stock-target", help="remove a stock target")
+    p_remove_target.add_argument("item", help="type_id or exact item name")
+    p_remove_target.set_defaults(func=cmd_remove_stock_target)
+
+    sub.add_parser(
+        "list-stock-targets", help="list every configured stock target"
+    ).set_defaults(func=cmd_list_stock_targets)
+
+    sub.add_parser(
+        "plan-production", help="run the stock-aware buy/build planner against configured stock targets"
+    ).set_defaults(func=cmd_plan_production)
 
     p_pipeline = sub.add_parser("pipeline", help="run the daily workflow (each step isolated)")
     p_pipeline.add_argument("--safe", dest="safe", action="store_true", default=True,

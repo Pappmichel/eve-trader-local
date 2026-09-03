@@ -55,16 +55,25 @@ index multiplication. The ISK fee is then `job_cost_rate x EIV`, where EIV
 times its ESI-published adjusted_price (a CCP-regulated valuation, decoupled
 from real market prices) - never the ME-reduced quantity at market prices.
 
-Deliberately not ported yet (each needs machinery this repo doesn't have -
-see SYNC.md): the stock-aware planner (`plan_production`/`_expand_all`/
-`_base_runs`, which net demand against ESI-derived assets and manual stock),
-the logistics/distribution helpers, and the bought-blueprint-copy cost term
-`_unit_cost` folds in from a manual BPC cost table.
+The stock-aware planner (`plan_production`, below) nets each configured
+stock target (storage.stock_targets, a genuinely new local concept - see
+SYNC.md) against ESI-derived owned assets/incoming industry jobs
+(`_current_stock`), then expands the whole set of targets' bills of
+materials together (`_expand_all`/`_base_runs`), pooling demand for any
+component shared across targets rather than sizing each target's tree in
+isolation. Deliberately simpler than the parent's version in two ways
+(documented where each applies below): no manual-stock override table (ESI
+sync is the only stock source), and stock targets carry one target quantity
+plus a home-vs-Jita sell flag, not the parent's three-way backup/home-
+market/Jita-market split with its own live sell-order-listing nets.
+Still not ported: the logistics/distribution helpers and the bought-
+blueprint-copy cost term `_unit_cost` folds in from a manual BPC cost table.
 
-`discover_build_candidates` (below) is the one piece of the parent's
-build-candidate-discovery/planner pairing that IS ported here - it needs
-none of the stock-target machinery above, only the cost/margin core this
-module already has.
+`discover_build_candidates` (below) needs none of the stock-target
+machinery above, only the cost/margin core this module already has - it now
+excludes every configured stock target from its scan (`existing_target_ids`),
+matching the parent: an item already deliberately tracked doesn't need to be
+independently "discovered" too.
 """
 from __future__ import annotations
 
@@ -82,7 +91,7 @@ from .constants import (
     SCC_SURCHARGE_RATE, SHIP_SIZE_GROUP_IDS, STORYLINE_META_GROUP_ID, SUBSYSTEM_GROUP_IDS,
     rig_security_multiplier, structure_rig_multiplier,
 )
-from .models import InventionResult
+from .models import BuildJobEntry, BuyListEntry, InventionResult, InventoryRow
 
 # Guards against an unexpected SDE cycle (a blueprint whose materials
 # transitively include its own product): every recursive walk here stops here.
@@ -604,6 +613,22 @@ def margin_jita(type_id: int, build_cost: Optional[float], jita: dict,
     return _sell_margin(jita_quote.sell * (1 - cfg.market_fees) - export_cost, build_cost)
 
 
+def _build_margin(type_id: int, build_cost: Optional[float], jita_target: bool,
+                  home: dict, jita: dict, cfg: ProductionConfig) -> Optional[float]:
+    """Margin if you built and sold one unit of `type_id` right now - gates
+    whether a *stock target* is worth building at all, separate from the
+    plain build-cheaper-than-buy sourcing comparison _buy_or_build_decision
+    makes for every BOM node (that's about minimizing cost for something
+    you're building anyway; this is "should you even bother"). A stock
+    target flagged jita_target uses margin_jita (sell at Jita); everything
+    else uses margin_home. Restored (2026-09-03) now that storage.
+    stock_targets exists to feed it - see SYNC.md; was deferred with the
+    planner that owns stock targets until then."""
+    if jita_target:
+        return margin_jita(type_id, build_cost, jita, cfg)
+    return margin_home(type_id, build_cost, home, cfg)
+
+
 # --------------------------------------------------- bill-of-materials walks
 def structural_material_closure(seed_type_ids: Iterable[int]) -> set[int]:
     """Every type_id reachable from `seed_type_ids` through blueprint materials,
@@ -750,9 +775,11 @@ def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsC
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists yet - see SYNC.md
 
+    existing_target_ids = {t[0] for t in storage.load_stock_targets()}
     sde_rows = storage.load_sde_types_with_market_group()
     buildable = [(type_id, type_name, meta_level, activity, bp)
                  for type_id, type_name, _volume, _market_group_id, meta_level, _category_id in sde_rows
+                 if type_id not in existing_target_ids
                  for activity, bp in [classify_activity(type_id)] if bp is not None]
 
     # Bounded, price-agnostic universe to price up front - see pricing.
@@ -814,3 +841,299 @@ def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsC
 
     results.sort(key=lambda r: r.get("potential_daily_profit", 0.0), reverse=True)
     return results
+
+
+# ------------------------------------------------------------- stock planner
+def _current_stock(type_id: int, bp: Optional[tuple[int, int, float]]) -> float:
+    """Owned stock right now: ESI-derived assets everywhere (character + corp,
+    every location - see storage.esi_stock_at_location's own docstring for why
+    "do I own this anywhere" is corp-wide, not scoped to one curated
+    structure) plus industry jobs already in progress, whose eventual output
+    counts as "as good as in stock" for sizing purposes. No manual-stock
+    override table exists in this repo (the parent's storage.manual_stock has
+    no local equivalent - see SYNC.md), so ESI sync is the only stock
+    source; a producer character who hasn't synced yet sees current_stock=0
+    everywhere, same as the parent's own current_stock formula minus its
+    manual term."""
+    total = storage.esi_stock_at_location(type_id, None)
+    incoming = storage.esi_incoming_industry_qty(type_id)
+    if incoming["runs"] and bp is not None:
+        _, _, product_qty = bp
+        total += incoming["runs"] * product_qty
+    return total
+
+
+def _base_runs(cfg: ProductionConfig, home: dict, jita: dict, cost_memo: dict[int, Optional[float]],
+               selected_decryptors: dict[int, str], t2_memo: dict[int, T2Mods],
+               cost_indices: CostIndices, adjusted_prices: dict[int, float],
+               stock_targets: list[tuple[int, str, float, bool]]) -> dict[int, float]:
+    """Pure structural run count per type_id, completely ignoring current
+    stock and never buffered by overbuild: if every stock target's full
+    target quantity had to be built from absolute zero, how many runs of each
+    item would that take. Used only as a *stable* sizing baseline for
+    _expand_all's overbuild buffer - it must not shrink just because some
+    stock happens to be on hand right now, and must not itself compound level
+    over level (see _expand_all's docstring for why a naive multiplicative
+    buffer would)."""
+    base_runs: dict[int, float] = {}
+
+    def expand(type_id: int, quantity: float, depth: int = 0) -> None:
+        """Recurses down the BOM, accumulating each type_id's total run count
+        into the enclosing `base_runs` (pooled across every branch that needs
+        it, same "pool demand, don't double count" shape _expand_all uses) -
+        stops at a bought leaf or MAX_DEPTH."""
+        if quantity <= 0 or depth >= MAX_DEPTH:
+            return
+        activity, bp = classify_activity(type_id)
+        _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
+        decision = _buy_or_build_decision(type_id, cfg, home, jita, {}, cost_memo, bp, depth)
+        if decision == "Buy" or bp is None:
+            return
+        blueprint_id, activity_id, product_qty = bp
+        runs = math.ceil(quantity / product_qty)
+        base_runs[type_id] = base_runs.get(type_id, 0.0) + runs
+        material_mult, _, _ = _material_mult_for(type_id, activity, bp, cfg, home, jita,
+                                                  selected_decryptors, t2_memo, {})
+        for material_id, base_qty in storage.get_blueprint_materials(blueprint_id, activity_id):
+            expand(material_id, _material_qty(base_qty, material_mult, runs), depth + 1)
+
+    for type_id, _type_name, quantity, _jita_target in stock_targets:
+        expand(type_id, quantity)
+    return base_runs
+
+
+def _parent_base_runs_for_buffer(type_id: int, base_runs: dict[int, float],
+                                 buffered_parents: set[int]) -> float:
+    """The overbuild-buffer baseline to use for `type_id`'s materials *this*
+    round: base_runs[type_id] (its whole-tree, stock-oblivious aggregate run
+    count - see _base_runs) the *first* time type_id is processed as a
+    parent across the whole call, 0.0 every later time. Mutates
+    `buffered_parents` as a side effect (marks type_id buffered).
+
+    Prevents double-counting: a widely-shared component can legitimately
+    reappear as a parent in a *later* round (reached at a different BOM depth
+    from a different stock target) - without this guard, that reappearance
+    would read the same whole-tree aggregate fresh again and add a second
+    full buffer on top of the first."""
+    if type_id in buffered_parents:
+        return 0.0
+    buffered_parents.add(type_id)
+    return base_runs.get(type_id, 0.0)
+
+
+def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dict, jita: dict,
+                cost_memo: dict[int, Optional[float]], selected_decryptors: dict[int, str],
+                t2_memo: dict[int, T2Mods], stock_used: dict[int, float], base_runs: dict[int, float],
+                gross_demand: Optional[dict[int, float]] = None,
+                ) -> tuple[dict[int, float], dict[tuple[int, int, int], int]]:
+    """Resolves every stock target's `seed_missing` quantity into buy_totals
+    ({type_id: qty}) and build_runs ({(blueprint_id, activity_id,
+    product_type_id): runs}), using the buy-vs-build decisions already
+    computed in cost_memo.
+
+    `gross_demand`, if given, is mutated in place with each material's total
+    *pre-stock-netting* pooled demand, accumulated across every round - used
+    by plan_production for the Buy List's "on hand %" column. Seed it with
+    each top-level stock target's own gross quantity before calling this, so
+    a type_id that's *both* a stock target and a shared material downstream
+    gets one correctly-combined total.
+
+    Processed breadth-first, level by level (one dict of pooled per-type_id
+    quantities per round) rather than depth-first per stock target/edge -
+    required, not just a style choice: a shared material (e.g. a reaction
+    input feeding a dozen different Tech II components) must be decided on
+    and expanded *once*, using its *total* pooled demand, not once per parent
+    edge that happens to reach it.
+
+    Each material's target = gross pooled demand (base_qty x material_mult x
+    runs, summed across every parent claiming it this round) + an overbuild
+    buffer (cfg.component_overbuild x base_qty x material_mult x
+    base_runs[parent], summed the same way, deliberately from parents' *base*
+    runs rather than their final total runs) - this avoids what a naive
+    target = gross_demand * (1 + overbuild) would do: since gross_demand
+    already carries the previous level's buffer, multiplying it *again* would
+    compound the buffer exponentially with recursion depth.
+
+    `stock_used` is a running ledger (seeded by the caller for top-level
+    stock targets, mutated here for everything below them) so a component
+    needed by two different branches doesn't have the same physical stock
+    counted against both of them.
+
+    No manual Build/Buy override table exists here (see SYNC.md), so every
+    node's sourcing decision is purely cost-based (`_buy_or_build_decision`
+    with an empty override dict) and every material gets the full overbuild
+    buffer - the parent skips the buffer for a manually-forced Buy, which has
+    no local equivalent to skip for."""
+    buy_totals: dict[int, float] = {}
+    build_runs: dict[tuple[int, int, int], int] = {}
+    buffered_parents: set[int] = set()
+
+    jobs_this_level: dict[int, float] = {tid: q for tid, q in seed_missing.items() if q > 0}
+    depth = 0
+    while jobs_this_level and depth < MAX_DEPTH:
+        next_level: dict[int, float] = {}
+
+        for type_id, quantity in jobs_this_level.items():
+            activity, bp = classify_activity(type_id)
+            decision = _buy_or_build_decision(type_id, cfg, home, jita, {}, cost_memo, bp, depth)
+            if decision == "Buy" or bp is None:
+                buy_totals[type_id] = buy_totals.get(type_id, 0) + quantity
+                continue
+
+            blueprint_id, activity_id, product_qty = bp
+            runs = math.ceil(quantity / product_qty)
+            key = (blueprint_id, activity_id, type_id)
+            build_runs[key] = build_runs.get(key, 0) + runs
+
+            material_mult, _, _ = _material_mult_for(type_id, activity, bp, cfg, home, jita,
+                                                      selected_decryptors, t2_memo, {})
+            parent_base_runs = _parent_base_runs_for_buffer(type_id, base_runs, buffered_parents)
+            for material_id, base_qty in storage.get_blueprint_materials(blueprint_id, activity_id):
+                gross_needed = _material_qty(base_qty, material_mult, runs)
+                if gross_needed <= 0:
+                    continue
+                buffer = cfg.component_overbuild * base_qty * material_mult * parent_base_runs
+                next_level[material_id] = next_level.get(material_id, 0.0) + gross_needed + buffer
+
+        jobs_this_level = {}
+        for material_id, target in next_level.items():
+            if target <= 0:
+                continue
+            if gross_demand is not None:
+                gross_demand[material_id] = gross_demand.get(material_id, 0.0) + target
+            _, m_bp = classify_activity(material_id)
+            available = max(0.0, _current_stock(material_id, m_bp) - stock_used.get(material_id, 0.0))
+            consumed = min(target, available)
+            stock_used[material_id] = stock_used.get(material_id, 0.0) + consumed
+            net_needed = target - consumed
+            if net_needed > 0:
+                jobs_this_level[material_id] = jobs_this_level.get(material_id, 0.0) + net_needed
+
+        depth += 1
+
+    return buy_totals, build_runs
+
+
+def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Runs the full Stock Targets -> Inventory -> Buy/Build pipeline. Returns
+    a dict with 'inventory' (InventoryRow list), 'buy_list' (BuyListEntry
+    list, sorted by total price desc) and 'build_list' (BuildJobEntry list,
+    sorted by job_runs desc).
+
+    A stock target's demand only feeds the Buy List/Build List at all if
+    building it clears cfg.min_margin (via _build_margin) - matching the
+    parent's confirmed behavior: if building isn't profitable, buying isn't
+    assumed to be either, since both ultimately compete on the same sell
+    price. InventoryRow.total_missing still reports the real shortfall
+    regardless of margin; this gate only controls whether that shortfall
+    turns into an actual buy/build recommendation.
+
+    Deliberately not ported (see module docstring/SYNC.md): the parent's
+    invention-needs list (needs storage.available_blueprint_copies/
+    get_blueprint_time, neither of which exist here), the per-run job_time
+    column (same reason), and plan_asset_optimized (a second, readiness-
+    focused Bauliste that additionally splits "physically on hand right now"
+    from "current_stock incl. incoming jobs" - a real distinct feature, not a
+    variant of this one, judged out of scope for this port: it needs its own
+    on-hand-only stock ledger this repo has no manual-stock table to make
+    meaningfully different from plan_production's own numbers yet)."""
+    stock_targets = storage.load_stock_targets()
+    cost_memo: dict[int, Optional[float]] = {}
+    t2_memo: dict[int, T2Mods] = {}
+    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+
+    priced_type_ids = list(structural_material_closure(t[0] for t in stock_targets))
+    home = pricing.home_prices(priced_type_ids, cfg)
+    jita = pricing.jita_prices(priced_type_ids)
+
+    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
+    esi_client = ESIClient()
+    cost_indices: CostIndices = {
+        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
+        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+    }
+    try:
+        adjusted_prices = esi_client.get_adjusted_prices()
+    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
+        adjusted_prices = {}
+
+    inventory: list[InventoryRow] = []
+    # Ledger of how much of each type_id's own current stock has already been
+    # counted toward some demand this run - threaded through _expand_all (see
+    # its docstring) so a component needed by two different branches doesn't
+    # have the same physical stock counted against both. Also seeded below
+    # for top-level stock targets.
+    stock_used: dict[int, float] = {}
+    # Stock-oblivious sizing baseline for _expand_all's overbuild buffer,
+    # computed once over every stock target's full target quantity, not just
+    # what's currently missing.
+    base_runs = _base_runs(cfg, home, jita, cost_memo, selected_decryptors, t2_memo,
+                           cost_indices, adjusted_prices, stock_targets)
+    seed_missing: dict[int, float] = {}
+    gross_demand: dict[int, float] = {}
+
+    for type_id, type_name, quantity, jita_target in stock_targets:
+        activity, bp = classify_activity(type_id)
+        current_stock = _current_stock(type_id, bp)
+        missing = max(0.0, quantity - current_stock)
+        stock_used[type_id] = stock_used.get(type_id, 0.0) + min(current_stock, quantity)
+        inventory.append(InventoryRow(
+            type_id=type_id, type_name=type_name, activity=activity,
+            target=quantity, current_stock=current_stock, total_missing=missing,
+        ))
+        if missing <= 0:
+            continue
+
+        _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
+        skip_due_to_margin = False
+        if bp is not None:
+            margin = _build_margin(type_id, cost_memo.get(type_id), jita_target, home, jita, cfg)
+            if margin is not None and margin < cfg.min_margin:
+                skip_due_to_margin = True
+        if skip_due_to_margin:
+            continue
+
+        seed_missing[type_id] = missing
+        gross_demand[type_id] = gross_demand.get(type_id, 0.0) + quantity
+
+    buy_totals, build_runs = _expand_all(seed_missing, cfg, home, jita, cost_memo, selected_decryptors,
+                                         t2_memo, stock_used, base_runs, gross_demand)
+
+    buy_list = []
+    for type_id, quantity in buy_totals.items():
+        sde_type = storage.get_sde_type(type_id)
+        name = sde_type[2] if sde_type else str(type_id)
+        volume = _haul_volume(type_id, cfg)
+        unit_price = pricing.buy_price(type_id, home, jita, volume, cfg)
+        gross = gross_demand.get(type_id, quantity)
+        on_hand_pct = max(0.0, min(100.0, (gross - quantity) / gross * 100)) if gross > 0 else 0.0
+        buy_list.append(BuyListEntry(
+            type_id=type_id, type_name=name, quantity=quantity, unit_price=unit_price,
+            total_price=(unit_price * quantity) if unit_price is not None else None,
+            on_hand_pct=on_hand_pct, buy_from=pricing.buy_source(type_id, home, jita, volume, cfg),
+        ))
+    buy_list.sort(key=lambda e: e.total_price or 0, reverse=True)
+
+    build_list = []
+    for (blueprint_id, activity_id, product_type_id), runs in build_runs.items():
+        sde_type = storage.get_sde_type(product_type_id)
+        name = sde_type[2] if sde_type else str(product_type_id)
+        activity_label = "Reaction" if activity_id == ACTIVITY_REACTION else "Manufacturing"
+        bp = storage.get_blueprint_for_product(product_type_id)
+        product_qty = bp[2] if bp else 1
+        decryptor_name = t2_memo[product_type_id][2] if product_type_id in t2_memo else None
+        unit_cost = cost_memo.get(product_type_id)
+        build_list.append(BuildJobEntry(
+            type_id=product_type_id, type_name=name, blueprint_type_id=blueprint_id,
+            activity=activity_label, quantity=runs * product_qty, job_runs=runs,
+            unit_build_cost=unit_cost, decryptor=decryptor_name,
+            job_category=job_category(product_type_id),
+            # margin_home, not margin_jita - Production sells only at home,
+            # never Jita (see CLAUDE.md); this is the real sell-side margin
+            # for the item as actually built, independent of _build_margin's
+            # own gate above (which decides *whether* to build at all).
+            margin=margin_home(product_type_id, unit_cost, home, cfg),
+        ))
+    build_list.sort(key=lambda e: e.job_runs, reverse=True)
+
+    return {"inventory": inventory, "buy_list": buy_list, "build_list": build_list}

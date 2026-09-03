@@ -105,6 +105,30 @@ def test_no_tenant_columns_anywhere(db):
             assert not any("tenant" in c for c in cols), (table, cols)
 
 
+def test_stock_target_round_trip(db):
+    storage.upsert_stock_target(34, "Tritanium", 1000.0, jita_target=False)
+    storage.upsert_stock_target(35, "Pyerite", 500.0, jita_target=True)
+
+    rows = {r[0]: r for r in storage.load_stock_targets()}
+    assert rows[34] == (34, "Tritanium", 1000.0, False)
+    assert rows[35] == (35, "Pyerite", 500.0, True)
+
+
+def test_stock_target_upsert_overwrites_existing_row(db):
+    storage.upsert_stock_target(34, "Tritanium", 1000.0, jita_target=False)
+    storage.upsert_stock_target(34, "Tritanium", 2000.0, jita_target=True)
+
+    rows = storage.load_stock_targets()
+    assert rows == [(34, "Tritanium", 2000.0, True)]
+
+
+def test_delete_stock_target_is_idempotent(db):
+    storage.upsert_stock_target(34, "Tritanium", 1000.0)
+    storage.delete_stock_target(34)
+    storage.delete_stock_target(34)  # no error on a second delete
+    assert storage.load_stock_targets() == []
+
+
 def test_explicit_path_argument_is_honoured(tmp_path):
     other = tmp_path / "other.sqlite3"
     storage.init_db(other)

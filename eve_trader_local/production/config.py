@@ -115,6 +115,13 @@ class ProductionConfig:
     # kept.
     min_daily_profit: float = 0.0
 
+    # -- Stock-aware planner (engine.plan_production/_expand_all) --
+    # Extra buffer kept for build-chain components below a stock target, sized
+    # off each component's stock-oblivious whole-tree run count (_base_runs) so
+    # intermediate materials keep a cushion instead of being planned down to
+    # exactly zero. 0.7 matches the parent's own default.
+    component_overbuild: float = 0.7
+
 
 _STRUCTURE_TYPE_FIELDS = ("reaction_structure_type", "component_structure_type",
                           "manufacturing_structure_type")
