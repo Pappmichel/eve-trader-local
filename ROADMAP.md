@@ -112,3 +112,35 @@ reflected in `SYNC.md`'s "Never sync" list (`access_gate.py`, `admin.py`).
   `SYNC.md`'s candidate table for what ports over and from where.
 - Packaging/installer once there's a GUI to package (feeds directly into
   Stage 2 of the update mechanism above).
+
+## Android (standalone, no server) — noted, not decided (2026-09-03)
+
+Confirmed requirement: the tool should eventually also run as a standalone
+Android app (no backend server involved — the same "whoever runs it owns
+the data" model as desktop, just on a phone). Explicitly **not** started
+yet, and deliberately decided to build the PyQt/PySide desktop GUI first,
+then revisit the Android approach once that exists to build from — not a
+rejection of the requirement, just a sequencing call (a working desktop GUI
+first gives something concrete to base an Android UI decision on, and lets
+the Android work reuse whatever `eve_trader_local` GUI-adjacent code turns
+out to be shareable).
+
+Options discussed and left open, to revisit at that point:
+- **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
+  `eve_trader_local` directly with no porting; the only option with real
+  code-sharing across both, but Toga is less mature/polished than PyQt.
+- **Chaquopy** — native Android UI (Kotlin/Compose) with an embedded
+  CPython (Chaquopy) calling `eve_trader_local` as a library; best native
+  Android feel, but means maintaining two separate UI codebases (PyQt for
+  desktop, Kotlin for Android) against the one shared Python core.
+- **Web-frontend + on-device server** — reuse eve-trader's React frontend,
+  run the FastAPI backend locally on the Android device itself (e.g. via
+  Termux or an embedded Python server), wrap in a WebView (Capacitor).
+  Reuses the most existing code but is the most fragile on Android
+  (background-service/lifecycle restrictions make an always-on local server
+  awkward on mobile).
+
+Whichever is chosen, it inherits this repo's existing constraints
+unchanged: no server this project operates, SQLite as the local store, and
+the same offline-first/user-owns-their-data model already established for
+desktop.
