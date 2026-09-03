@@ -29,10 +29,11 @@ reconciliation all run for real from the CLI, not just as isolated modules.
 The **Production** tool (Tech I/II/Reaction manufacturing planning) has its
 SDE-driven classification, buy-vs-build cost/margin math, invention math,
 producer ESI sync (blueprints/assets/industry jobs, including real owned-BPO
-ME/TE), and build-candidate discovery all ported and runnable from the CLI.
-Still missing: the stock-aware planner (needs manual stock-target data
-entry — a separate future step) and the web-only logistics/distribution
-views.
+ME/TE), build-candidate discovery, and a stock-aware planner (plain CLI
+stock-target entry, netted against synced assets/incoming jobs) all ported
+and runnable from the CLI. Still missing: the web-only logistics/
+distribution views and the readiness-focused asset-optimized planner
+variant.
 
 What exists:
 
