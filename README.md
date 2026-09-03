@@ -111,7 +111,8 @@ What exists:
   `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`,
   `parse-fitting`, `create-doctrine`, `list-doctrines`, `add-fitting`,
   `list-fittings`, `sync-doctrine`, `validate-contracts`, `doctrine-status`,
-  `stockpile-status`, `shopping-list`, `list-contracts`, `add-ore-to-shortlist`,
+  `stockpile-status`, `shopping-list`, `list-contracts`, `contract-history`,
+  `add-ore-to-shortlist`,
   `refresh-ore-shortlist`, `list-ore-shortlist`, `quote-reprocessing`,
   `set-mineral-requirement`, `remove-mineral-requirement`,
   `list-mineral-requirements`, `solve-shopping-list`.
@@ -200,6 +201,7 @@ eve-trader-local doctrine-status [doctrine_id]    # contract + stockpile ampel s
 eve-trader-local stockpile-status [doctrine_id]   # aggregated stockpile shortfalls
 eve-trader-local shopping-list [doctrine_id]      # shortfalls priced Build vs. Buy-C-J vs. Buy-Jita
 eve-trader-local list-contracts [--status]        # list every synced Doctrine contract
+eve-trader-local contract-history [doctrine_id]   # permanent log of finished contract sales - who bought what and when
 
 eve-trader-local add-ore-to-shortlist        # add every compressed ore/ice type from the SDE
 eve-trader-local refresh-ore-shortlist       # re-price every Ore Shortlist item against live market data

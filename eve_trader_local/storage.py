@@ -487,12 +487,15 @@ CREATE INDEX IF NOT EXISTS idx_special_order_items_order ON special_order_items 
 -- plain TEXT UUIDs generated in Python (str(uuid.uuid4())) rather than
 -- Postgres's gen_random_uuid() default.
 --
--- Deliberately not ported: doctrine_contract_history (GitHub issue #19's
--- separate append-only "who bought what and when" log) - a real feature, but
--- additive on top of the contract sync/matching this step exists to prove
--- end-to-end; left for a future pass, same "documented, not started" status
--- as the Shopping List (needs DoctrineConfig.import_cost_per_m3 plus
--- Production's build-cost engine, no consumer here yet either).
+-- doctrine_contract_history (GitHub issue #19): a permanent, append-only
+-- "who bought what and when" log - independent of doctrine_contracts' own
+-- active/wholesale-replaced snapshot, so a finished contract's record
+-- survives that snapshot dropping it (and survives it eventually expiring
+-- out of ESI's own contract list entirely). fitting_name/hull_type_id are a
+-- denormalized snapshot captured when the contract finished, not a live
+-- join - stays meaningful even if that fitting is later edited/deactivated/
+-- deleted. Single-user, so contract_id alone is the PK (same reasoning as
+-- doctrine_contracts above).
 
 CREATE TABLE IF NOT EXISTS doctrines (
     doctrine_id TEXT PRIMARY KEY,
@@ -589,6 +592,21 @@ CREATE TABLE IF NOT EXISTS doctrine_contract_deviations (
     PRIMARY KEY (contract_id, type_id, kind)
 );
 CREATE INDEX IF NOT EXISTS idx_doctrine_deviations_contract ON doctrine_contract_deviations (contract_id);
+
+CREATE TABLE IF NOT EXISTS doctrine_contract_history (
+    contract_id      INTEGER PRIMARY KEY,
+    source_role      TEXT NOT NULL,
+    fitting_id       TEXT,
+    fitting_name     TEXT,
+    hull_type_id     INTEGER,
+    title            TEXT,
+    price            REAL,
+    acceptor_id      INTEGER,
+    acceptor_name    TEXT,
+    date_issued      TEXT,
+    date_completed   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_contract_history_fitting ON doctrine_contract_history (fitting_id);
 
 -- Doctrine's own ESI-synced asset cache (Stockpile's Ist side) - kept
 -- separate from Production's character_assets/corp_assets so Doctrine works
@@ -2234,6 +2252,43 @@ def list_doctrine_contracts(fitting_id: Optional[str] = None, status: Optional[s
         params.append(status)
     with connect(path) as conn:
         return [tuple(r) for r in conn.execute(query, params).fetchall()]
+
+
+_CONTRACT_HISTORY_COLUMNS = ("contract_id", "source_role", "fitting_id", "fitting_name", "hull_type_id",
+                             "title", "price", "acceptor_id", "acceptor_name", "date_issued", "date_completed")
+
+
+def upsert_doctrine_contract_history(rows: list[tuple], path: Optional[Path] = None) -> None:
+    """GitHub issue #19 - rows matching _CONTRACT_HISTORY_COLUMNS. Upserted
+    (never wholesale-replaced, unlike doctrine_contracts' own snapshot) -
+    this table is permanent, append-only history: a contract only reaches a
+    FINISHED_CONTRACT_STATUSES status once, but ON CONFLICT still updates
+    rather than doing nothing, since a later sync might resolve an
+    acceptor_name that failed to resolve (e.g. a transient ESI error) the
+    first time it was recorded."""
+    if not rows:
+        return
+    set_clause = ", ".join(f"{c}=excluded.{c}" for c in _CONTRACT_HISTORY_COLUMNS if c != "contract_id")
+    with connect(path) as conn:
+        conn.executemany(
+            f"INSERT INTO doctrine_contract_history ({', '.join(_CONTRACT_HISTORY_COLUMNS)}) "
+            f"VALUES ({', '.join('?' for _ in _CONTRACT_HISTORY_COLUMNS)}) "
+            f"ON CONFLICT(contract_id) DO UPDATE SET {set_clause}",
+            rows,
+        )
+
+
+def load_doctrine_contract_history(path: Optional[Path] = None) -> list[tuple]:
+    """Most-recently-completed first; a history row with no date_completed at
+    all (shouldn't normally happen - ESI sets it the moment a contract
+    finishes - but the field is nullable in ESI's own model) sorts last
+    rather than first. SQLite's own NULLS LAST support (3.30+) is assumed -
+    same baseline this codebase already relies on elsewhere."""
+    with connect(path) as conn:
+        return [tuple(r) for r in conn.execute(
+            f"SELECT {', '.join(_CONTRACT_HISTORY_COLUMNS)} FROM doctrine_contract_history "
+            "ORDER BY date_completed DESC NULLS LAST"
+        ).fetchall()]
 
 
 def has_any_doctrine_synced_assets(path: Optional[Path] = None) -> bool:

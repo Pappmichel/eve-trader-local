@@ -26,7 +26,7 @@
     eve-trader-local sync-doctrine / validate-contracts
     eve-trader-local doctrine-status [doctrine_id] / stockpile-status [doctrine_id]
     eve-trader-local shopping-list [doctrine_id]
-    eve-trader-local list-contracts [--status]
+    eve-trader-local list-contracts [--status] / contract-history [doctrine_id]
     eve-trader-local add-ore-to-shortlist / refresh-ore-shortlist / list-ore-shortlist
     eve-trader-local quote-reprocessing <paste-file>
     eve-trader-local set-mineral-requirement <item> <qty> / list-mineral-requirements
@@ -535,6 +535,18 @@ def cmd_list_contracts(args: argparse.Namespace) -> None:
               f"{r['price'] or 0:>14,.0f} ISK")
 
 
+def cmd_contract_history(args: argparse.Namespace) -> None:
+    rows = doctrine_actions.do_contract_history(args.doctrine_id)["rows"]
+    if not rows:
+        print("No finished contracts recorded yet.")
+        return
+    for r in rows:
+        hull = r["hull_name"] or r["fitting_name"] or "-"
+        buyer = r["acceptor_name"] or (str(r["acceptor_id"]) if r["acceptor_id"] else "-")
+        completed = r["date_completed"] or "-"
+        print(f"  {r['contract_id']:<12} {hull:<30} {buyer:<25} {r['price'] or 0:>14,.0f} ISK   {completed}")
+
+
 def cmd_add_ore_to_shortlist(args: argparse.Namespace) -> None:
     result = refining_actions.do_add_ore_to_shortlist()
     print(f"Added {result['added']:,} candidate(s); {result['already_tracked']:,} already tracked.")
@@ -812,6 +824,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_list_contracts.add_argument("--status", default=None,
                                   help="filter by validation_status (valid/tolerable/unmatched/invalid)")
     p_list_contracts.set_defaults(func=cmd_list_contracts)
+
+    p_contract_history = sub.add_parser(
+        "contract-history", help="permanent log of finished Doctrine contract sales - who bought what and when"
+    )
+    p_contract_history.add_argument("doctrine_id", nargs="?", default=None)
+    p_contract_history.set_defaults(func=cmd_contract_history)
 
     sub.add_parser(
         "add-ore-to-shortlist", help="add every compressed ore/ice type from the SDE to the Ore Shortlist"
