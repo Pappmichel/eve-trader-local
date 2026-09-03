@@ -20,7 +20,7 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine just started (parser only); Ore&Minerals not started
+## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine underway (parser + validation); Ore&Minerals not started
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
@@ -65,13 +65,16 @@ What exists:
   cost/margin, build-candidate discovery), `pricing.py`, `invention.py`,
   `esi_sync.py` (producer character blueprints/assets/industry jobs),
   `models.py`, `config.py` (`ProductionConfig`) and `actions.py`.
-- `doctrine/` — the start of the Doctrine tool (fitted-ship contract/
-  stockpile tracking against EFT fittings): `constants.py` (slot sections,
-  SDE category IDs, parse/deviation/ampel vocabularies), `models.py` (the
-  parser-output and master-data dataclasses), and `parser.py` (the EFT
+- `doctrine/` — the Doctrine tool (fitted-ship contract/stockpile tracking
+  against EFT fittings), underway: `constants.py` (slot sections, SDE
+  category IDs, parse/deviation/ampel vocabularies), `models.py` (the
+  parser-output and master-data dataclasses), `parser.py` (the EFT
   fitting-format text parser — pure, storage-free, its SDE lookups injected
-  as callables by the caller). Matching/validation, contract sync and the
-  orchestration layer are not ported yet.
+  as callables by the caller), and `validation.py` (pure contract-matching/
+  stockpile-deviation scoring — Soll/Ist multisets, missing/short/extra/
+  wrong-variant deviations, and ampel aggregation; still no caller of its
+  own until `engine.py` exists). Contract sync and the orchestration layer
+  are not ported yet.
 - `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
@@ -90,10 +93,10 @@ Explicitly **not** done yet:
 - Production's logistics/distribution views and the readiness-focused
   asset-optimized planner variant (per-category structure assignments —
   web-UI-shaped concepts with no local equivalent yet).
-- The rest of Doctrine (matching a synced contract against a fitting,
-  stockpile/deviation scoring, ESI contract sync, the shopping list) and the
-  whole Ore & Minerals tool (the parent's `refining/*`) — none of their
-  business logic has been ported.
+- The rest of Doctrine (ESI contract sync, the real-SDE resolver wiring and
+  orchestration that would call `validation.py` against synced data, the
+  shopping list) and the whole Ore & Minerals tool (the parent's
+  `refining/*`) — none of their business logic has been ported.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
