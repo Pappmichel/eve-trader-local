@@ -128,6 +128,7 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     # ones that genuinely can't live here).
     "haul_cost_per_m3": (0, None),
     "home_location_id": (1, None),
+    "invention_location_id": (1, None),
     "market_fees": (0, 1),
     "facility_tax_rate": (0, 1),
     "component_system_id": (1, None),

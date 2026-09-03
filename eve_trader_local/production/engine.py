@@ -85,14 +85,15 @@ from ..config import TRADING_CONFIG
 from . import invention, pricing
 from .config import PRODUCTION_CONFIG, ProductionConfig
 from .constants import (
-    ACTIVITY_MODS, ACTIVITY_REACTION, ADVANCED_COMPONENT_GROUP_IDS, CAPITAL_COMPONENT_GROUP_IDS,
-    CHARGE_CATEGORY_ID, COMPONENT_GROUP_IDS, DEADSPACE_META_GROUP_ID, DECRYPTORS, DRONE_CATEGORY_ID,
-    FACTION_META_GROUP_ID, FIGHTER_CATEGORY_ID, MODULE_CATEGORY_ID, OFFICER_META_GROUP_ID,
-    SCC_SURCHARGE_RATE, SHIP_SIZE_GROUP_IDS, STORYLINE_META_GROUP_ID, SUBSYSTEM_GROUP_IDS,
-    rig_security_multiplier, structure_rig_multiplier,
+    ACTIVITY_MODS, ACTIVITY_REACTION, ADVANCED_COMPONENT_GROUP_IDS, ANCIENT_RELIC_CATEGORY_ID,
+    CAPITAL_COMPONENT_GROUP_IDS, CHARGE_CATEGORY_ID, COMPONENT_GROUP_IDS, DEADSPACE_META_GROUP_ID, DECRYPTORS,
+    DRONE_CATEGORY_ID, FACTION_META_GROUP_ID, FIGHTER_CATEGORY_ID, MODULE_CATEGORY_ID, OFFICER_META_GROUP_ID,
+    SCC_SURCHARGE_RATE, SHIP_CATEGORY_ID, SHIP_SIZE_GROUP_IDS, SPECIAL_EDITION_SHIPS_MARKET_GROUP_ID,
+    STORYLINE_META_GROUP_ID, SUBSYSTEM_GROUP_IDS, rig_security_multiplier, structure_rig_multiplier,
 )
 from .models import (
-    BuildJobEntry, BuyListEntry, InventionResult, InventoryRow, SpecialOrderLineItem, StockOverlapWarningRow,
+    AssetPlanJob, BuildJobEntry, BuyListEntry, InventionNeedRow, InventionResult, InventoryRow, LogisticsRow,
+    MarketStatusRow, ShipMarginRow, SpecialOrderLineItem, StockOverlapWarningRow, T1BpcInventionNeedRow,
 )
 
 # Guards against an unexpected SDE cycle (a blueprint whose materials
@@ -846,23 +847,43 @@ def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsC
 
 
 # ------------------------------------------------------------- stock planner
-def _current_stock(type_id: int, bp: Optional[tuple[int, int, float]]) -> float:
-    """Owned stock right now: ESI-derived assets everywhere (character + corp,
-    every location - see storage.esi_stock_at_location's own docstring for why
-    "do I own this anywhere" is corp-wide, not scoped to one curated
-    structure) plus industry jobs already in progress, whose eventual output
-    counts as "as good as in stock" for sizing purposes. No manual-stock
-    override table exists in this repo (the parent's storage.manual_stock has
-    no local equivalent - see SYNC.md), so ESI sync is the only stock
-    source; a producer character who hasn't synced yet sees current_stock=0
-    everywhere, same as the parent's own current_stock formula minus its
-    manual term."""
-    total = storage.esi_stock_at_location(type_id, None)
+def _current_stock(type_id: int, manual_stock: dict[int, float],
+                   bp: Optional[tuple[int, int, float]]) -> float:
+    """Owned stock right now: manual entry (storage.manual_stock - a genuinely
+    separate, user-maintained count, not a simplification of ESI assets; see
+    storage.py's own table comment) + ESI-derived assets everywhere (character
+    + corp, every location - see storage.esi_stock_at_location's own docstring
+    for why "do I own this anywhere" is corp-wide, not scoped to one curated
+    structure) + industry jobs already in progress, whose eventual output
+    counts as "as good as in stock" for sizing purposes (how many total runs
+    to plan for should net against a batch already cooking)."""
+    total = manual_stock.get(type_id, 0.0)
+    total += storage.esi_stock_at_location(type_id, None)
     incoming = storage.esi_incoming_industry_qty(type_id)
     if incoming["runs"] and bp is not None:
         _, _, product_qty = bp
         total += incoming["runs"] * product_qty
     return total
+
+
+def _stock_on_hand(type_id: int, manual_stock: dict[int, float]) -> float:
+    """Physically-existing stock right now: manual entry + ESI assets, same
+    scope as _current_stock above, but *without* its "industry jobs already
+    in progress count as good as in stock" addition - an active/paused job's
+    eventual output isn't real inventory yet, so it can't be handed to a
+    *different* job you're trying to actually start in EVE right now.
+
+    Ported from the parent's confirmed real bug fix (2026-08-15): plan_asset_
+    optimized's readiness split used to reuse the incoming-inclusive
+    _current_stock as its "available right now" pool - when several jobs
+    shared a scarce material with a batch already cooking, every one of them
+    could show as "Ready Now" against that same not-yet-delivered batch, so
+    the Bauliste claimed more was startable right now than physically
+    existed. _current_stock itself is still correct for job/shortfall
+    *sizing* (so as not to recommend building a duplicate batch of something
+    already queued) - only the "can I click start right now" readiness
+    signal needs this on-hand-only number instead."""
+    return manual_stock.get(type_id, 0.0) + storage.esi_stock_at_location(type_id, None)
 
 
 def _base_runs(cfg: ProductionConfig, home: dict, jita: dict, cost_memo: dict[int, Optional[float]],
@@ -925,7 +946,8 @@ def _parent_base_runs_for_buffer(type_id: int, base_runs: dict[int, float],
 
 def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dict, jita: dict,
                 cost_memo: dict[int, Optional[float]], selected_decryptors: dict[int, str],
-                t2_memo: dict[int, T2Mods], stock_used: dict[int, float], base_runs: dict[int, float],
+                t2_memo: dict[int, T2Mods], manual_stock: dict[int, float], stock_used: dict[int, float],
+                base_runs: dict[int, float],
                 gross_demand: Optional[dict[int, float]] = None,
                 ignore_current_stock: bool = False,
                 ) -> tuple[dict[int, float], dict[tuple[int, int, int], int]]:
@@ -1015,7 +1037,7 @@ def _expand_all(seed_missing: dict[int, float], cfg: ProductionConfig, home: dic
             if ignore_current_stock:
                 available = 0.0
             else:
-                available = max(0.0, _current_stock(material_id, m_bp) - stock_used.get(material_id, 0.0))
+                available = max(0.0, _current_stock(material_id, manual_stock, m_bp) - stock_used.get(material_id, 0.0))
             consumed = min(target, available)
             stock_used[material_id] = stock_used.get(material_id, 0.0) + consumed
             net_needed = target - consumed
@@ -1082,8 +1104,13 @@ def _build_build_list(build_runs: dict[tuple[int, int, int], int], cost_memo: di
 def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     """Runs the full Stock Targets -> Inventory -> Buy/Build pipeline. Returns
     a dict with 'inventory' (InventoryRow list), 'buy_list' (BuyListEntry
-    list, sorted by total price desc) and 'build_list' (BuildJobEntry list,
-    sorted by job_runs desc).
+    list, sorted by total price desc), 'build_list' (BuildJobEntry list,
+    sorted by job_runs desc), and 'invention_list' (InventionNeedRow list,
+    sorted by recommended invention runs desc - one row per configured Tech
+    II/III stock target that's actually invention-sourced, regardless of
+    whether it's currently missing or would be bought instead of built right
+    now; runs_needed/bpcs_needed/recommended_invention_runs are 0 for a
+    target that's already fully stocked).
 
     A stock target's demand only feeds the Buy List/Build List at all if
     building it clears cfg.min_margin (via _build_margin) - matching the
@@ -1093,16 +1120,14 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     regardless of margin; this gate only controls whether that shortfall
     turns into an actual buy/build recommendation.
 
-    Deliberately not ported (see module docstring/SYNC.md): the parent's
-    invention-needs list (needs storage.available_blueprint_copies/
-    get_blueprint_time, neither of which exist here), the per-run job_time
-    column (same reason), and plan_asset_optimized (a second, readiness-
-    focused Bauliste that additionally splits "physically on hand right now"
-    from "current_stock incl. incoming jobs" - a real distinct feature, not a
-    variant of this one, judged out of scope for this port: it needs its own
-    on-hand-only stock ledger this repo has no manual-stock table to make
-    meaningfully different from plan_production's own numbers yet)."""
+    Deliberately not ported (see module docstring/SYNC.md): the per-run
+    job_time column on BuildJobEntry (needs storage.get_blueprint_time -
+    which now exists, but nothing here has a use for it outside the
+    invention-needs list and plan_asset_optimized, unlike the parent's
+    BuildJobEntry.job_time_seconds), and the logistics/distribution helpers
+    (see engine.py's own module docstring for that decision)."""
     stock_targets = storage.load_stock_targets()
+    manual_stock = storage.load_manual_stock()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
@@ -1123,6 +1148,7 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
         adjusted_prices = {}
 
     inventory: list[InventoryRow] = []
+    invention_list: list[InventionNeedRow] = []
     # Ledger of how much of each type_id's own current stock has already been
     # counted toward some demand this run - threaded through _expand_all (see
     # its docstring) so a component needed by two different branches doesn't
@@ -1139,13 +1165,44 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
 
     for type_id, type_name, quantity, jita_target in stock_targets:
         activity, bp = classify_activity(type_id)
-        current_stock = _current_stock(type_id, bp)
+        current_stock = _current_stock(type_id, manual_stock, bp)
         missing = max(0.0, quantity - current_stock)
         stock_used[type_id] = stock_used.get(type_id, 0.0) + min(current_stock, quantity)
         inventory.append(InventoryRow(
             type_id=type_id, type_name=type_name, activity=activity,
             target=quantity, current_stock=current_stock, total_missing=missing,
         ))
+
+        # Every configured Tech II/III stock target gets an invention-needs
+        # row, independent of whether it's currently missing or whether the
+        # margin gate below would drop it - the point of this list is
+        # forward planning ("what would it take to invent enough BPCs"), not
+        # just today's Bauliste. Reuses _tech_ii_mods' own chosen
+        # InventionResult (grade x decryptor already optimized there)
+        # instead of re-resolving the recipe from scratch - see the parent's
+        # own confirmed fix for why that duplicate computation matters.
+        if activity == "Tech II" and bp is not None:
+            blueprint_id, activity_id, product_qty = bp
+            _, _, _, chosen = _tech_ii_mods(type_id, blueprint_id, activity_id, cfg, home, jita,
+                                            selected_decryptors, t2_memo)
+            if chosen is not None and chosen.output_runs > 0 and chosen.probability > 0:
+                t2_bpc_owned = int(storage.available_blueprint_copies(blueprint_id, None))
+                runs_needed = math.ceil(missing / product_qty) if missing > 0 else 0
+                runs_still_needed = max(0, runs_needed - t2_bpc_owned)
+                bpcs_needed = math.ceil(runs_still_needed / chosen.output_runs) if runs_still_needed > 0 else 0
+                recommended_runs = math.ceil(bpcs_needed / chosen.probability) if bpcs_needed > 0 else 0
+                target_stock_runs = math.ceil(quantity / product_qty) if quantity > 0 else 0
+                stockpile_pct = (max(0.0, t2_bpc_owned / target_stock_runs * 100)
+                                 if target_stock_runs > 0 else 0.0)
+                invention_list.append(InventionNeedRow(
+                    type_id=type_id, type_name=type_name,
+                    t1_blueprint_type_id=chosen.t1_blueprint_type_id, t1_blueprint_name=chosen.t1_blueprint_name,
+                    decryptor=chosen.decryptor, probability=chosen.probability, output_runs=chosen.output_runs,
+                    runs_needed=runs_needed, bpcs_needed=bpcs_needed,
+                    recommended_invention_runs=recommended_runs,
+                    t2_bpc_owned=t2_bpc_owned, stockpile_pct=stockpile_pct,
+                ))
+
         if missing <= 0:
             continue
 
@@ -1162,12 +1219,237 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
         gross_demand[type_id] = gross_demand.get(type_id, 0.0) + quantity
 
     buy_totals, build_runs = _expand_all(seed_missing, cfg, home, jita, cost_memo, selected_decryptors,
-                                         t2_memo, stock_used, base_runs, gross_demand)
+                                         t2_memo, manual_stock, stock_used, base_runs, gross_demand)
 
     buy_list = _build_buy_list(buy_totals, gross_demand, cfg, home, jita)
     build_list = _build_build_list(build_runs, cost_memo, t2_memo, cfg, home)
+    invention_list.sort(key=lambda e: e.recommended_invention_runs, reverse=True)
 
-    return {"inventory": inventory, "buy_list": buy_list, "build_list": build_list}
+    return {"inventory": inventory, "buy_list": buy_list, "build_list": build_list,
+            "invention_list": invention_list}
+
+
+def _allocate_scarce_stock(claims: list[tuple[int, float]], available: float) -> dict[int, float]:
+    """Splits `available` units of a scarce shared material across competing
+    claims (parent_job_type_id, quantity_needed): smallest claim first, each
+    filled completely while stock lasts - maximizes the *count* of claims
+    that end up fully covered rather than spreading partial coverage across
+    everything (ported verbatim from the parent's confirmed allocation rule
+    for plan_asset_optimized). Returns {parent_job_type_id: quantity_covered},
+    one entry per input claim (0.0 once stock runs out)."""
+    remaining = available
+    covered: dict[int, float] = {}
+    for parent_id, qty in sorted(claims, key=lambda c: c[1]):
+        take = min(qty, remaining)
+        covered[parent_id] = take
+        remaining -= take
+    return covered
+
+
+def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Asset-aware Bauliste: the same buy-vs-build calls as plan_production
+    (_buy_or_build_decision - the two Baulisten never disagree on *whether*
+    to build something), but nets real owned stock (_current_stock) against
+    demand at *every* level of the recursive bill of materials, not just the
+    top-level stock target the way plan_production's 'missing' does.
+
+    Processed breadth-first, level by level (a "round" per depth), because a
+    level's material demand is only known once the level above it has been
+    netted against stock. When several jobs need the same scarce
+    intermediate component this round, the available stock goes to the
+    *smallest* claims first (_allocate_scarce_stock) so as many whole jobs
+    as possible become immediately startable. Stock consumption is tracked
+    in a running ledger across rounds (stock_used) so a component needed at
+    two different tree depths doesn't get the same physical stock counted
+    twice.
+
+    Readiness (runs_ready_now) specifically uses _stock_on_hand, not
+    _current_stock, with its own parallel ledger (stock_used_on_hand) - see
+    _stock_on_hand's own docstring for the real bug this exists to avoid:
+    _current_stock counts an in-progress industry job's eventual output as
+    available for *sizing* purposes, but that output doesn't physically
+    exist yet, so it can't make a *different* job "Ready Now".
+
+    Each material's per-parent claim also carries the same overbuild buffer
+    _expand_all applies (cfg.component_overbuild x base_qty x material_mult
+    x that parent's whole-tree base_runs, via the shared
+    _parent_base_runs_for_buffer helper) - the two Baulisten must agree on
+    *how much* to build, not just *whether*.
+
+    Returns {'jobs': list[AssetPlanJob]} sorted by job_runs desc. A job's
+    runs_ready_now is bottlenecked by whichever of its own direct materials
+    is scarcest right now (the rest of job_runs still needs something
+    upstream built or bought first).
+
+    Deliberately narrower than the parent's version, matching the parent's
+    own confirmed simplifications this repo has already made elsewhere:
+    - No recommended_slots/_free_slots_by_category - that needs live
+      character-skill/job-slot ESI data plus a per-character "excluded from
+      planning" flag, neither of which this repo syncs (production/
+      esi_sync.py's PRODUCTION_SCOPES deliberately doesn't request skill
+      scopes - see that module's own SYNC.md row). runs_ready_now/job_runs
+      is still a real, useful readiness signal without the slot split on
+      top of it.
+    - stock_coverage_by_id's "configured stock target" denominator is this
+      repo's own single target quantity, not the parent's backup+home+Jita
+      sum - matching plan_production's own already-simplified model."""
+    stock_targets = storage.load_stock_targets()
+    manual_stock = storage.load_manual_stock()
+    cost_memo: dict[int, Optional[float]] = {}
+    t2_memo: dict[int, T2Mods] = {}
+    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+
+    priced_type_ids = list(structural_material_closure(t[0] for t in stock_targets))
+    home = pricing.home_prices(priced_type_ids, cfg)
+    jita = pricing.jita_prices(priced_type_ids)
+
+    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
+    esi_client = ESIClient()
+    cost_indices: CostIndices = {
+        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
+        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+    }
+    try:
+        adjusted_prices = esi_client.get_adjusted_prices()
+    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
+        adjusted_prices = {}
+
+    jobs: dict[int, AssetPlanJob] = {}
+    stock_used: dict[int, float] = {}
+    # Parallel ledger, on-hand-only (see _stock_on_hand) - tracks readiness
+    # consumption separately from stock_used's incoming-inclusive planning
+    # consumption.
+    stock_used_on_hand: dict[int, float] = {}
+    base_runs = _base_runs(cfg, home, jita, cost_memo, selected_decryptors, t2_memo,
+                           cost_indices, adjusted_prices, stock_targets)
+    buffered_parents: set[int] = set()
+
+    # Same margin gate as plan_production: a stock target's demand is
+    # dropped entirely (no job here) if building it doesn't clear
+    # cfg.min_margin - accumulated across every top-level target first, then
+    # reused for the recursive per-material decision below, so a low-margin
+    # stock target that's *also* a raw material of another job can't be
+    # excluded from plan_production but still "Build" here for the same
+    # type_id (confirmed real bug in the parent this guards against).
+    margin_excluded: set[int] = set()
+    jobs_this_level: dict[int, float] = {}
+    # How much of type_id's own current demand is already covered by owned
+    # stock (0-1, None if there's nothing to compare against) - purely a
+    # display signal, not used in the sourcing/queueing math above.
+    stock_coverage_by_id: dict[int, Optional[float]] = {}
+    for type_id, type_name, quantity, jita_target in stock_targets:
+        activity, bp = classify_activity(type_id)
+        if bp is None:
+            continue
+        current_stock = _current_stock(type_id, manual_stock, bp)
+        missing = max(0.0, quantity - current_stock)
+        if missing <= 0:
+            continue
+        _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
+
+        margin = _build_margin(type_id, cost_memo.get(type_id), jita_target, home, jita, cfg)
+        if margin is not None and margin < cfg.min_margin:
+            margin_excluded.add(type_id)
+        if type_id in margin_excluded:
+            continue
+        if _buy_or_build_decision(type_id, cfg, home, jita, {}, cost_memo, bp) != "Build":
+            continue
+        jobs_this_level[type_id] = jobs_this_level.get(type_id, 0.0) + missing
+        stock_coverage_by_id[type_id] = min(1.0, current_stock / quantity) if quantity > 0 else None
+
+    depth = 0
+    while jobs_this_level and depth < MAX_DEPTH:
+        # Phase A: this round's net production quantity -> runs + raw
+        # material claims (not yet netted against stock).
+        runs_this_round: dict[int, int] = {}
+        job_meta: dict[int, tuple] = {}
+        next_level_claims: dict[int, list[tuple[int, float]]] = {}
+        buffered_demand: dict[int, float] = {}
+
+        for type_id, quantity in jobs_this_level.items():
+            activity, bp = classify_activity(type_id)
+            if bp is None:
+                continue
+            blueprint_id, activity_id, product_qty = bp
+            runs = math.ceil(quantity / product_qty)
+            runs_this_round[type_id] = runs
+
+            material_mult, _job_cost_rate, decryptor_name = _material_mult_for(
+                type_id, activity, bp, cfg, home, jita, selected_decryptors, t2_memo, {})
+            activity_label = "Reaction" if activity_id == ACTIVITY_REACTION else "Manufacturing"
+            job_meta[type_id] = (blueprint_id, activity_id, product_qty, activity_label, decryptor_name)
+
+            parent_base_runs = _parent_base_runs_for_buffer(type_id, base_runs, buffered_parents)
+            for material_id, base_qty in storage.get_blueprint_materials(blueprint_id, activity_id):
+                bare_needed = _material_qty(base_qty, material_mult, runs)
+                if bare_needed <= 0:
+                    continue
+                next_level_claims.setdefault(material_id, []).append((type_id, bare_needed))
+                buffer = cfg.component_overbuild * base_qty * material_mult * parent_base_runs
+                buffered_demand[material_id] = buffered_demand.get(material_id, 0.0) + bare_needed + buffer
+
+        # Phase B: readiness (min_fraction) is allocated across the *bare*
+        # per-job claims, smallest first, against stock physically on hand
+        # right now - purely informational. Actual consumption/shortfall
+        # sizing uses the *buffered* pooled total against _current_stock's
+        # incoming-inclusive availability instead.
+        min_fraction: dict[int, float] = {type_id: 1.0 for type_id in runs_this_round}
+        jobs_this_level = {}
+        for material_id, claims in next_level_claims.items():
+            _, m_bp = classify_activity(material_id)
+            available = max(0.0, _current_stock(material_id, manual_stock, m_bp) - stock_used.get(material_id, 0.0))
+            available_on_hand = max(
+                0.0, _stock_on_hand(material_id, manual_stock) - stock_used_on_hand.get(material_id, 0.0))
+            covered_by_parent = _allocate_scarce_stock(claims, available_on_hand)
+            stock_used_on_hand[material_id] = stock_used_on_hand.get(material_id, 0.0) + sum(covered_by_parent.values())
+
+            for parent_type_id, qty in claims:
+                fraction = covered_by_parent.get(parent_type_id, 0.0) / qty if qty > 0 else 1.0
+                if fraction < min_fraction[parent_type_id]:
+                    min_fraction[parent_type_id] = fraction
+
+            buffered_total = buffered_demand.get(material_id, 0.0)
+            consumed = min(buffered_total, available)
+            stock_used[material_id] = stock_used.get(material_id, 0.0) + consumed
+            shortfall = buffered_total - consumed
+            if shortfall <= 0 or m_bp is None:
+                continue
+            if material_id not in margin_excluded and _buy_or_build_decision(
+                    material_id, cfg, home, jita, {}, cost_memo, m_bp, depth + 1) == "Build":
+                jobs_this_level[material_id] = jobs_this_level.get(material_id, 0.0) + shortfall
+                if material_id not in stock_coverage_by_id:
+                    stock_coverage_by_id[material_id] = available / buffered_total if buffered_total > 0 else None
+
+        # Phase C: materialize/merge this round's AssetPlanJob entries now
+        # that readiness is known.
+        for type_id, runs in runs_this_round.items():
+            blueprint_id, activity_id, product_qty, activity_label, decryptor_name = job_meta[type_id]
+            sde_type = storage.get_sde_type(type_id)
+            name = sde_type[2] if sde_type else str(type_id)
+            ready_increment = math.floor(runs * min_fraction[type_id])
+
+            existing = jobs.get(type_id)
+            if existing is None:
+                jobs[type_id] = AssetPlanJob(
+                    type_id=type_id, type_name=name, blueprint_type_id=blueprint_id,
+                    activity=activity_label, quantity=runs * product_qty, job_runs=runs,
+                    runs_ready_now=ready_increment,
+                    unit_build_cost=cost_memo.get(type_id), decryptor=decryptor_name,
+                    job_category=job_category(type_id),
+                    stock_coverage=stock_coverage_by_id.get(type_id),
+                    margin=margin_home(type_id, cost_memo.get(type_id), home, cfg),
+                )
+            else:
+                # Same item is a job in more than one round (needed at two
+                # different tree depths) - merge rather than overwrite, so an
+                # earlier round's already-netted readiness isn't lost.
+                existing.job_runs += runs
+                existing.quantity += runs * product_qty
+                existing.runs_ready_now += ready_increment
+
+        depth += 1
+
+    return {"jobs": sorted(jobs.values(), key=lambda j: j.job_runs, reverse=True)}
 
 
 def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfig,
@@ -1200,10 +1482,11 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
       check (that would need re-running plan_production itself).
 
     Deliberately simpler than the parent's version, matching plan_production's
-    own already-documented simplifications: no invention-needs list (needs
-    storage.available_blueprint_copies/get_blueprint_time, neither ported
-    here) and no manual-stock override table (ESI sync is the only stock
-    source, via _current_stock)."""
+    own already-documented simplifications: no invention-needs list for a
+    one-off order (there's no fixed steady-state target the way a stock
+    target's own quantity gives plan_production's list a stockpile_pct
+    denominator - see that function's own row in this module)."""
+    manual_stock = storage.load_manual_stock()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
@@ -1247,7 +1530,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     for type_id, _type_name, quantity in items:
         _activity, bp = classify_activity(type_id)
         if net_against_stock:
-            current_stock = _current_stock(type_id, bp)
+            current_stock = _current_stock(type_id, manual_stock, bp)
             missing = max(0.0, quantity - current_stock)
             stock_used[type_id] = stock_used.get(type_id, 0.0) + min(current_stock, quantity)
         else:
@@ -1261,7 +1544,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
         gross_demand[type_id] = gross_demand.get(type_id, 0.0) + quantity
 
     buy_totals, build_runs = _expand_all(seed_missing, cfg, home, jita, cost_memo, selected_decryptors,
-                                         t2_memo, stock_used, base_runs, gross_demand,
+                                         t2_memo, manual_stock, stock_used, base_runs, gross_demand,
                                          ignore_current_stock=not net_against_stock)
 
     buy_list = _build_buy_list(buy_totals, gross_demand, cfg, home, jita)
@@ -1273,7 +1556,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
         targets_closure = structural_material_closure(t[0] for t in storage.load_stock_targets())
         for type_id in sorted(order_closure & targets_closure):
             _, m_bp = classify_activity(type_id)
-            stock = _current_stock(type_id, m_bp)
+            stock = _current_stock(type_id, manual_stock, m_bp)
             if stock > 0:
                 sde_type = storage.get_sde_type(type_id)
                 name = sde_type[2] if sde_type else str(type_id)
@@ -1284,3 +1567,267 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
         "line_items": line_items, "buy_list": buy_list, "build_list": build_list,
         "stock_overlap_warning": stock_overlap_warning,
     }
+
+
+# --------------------------------------------------------------- cheap reads
+def market_status(cfg: ProductionConfig = PRODUCTION_CONFIG) -> list[MarketStatusRow]:
+    """Cheap stock-target readiness read: target vs. current_stock only, with
+    no pricing/BOM traversal - unlike plan_production's InventoryRow (which
+    is always computed as a side effect of the full priced Bauliste pass),
+    this needs no live home/Jita/cost-index ESI calls at all, just the
+    already-synced asset snapshot plus the manual-stock table - useful for a
+    quick "am I stocked" glance.
+
+    Simplified from the parent's three-way backup/home-market/Jita-market
+    model (see storage.py's stock_targets table comment: this repo's own
+    stock target is one target quantity plus jita_target) - there is no
+    separate "how much is actually listed for sale" signal to show, since
+    there's no market-target column distinct from the stock target itself."""
+    manual_stock = storage.load_manual_stock()
+    rows = []
+    for type_id, type_name, target, jita_target in storage.load_stock_targets():
+        _, bp = classify_activity(type_id)
+        current = _current_stock(type_id, manual_stock, bp)
+        rows.append(MarketStatusRow(
+            type_id=type_id, type_name=type_name, target=target, current_stock=current,
+            missing=max(0.0, target - current), jita_target=jita_target,
+        ))
+    return rows
+
+
+def stock_value(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Total ISK value of current stock (manual + ESI assets + incoming jobs,
+    the same _current_stock every stock target uses), priced at each item's
+    home sell quote - its real opportunity-cost value even for stock that's
+    actually consumed internally rather than resold - falling back to the
+    Jita sell quote if there's no home listing. Returns {'total_value': ISK,
+    'priced_items': N, 'unpriced_items': N} - unpriced items (no sell quote
+    anywhere) are excluded from total_value rather than counted as 0, so a
+    temporary market-data gap doesn't silently understate the total."""
+    manual_stock = storage.load_manual_stock()
+    stock_targets = storage.load_stock_targets()
+    # Only the stock targets' own type_ids need pricing here (this KPI never
+    # recurses into materials).
+    type_ids = [t[0] for t in stock_targets]
+    home = pricing.home_prices(type_ids, cfg)
+    jita = pricing.jita_prices(type_ids)
+
+    total_value = 0.0
+    priced_items = 0
+    unpriced_items = 0
+    for type_id, _type_name, _target, _jita_target in stock_targets:
+        _, bp = classify_activity(type_id)
+        current = _current_stock(type_id, manual_stock, bp)
+        if current <= 0:
+            continue
+        home_quote = home.get(type_id)
+        jita_quote = jita.get(type_id)
+        if home_quote and home_quote.sell > 0:
+            price = home_quote.sell
+        elif jita_quote and jita_quote.sell > 0:
+            price = jita_quote.sell
+        else:
+            unpriced_items += 1
+            continue
+        total_value += current * price
+        priced_items += 1
+    return {"total_value": total_value, "priced_items": priced_items, "unpriced_items": unpriced_items}
+
+
+# --------------------------------------------------------------- ship margins
+def _descendant_market_group_ids(root_id: int) -> set[int]:
+    """`root_id` plus every market_group_id nested under it (any depth) in
+    sde_market_groups' parent_group_id tree - lets a caller exclude a whole
+    named market-group subtree (e.g. "Special Edition Ships") instead of an
+    ad-hoc type_id/name list that would miss anything CCP adds later."""
+    children: dict[Optional[int], list[int]] = {}
+    for market_group_id, parent_group_id, _name in storage.load_sde_market_groups():
+        children.setdefault(parent_group_id, []).append(market_group_id)
+    result = {root_id}
+    frontier = [root_id]
+    while frontier:
+        frontier = [child for parent in frontier for child in children.get(parent, [])]
+        result.update(frontier)
+    return result
+
+
+def discover_ship_margins(cfg: ProductionConfig = PRODUCTION_CONFIG,
+                          client: Optional["GoonmetricsClient"] = None) -> list[dict]:
+    """Production's Margin page (list view): every ship with a real
+    Manufacturing/Reaction/Invention recipe (classify_activity), with its
+    current home/Jita sell price, build cost, and both margin_home/
+    margin_jita - deliberately an information browser, not a candidate
+    filter like discover_build_candidates: no existing_target_ids exclusion,
+    no min_margin/min_daily_profit gate, no history/movement lookup. A ship
+    with no real order book on one or both sides still appears, with None
+    for whichever price/margin couldn't be computed.
+
+    Not cached, same reasoning as discover_build_candidates - a single local
+    CLI-driven user has no concurrent-request cache to protect against.
+    `client` param exists only for parity/tests, same as discover_build_
+    candidates' own (unused here - no movement lookup needed for a plain
+    margin browser)."""
+    return _scan_ship_margins(cfg)
+
+
+def _scan_ship_margins(cfg: ProductionConfig) -> list[dict]:
+    """The actual scan behind discover_ship_margins - split out purely to
+    mirror discover_build_candidates/_scan_build_candidates' own split.
+    Ships are a much smaller SDE slice than discover_build_candidates' full
+    scan, so this is cheap even though it's not gated by margin/daily-profit
+    at all."""
+    cost_memo: dict[int, Optional[float]] = {}
+    t2_memo: dict[int, T2Mods] = {}
+    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    excluded_market_groups = _descendant_market_group_ids(SPECIAL_EDITION_SHIPS_MARKET_GROUP_ID)
+
+    ships = [(type_id, type_name, meta_level)
+             for type_id, type_name, _volume, market_group_id, meta_level, category_id
+             in storage.load_sde_types_with_market_group()
+             if category_id == SHIP_CATEGORY_ID and market_group_id not in excluded_market_groups]
+
+    priced_type_ids = list(structural_material_closure(t[0] for t in ships))
+    home = pricing.home_prices(priced_type_ids, cfg)
+    jita = pricing.jita_prices(priced_type_ids)
+
+    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
+    esi_client = ESIClient()
+    cost_indices: CostIndices = {
+        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
+        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+    }
+    try:
+        adjusted_prices = esi_client.get_adjusted_prices()
+    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
+        adjusted_prices = {}
+
+    results = []
+    for type_id, type_name, meta_level in ships:
+        activity, bp = classify_activity(type_id)
+        if bp is None:
+            continue
+        build_cost = _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors,
+                                t2_memo, cost_indices, adjusted_prices)
+        home_quote = home.get(type_id)
+        jita_quote = jita.get(type_id)
+        results.append({
+            "type_id": type_id, "type_name": type_name, "activity": activity,
+            "home_price": home_quote.sell if home_quote and home_quote.sell > 0 else None,
+            "jita_price": jita_quote.sell if jita_quote and jita_quote.sell > 0 else None,
+            "build_cost": build_cost,
+            "margin_home": margin_home(type_id, build_cost, home, cfg),
+            "margin_jita": margin_jita(type_id, build_cost, jita, cfg),
+            "meta_level": meta_level,
+        })
+
+    results.sort(key=lambda r: r.get("margin_home") or 0.0, reverse=True)
+    return results
+
+
+# --------------------------------------------------------------- invention logistics
+def invention_logistics(invention_list: list[InventionNeedRow],
+                        cfg: ProductionConfig = PRODUCTION_CONFIG) -> list[LogisticsRow]:
+    """Datacores/decryptors/T1 BPC (or Tech III relic) runs needed vs. what's
+    sitting at the configured invention station (cfg.invention_location_id)
+    - reuses LogisticsRow's "needed vs available at one location" shape.
+    Needs recommended_invention_runs (not bpcs_needed) *runs* of the T1
+    blueprint itself: one invention attempt consumes exactly one *run* from
+    a T1 BPC whether it succeeds or fails (confirmed against
+    wiki.eveuniversity.org/Invention), so a max-run copy is worth many
+    attempts and a 1-run copy exactly one - bpcs_needed (the number of
+    *successful* inventions needed) would undercount real T1-run
+    consumption, since every failed attempt burns a run too.
+
+    Availability for a genuine T1 blueprint goes through
+    storage.available_blueprint_copies, not the generic esi_stock_at_location
+    every other row here uses - a T1 blueprint's BPO and BPC share the exact
+    same type_id in EVE's data model, so a plain esi_stock_at_location call
+    would count an owned BPO as if it were a usable invention input too.
+    A Tech III relic (constants.ANCIENT_RELIC_CATEGORY_ID) is the opposite
+    case: it's t1_blueprint_type_id's real value for a Tech III item, but a
+    plain purchasable/lootable item, never owned as a blueprint copy - so it
+    must go through esi_stock_at_location instead (available_blueprint_copies
+    would always return 0 for it, since character_blueprints/corp_blueprints
+    never has a row for a non-blueprint type_id).
+
+    No per-category structure-assignment concept exists here (see
+    engine.py's own module docstring) - this is deliberately single-location,
+    matching the parent's own invention_location_id field one-for-one rather
+    than the parent's wider multi-structure Logistik tab."""
+    if cfg.invention_location_id is None:
+        return []
+
+    demand: dict[int, float] = {}
+    t1_blueprint_type_ids: set[int] = set()
+    for need in invention_list:
+        if need.recommended_invention_runs <= 0:
+            continue
+        demand[need.t1_blueprint_type_id] = demand.get(need.t1_blueprint_type_id, 0.0) + need.recommended_invention_runs
+        t1_blueprint_type_ids.add(need.t1_blueprint_type_id)
+
+        decryptor = DECRYPTORS.get(need.decryptor)
+        if decryptor is not None and decryptor.type_id != 0:  # 0 is the "None" sentinel, not a real item
+            demand[decryptor.type_id] = demand.get(decryptor.type_id, 0.0) + need.recommended_invention_runs
+
+        recipe = storage.get_invention_recipe(need.t1_blueprint_type_id)
+        for datacore_id, datacore_qty in (recipe.get("datacores", []) if recipe else []):
+            demand[datacore_id] = demand.get(datacore_id, 0.0) + datacore_qty * need.recommended_invention_runs
+
+    rows = []
+    for type_id, needed in demand.items():
+        is_real_blueprint = type_id in t1_blueprint_type_ids and storage.get_type_category(type_id) != ANCIENT_RELIC_CATEGORY_ID
+        if is_real_blueprint:
+            available = storage.available_blueprint_copies(type_id, cfg.invention_location_id)
+        else:
+            available = storage.esi_stock_at_location(type_id, cfg.invention_location_id)
+        sde_type = storage.get_sde_type(type_id)
+        name = sde_type[2] if sde_type else str(type_id)
+        rows.append(LogisticsRow(
+            type_id=type_id, type_name=name, location_id=cfg.invention_location_id,
+            needed=needed, available=available, missing=max(0.0, needed - available),
+        ))
+    rows.sort(key=lambda r: -r.missing)
+    return rows
+
+
+def t1_bpc_invention_needs(invention_list: list[InventionNeedRow],
+                           cfg: ProductionConfig = PRODUCTION_CONFIG) -> list[T1BpcInventionNeedRow]:
+    """invention_logistics above mixes T1 BPCs, decryptors and datacores into
+    one flat LogisticsRow list, which makes "how many BPC runs am I short on
+    the thing that actually matters, and do I even own the BPO to print
+    more" hard to see. This is the T1-blueprint(-or-relic)-only slice of the
+    exact same demand accumulation invention_logistics already does, plus a
+    BPO-presence check invention_logistics has no reason to compute.
+
+    Despite this function's own name, `type_id` here can also be a Tech III
+    relic - see invention_logistics' own docstring for why that needs
+    esi_stock_at_location instead of available_blueprint_copies.
+    bpo_present needs no equivalent branch for a relic - storage.
+    has_bpo_at_location naturally returns False for one already (a relic
+    type_id never has a runs==-1 row, since it was never a blueprint)."""
+    if cfg.invention_location_id is None:
+        return []
+
+    needed_by_t1: dict[int, int] = {}
+    for need in invention_list:
+        if need.recommended_invention_runs <= 0:
+            continue
+        needed_by_t1[need.t1_blueprint_type_id] = (
+            needed_by_t1.get(need.t1_blueprint_type_id, 0) + need.recommended_invention_runs)
+
+    rows = []
+    for type_id, needed in needed_by_t1.items():
+        is_real_blueprint = storage.get_type_category(type_id) != ANCIENT_RELIC_CATEGORY_ID
+        available = (storage.available_blueprint_copies(type_id, cfg.invention_location_id) if is_real_blueprint
+                     else storage.esi_stock_at_location(type_id, cfg.invention_location_id))
+        available = int(available)
+        sde_type = storage.get_sde_type(type_id)
+        name = sde_type[2] if sde_type else str(type_id)
+        bpo_present = is_real_blueprint and storage.has_bpo_at_location(type_id, cfg.invention_location_id)
+        rows.append(T1BpcInventionNeedRow(
+            type_id=type_id, name=name, needed=needed, available=available,
+            missing=max(0, needed - available), bpo_present=bpo_present,
+            stockpile_pct=max(0.0, available / needed * 100) if needed > 0 else 0.0,
+        ))
+    rows.sort(key=lambda r: -r.missing)
+    return rows

@@ -455,6 +455,23 @@ CREATE TABLE IF NOT EXISTS stock_targets (
     jita_target INTEGER NOT NULL DEFAULT 0
 );
 
+-- Manual stock override: a genuinely separate signal from ESI-synced assets,
+-- not a simplification of them - "I physically counted N units in my hangar
+-- and it doesn't match what ESI/the plan thinks" (a delivery ESI hasn't
+-- caught up on yet, stock kept somewhere no producer character can see, a
+-- deliberate correction). Ported from the parent's own manual_stock table
+-- (storage.upsert_manual_stock/load_manual_stock) minus tenant_id - confirmed
+-- by reading the parent's real code that this is a distinct, user-maintained
+-- count added on top of ESI assets (engine._current_stock/_stock_on_hand),
+-- not just "ESI assets without incoming jobs" (which would have needed no new
+-- table at all). type_name is carried here purely for display (CLI listing) -
+-- engine.py itself only ever reads the count by type_id.
+CREATE TABLE IF NOT EXISTS manual_stock (
+    type_id   INTEGER PRIMARY KEY,
+    type_name TEXT NOT NULL,
+    count     REAL NOT NULL DEFAULT 0
+);
+
 -- Special Orders (production/engine.py's plan_special_order): one-off build
 -- orders, tracked separately from the permanent stock_targets list above -
 -- ported from the parent's docs/special_orders_schema.sql minus tenant_id/
@@ -1032,6 +1049,19 @@ def get_blueprint_materials(blueprint_type_id: int, activity_id: int,
             (blueprint_type_id, activity_id),
         ).fetchall()
     return [tuple(r) for r in rows]
+
+
+def get_blueprint_time(blueprint_type_id: int, activity_id: int,
+                       path: Optional[Path] = None) -> Optional[float]:
+    """Base job time (seconds, ME/TE-unadjusted) for one run - ported from the
+    parent's own function of the same name (sde_blueprint_time is already
+    populated by sde.py; only nothing here read it back until now)."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT time FROM sde_blueprint_time WHERE blueprint_type_id = ? AND activity_id = ?",
+            (blueprint_type_id, activity_id),
+        ).fetchone()
+    return row[0] if row else None
 
 
 def get_invention_recipe(t1_blueprint_type_id: int,
@@ -1888,6 +1918,54 @@ def get_owned_bpo_best_me_te(blueprint_type_id: int,
     return (best_me, best_te)
 
 
+def available_blueprint_copies(type_id: int, location_id: Optional[int],
+                               tables: tuple[str, str] = _BLUEPRINT_TABLES) -> float:
+    """Sums remaining *runs* across owned blueprint copies (quantity == -2,
+    ESI's Copy marker - see get_owned_bpo_best_me_te's own runs == -1 check for
+    the BPO side of this sentinel) of `type_id` at `location_id` (None = all
+    locations, mirroring esi_stock_at_location's own None branch), excluding
+    NON_STOCK_LOCATION_FLAGS the same way esi_stock_at_location does - a copy
+    sitting in Asset Safety needs its own retrieval trip first.
+
+    Sums *runs*, not the number of separate copy rows - ported from the
+    parent's own fixed version of this function (its docstring: one invention
+    attempt consumes exactly one run from a T1 BPC, so a single 300-run copy
+    supports 300 attempts, not 1 - COUNT(*) would understate real invention
+    capacity by up to two orders of magnitude). COALESCE guards a table with
+    no matching rows, which SUM alone would return NULL for."""
+    flags = ",".join("?" * len(NON_STOCK_LOCATION_FLAGS))
+    total = 0.0
+    with connect() as conn:
+        for table in tables:
+            sql = (f"SELECT COALESCE(SUM(runs), 0) FROM {table} WHERE type_id = ? AND quantity = -2 "
+                   f"AND (location_flag IS NULL OR location_flag NOT IN ({flags}))")
+            params: tuple = (type_id, *NON_STOCK_LOCATION_FLAGS)
+            if location_id is not None:
+                sql += " AND resolved_location_id = ?"
+                params = params + (location_id,)
+            total += conn.execute(sql, params).fetchone()[0]
+    return total
+
+
+def has_bpo_at_location(type_id: int, location_id: int,
+                        tables: tuple[str, str] = _BLUEPRINT_TABLES) -> bool:
+    """Whether an original BPO (runs == -1) of `type_id` sits at
+    `location_id` - lets a caller show "can be reprinted on site instead of
+    imported" for a missing blueprint copy. Same NON_STOCK_LOCATION_FLAGS
+    exclusion as available_blueprint_copies."""
+    flags = ",".join("?" * len(NON_STOCK_LOCATION_FLAGS))
+    with connect() as conn:
+        for table in tables:
+            row = conn.execute(
+                f"SELECT 1 FROM {table} WHERE type_id = ? AND resolved_location_id = ? AND runs = -1 "
+                f"AND (location_flag IS NULL OR location_flag NOT IN ({flags})) LIMIT 1",
+                (type_id, location_id, *NON_STOCK_LOCATION_FLAGS),
+            ).fetchone()
+            if row is not None:
+                return True
+    return False
+
+
 # -------------------------------------------------------------- stock targets
 def upsert_stock_target(type_id: int, type_name: str, quantity: float, jita_target: bool = False,
                         path: Optional[Path] = None) -> None:
@@ -1914,6 +1992,37 @@ def load_stock_targets(path: Optional[Path] = None) -> list[tuple[int, str, floa
             "SELECT type_id, type_name, quantity, jita_target FROM stock_targets"
         ).fetchall()
     return [(r[0], r[1], r[2], bool(r[3])) for r in rows]
+
+
+# -------------------------------------------------------------- manual stock
+def upsert_manual_stock(type_id: int, type_name: str, count: float, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO manual_stock (type_id, type_name, count) VALUES (?,?,?) "
+            "ON CONFLICT(type_id) DO UPDATE SET type_name=excluded.type_name, count=excluded.count",
+            (type_id, type_name, count),
+        )
+
+
+def delete_manual_stock(type_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM manual_stock WHERE type_id = ?", (type_id,))
+
+
+def load_manual_stock(path: Optional[Path] = None) -> dict[int, float]:
+    """{type_id: count} - see engine._current_stock/_stock_on_hand, the two
+    callers that fold this into owned stock."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT type_id, count FROM manual_stock").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def list_manual_stock(path: Optional[Path] = None) -> list[tuple[int, str, float]]:
+    """(type_id, type_name, count) for every manual override - CLI listing
+    only; engine.py reads load_manual_stock's dict form instead."""
+    with connect(path) as conn:
+        return [tuple(r) for r in conn.execute(
+            "SELECT type_id, type_name, count FROM manual_stock ORDER BY type_name").fetchall()]
 
 
 # -------------------------------------------------------------- special orders

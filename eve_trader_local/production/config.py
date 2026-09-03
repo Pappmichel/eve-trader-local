@@ -78,6 +78,17 @@ class ProductionConfig:
     home_market: Optional[str] = None       # appraise.gnf.lt market slug (case-sensitive)
     home_location_id: Optional[int] = None  # structure ID whose live order book is read first
 
+    # -- Invention station (engine.invention_logistics/t1_bpc_invention_needs) --
+    # Where datacores/decryptors/T1 BPCs are checked against what's actually
+    # needed. The parent additionally carries a whole Logistik tab of
+    # per-category structure assignments (distribution_source_location_id,
+    # job_category_locations) for its multi-structure logistics_status/
+    # distribution_recommendations - genuinely out of scope for a single-user
+    # install (see engine.py's module docstring and SYNC.md); this one field
+    # is different; it's just "where do you invent", the same single-location
+    # shape home_location_id already has.
+    invention_location_id: Optional[int] = None
+
     # -- Where you build, split by build profile (see constants.py's
     # STRUCTURE_TYPES/RIG_TIERS and structure_rig_multiplier): reactions
     # typically run in a rigged Refinery, rig-covered component groups in an

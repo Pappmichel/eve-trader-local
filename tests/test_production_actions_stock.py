@@ -60,3 +60,63 @@ def test_list_stock_targets(db):
     _seed_sde()
     actions.do_add_stock_target("Tritanium", 1000.0)
     assert actions.do_list_stock_targets() == {"rows": [(TRITANIUM, "Tritanium", 1000.0, False)]}
+
+
+# --------------------------------------------------------------- manual stock
+def test_set_manual_stock_by_name(db):
+    _seed_sde()
+    result = actions.do_set_manual_stock("Tritanium", 500.0)
+    assert result == {"type_id": TRITANIUM, "type_name": "Tritanium", "count": 500.0}
+    assert storage.load_manual_stock() == {TRITANIUM: 500.0}
+
+
+def test_set_manual_stock_negative_count_raises(db):
+    _seed_sde()
+    with pytest.raises(ActionError):
+        actions.do_set_manual_stock("Tritanium", -1.0)
+
+
+def test_remove_manual_stock(db):
+    _seed_sde()
+    actions.do_set_manual_stock("Tritanium", 500.0)
+    result = actions.do_remove_manual_stock("Tritanium")
+    assert result == {"removed": TRITANIUM, "type_name": "Tritanium"}
+    assert storage.load_manual_stock() == {}
+
+
+def test_list_manual_stock(db):
+    _seed_sde()
+    actions.do_set_manual_stock("Tritanium", 500.0)
+    assert actions.do_list_manual_stock() == {"rows": [(TRITANIUM, "Tritanium", 500.0)]}
+
+
+# ------------------------------------------------------- planner preconditions
+def test_do_plan_asset_optimized_requires_sde(db):
+    with pytest.raises(ActionError):
+        actions.do_plan_asset_optimized()
+
+
+def test_do_market_status_requires_stock_targets(db):
+    _seed_sde()
+    with pytest.raises(ActionError):
+        actions.do_market_status()
+
+
+def test_do_stock_value_requires_stock_targets(db):
+    _seed_sde()
+    with pytest.raises(ActionError):
+        actions.do_stock_value()
+
+
+def test_do_invention_logistics_requires_invention_location(db):
+    _seed_sde()
+    from eve_trader_local.production.config import ProductionConfig
+    with pytest.raises(ActionError):
+        actions.do_invention_logistics(ProductionConfig(invention_location_id=None))
+
+
+def test_do_t1_bpc_invention_needs_requires_invention_location(db):
+    _seed_sde()
+    from eve_trader_local.production.config import ProductionConfig
+    with pytest.raises(ActionError):
+        actions.do_t1_bpc_invention_needs(ProductionConfig(invention_location_id=None))

@@ -16,7 +16,7 @@ from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError
 from . import engine, esi_sync
 from .config import PRODUCTION_CONFIG, ProductionConfig
-from .models import BuildCandidate, SpecialOrder
+from .models import BuildCandidate, ShipMarginRow, SpecialOrder
 
 SYNC_SCOPE = "production"
 
@@ -111,6 +111,81 @@ def do_plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     if not storage.load_stock_targets():
         raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
     return engine.plan_production(cfg)
+
+
+def do_plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Runs the readiness-focused planner (engine.plan_asset_optimized) -
+    same preconditions as do_plan_production."""
+    if not storage.sde_row_counts().get("sde_types"):
+        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+    if not storage.load_stock_targets():
+        raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
+    return engine.plan_asset_optimized(cfg)
+
+
+def do_market_status(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Cheap target-vs-current-stock read (engine.market_status), no live
+    pricing needed."""
+    if not storage.load_stock_targets():
+        raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
+    return {"rows": engine.market_status(cfg)}
+
+
+def do_stock_value(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Total ISK value of current stock (engine.stock_value)."""
+    if not storage.load_stock_targets():
+        raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
+    return engine.stock_value(cfg)
+
+
+def do_get_ship_margins(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Margin page's list view - every ship's current home/Jita price, build
+    cost, and both margins (engine.discover_ship_margins)."""
+    if not storage.sde_row_counts().get("sde_types"):
+        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+    rows = engine.discover_ship_margins(cfg)
+    return {"rows": [ShipMarginRow(**r) for r in rows]}
+
+
+def do_invention_logistics(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Datacores/decryptors/T1 BPC (or relic) runs needed vs. what's at
+    cfg.invention_location_id, for the invention_list plan_production's most
+    recent run would produce - re-runs plan_production to get that list
+    (no cached "last plan" table exists here yet)."""
+    if cfg.invention_location_id is None:
+        raise ActionError("No invention_location_id configured.")
+    plan = do_plan_production(cfg)
+    return {"rows": engine.invention_logistics(plan["invention_list"], cfg)}
+
+
+def do_t1_bpc_invention_needs(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """T1-blueprint(-or-relic)-only slice of do_invention_logistics - see
+    engine.t1_bpc_invention_needs."""
+    if cfg.invention_location_id is None:
+        raise ActionError("No invention_location_id configured.")
+    plan = do_plan_production(cfg)
+    return {"rows": engine.t1_bpc_invention_needs(plan["invention_list"], cfg)}
+
+
+# ---------------------------------------------------------------- manual stock
+def do_set_manual_stock(type_id_or_name: str, count: float) -> dict:
+    """See storage.py's manual_stock table comment for why this is a genuinely
+    separate signal from ESI-synced assets, not a simplification of them."""
+    if count < 0:
+        raise ActionError("Manual stock count cannot be negative.")
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.upsert_manual_stock(type_id, type_name, count)
+    return {"type_id": type_id, "type_name": type_name, "count": count}
+
+
+def do_remove_manual_stock(type_id_or_name: str) -> dict:
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.delete_manual_stock(type_id)
+    return {"removed": type_id, "type_name": type_name}
+
+
+def do_list_manual_stock() -> dict:
+    return {"rows": storage.list_manual_stock()}
 
 
 # ------------------------------------------------------------- Special Orders

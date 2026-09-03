@@ -129,6 +129,77 @@ def test_delete_stock_target_is_idempotent(db):
     assert storage.load_stock_targets() == []
 
 
+def test_manual_stock_round_trip(db):
+    storage.upsert_manual_stock(34, "Tritanium", 500.0)
+    storage.upsert_manual_stock(35, "Pyerite", 250.0)
+
+    assert storage.load_manual_stock() == {34: 500.0, 35: 250.0}
+    assert storage.list_manual_stock() == [(35, "Pyerite", 250.0), (34, "Tritanium", 500.0)]
+
+
+def test_manual_stock_upsert_overwrites_existing_row(db):
+    storage.upsert_manual_stock(34, "Tritanium", 500.0)
+    storage.upsert_manual_stock(34, "Tritanium", 750.0)
+
+    assert storage.load_manual_stock() == {34: 750.0}
+
+
+def test_delete_manual_stock_is_idempotent(db):
+    storage.upsert_manual_stock(34, "Tritanium", 500.0)
+    storage.delete_manual_stock(34)
+    storage.delete_manual_stock(34)
+    assert storage.load_manual_stock() == {}
+
+
+def test_available_blueprint_copies_sums_runs_not_copy_count(db):
+    """Confirmed real bug in the parent this ports the fix for: a single
+    300-run copy supports 300 invention attempts, not 1 - COUNT(*) would
+    understate this by two orders of magnitude."""
+    storage.replace_assets("character_assets", [
+        (1, 999, 60003760, None, 1, 1, "Test Character"),
+    ])
+    storage.replace_blueprints("character_blueprints", [
+        (1, 999, 60003760, None, -2, 0, 0, 300),  # one 300-run copy
+    ])
+    storage.replace_assets("corp_assets", [
+        (2, 999, 60003761, None, 1, 1, "Test Corp"),
+    ])
+    storage.replace_blueprints("corp_blueprints", [
+        (2, 999, 60003761, None, -2, 0, 0, 50),  # one 50-run copy elsewhere
+    ])
+
+    assert storage.available_blueprint_copies(999, None) == 350.0
+    assert storage.available_blueprint_copies(999, 60003760) == 300.0
+
+
+def test_available_blueprint_copies_excludes_originals(db):
+    storage.replace_assets("character_assets", [(1, 999, 60003760, None, 1, 1, "Test")])
+    storage.replace_blueprints("character_blueprints", [
+        (1, 999, 60003760, None, -1, 10, 20, -1),  # an Original, not a copy
+    ])
+    assert storage.available_blueprint_copies(999, None) == 0.0
+
+
+def test_has_bpo_at_location(db):
+    storage.replace_assets("character_assets", [(1, 999, 60003760, None, 1, 1, "Test")])
+    storage.replace_blueprints("character_blueprints", [
+        (1, 999, 60003760, None, -1, 10, 20, -1),
+    ])
+    assert storage.has_bpo_at_location(999, 60003760) is True
+    assert storage.has_bpo_at_location(999, 60003761) is False
+    assert storage.has_bpo_at_location(1234, 60003760) is False
+
+
+def test_get_blueprint_time(db):
+    storage.replace_sde_data(
+        types=[], groups=[], market_groups=[],
+        blueprint_time=[(92201, 1, 3600.0)],
+        blueprint_materials=[], blueprint_products=[],
+    )
+    assert storage.get_blueprint_time(92201, 1) == 3600.0
+    assert storage.get_blueprint_time(92201, 8) is None
+
+
 def test_explicit_path_argument_is_honoured(tmp_path):
     other = tmp_path / "other.sqlite3"
     storage.init_db(other)

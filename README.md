@@ -20,28 +20,35 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine works end to end (CLI); Ore & Minerals works end to end (CLI)
+## Status: Trading pipeline works end to end (CLI); Production backend fully done (CLI); Doctrine works end to end (CLI); Ore & Minerals works end to end (CLI)
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
 reconciliation all run for real from the CLI, not just as isolated modules.
 
 The **Production** tool (Tech I/II/Reaction manufacturing planning) has its
-SDE-driven classification, buy-vs-build cost/margin math, invention math,
-producer ESI sync (blueprints/assets/industry jobs, including real owned-BPO
-ME/TE), build-candidate discovery, a stock-aware planner (plain CLI
-stock-target entry, netted against synced assets/incoming jobs), and Special
-Orders (ad-hoc one-off build orders priced with the same buy-vs-build engine,
-optionally netted against synced stock) all ported and runnable from the
-CLI. Still missing: the web-only logistics/distribution views and the
-readiness-focused asset-optimized planner variant.
+whole backend ported and runnable from the CLI: SDE-driven classification,
+buy-vs-build cost/margin math, invention math, producer ESI sync
+(blueprints/assets/industry jobs, including real owned-BPO ME/TE),
+build-candidate discovery, the Margin page's ship browser, a stock-aware
+planner (plain CLI stock-target entry, netted against synced assets/incoming
+jobs, plus a real manual-stock override and an invention-needs list), a
+second readiness-focused asset-optimized planner (which jobs are startable
+right now vs. blocked on an upstream shortfall), cheap market-status/
+stock-value reads, invention-location logistics (datacores/decryptors/T1 BPCs
+needed vs. on hand), and Special Orders (ad-hoc one-off build orders priced
+with the same buy-vs-build engine, optionally netted against synced stock).
+Only the parent's multi-structure Logistik-tab helpers
+(`logistics_status`/`distribution_recommendations`) are left out, as a
+deliberate single-structure simplification rather than a gap — see `SYNC.md`.
 
 The **Doctrine** tool (fitted-ship contract/stockpile tracking against EFT
 fittings) is fully ported and runnable from the CLI too: paste-and-store EFT
 fittings under a named doctrine, sync outstanding contracts + synced-asset
 stock from ESI, match each contract against your fitting definitions, and get
-a contract/stockpile deviation report with red/yellow/green ampel status.
-Only the Shopping List's build-vs-buy comparison is still missing.
+a contract/stockpile deviation report with red/yellow/green ampel status,
+a Shopping List (every stockpile shortfall priced Build vs. Buy-C-J vs.
+Buy-Jita) and a permanent contract-history log of finished sales.
 
 The **Ore & Minerals** tool (ore/ice import-refine-sell, reprocessing quotes,
 mineral shopping list) is fully ported and runnable from the CLI too: an
@@ -108,7 +115,14 @@ What exists:
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
   `refresh-shortlist`, `check-unlisted-stock`, `check-undercut`,
-  `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`,
+  `reconcile-trades`, `sync-esi`, `discover-build-candidates`,
+  `discover-ship-margins`, `set-stock-target`, `remove-stock-target`,
+  `list-stock-targets`, `plan-production`, `plan-asset-optimized`,
+  `market-status`, `stock-value`, `invention-logistics`,
+  `t1-bpc-invention-needs`, `set-manual-stock`, `remove-manual-stock`,
+  `list-manual-stock`, `create-special-order`, `list-special-orders`,
+  `update-special-order`, `remove-special-order`, `compute-special-order`,
+  `pipeline`,
   `parse-fitting`, `create-doctrine`, `list-doctrines`, `add-fitting`,
   `list-fittings`, `sync-doctrine`, `validate-contracts`, `doctrine-status`,
   `stockpile-status`, `shopping-list`, `list-contracts`, `contract-history`,
@@ -125,11 +139,11 @@ Explicitly **not** done yet:
 - Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test
   and a working end-to-end proof, not the intended interface — see
   `ROADMAP.md` for the planned menu/tab navigation model.
-- Production's logistics/distribution views and the readiness-focused
-  asset-optimized planner variant (per-category structure assignments —
-  web-UI-shaped concepts with no local equivalent yet).
-- Doctrine's Shopping List (build-vs-buy-vs-buy-Jita pricing for stockpile
-  shortfalls) and its separate append-only contract-history log.
+- Production's multi-structure Logistik-tab helpers
+  (`logistics_status`/`distribution_recommendations`) — per-category
+  structure assignments, a genuine multi-structure routing concept with no
+  single-structure equivalent; judged out of scope rather than deferred, see
+  `SYNC.md`.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.

@@ -106,6 +106,66 @@ def test_current_stock_nets_owned_assets_and_incoming_jobs(planner_sde):
     assert inv_a.total_missing == pytest.approx(5.0)  # 10 target - 5 on hand
 
 
+def test_manual_stock_adds_to_esi_derived_current_stock(planner_sde):
+    """A genuinely separate signal from ESI-synced assets - see storage.py's
+    manual_stock table comment."""
+    storage.replace_assets("character_assets", [
+        (1, FINISHED_A, 60003760, "Hangar", 3, 0, "Test Character"),
+    ])
+    storage.upsert_manual_stock(FINISHED_A, "Finished Widget A", 7.0)
+    storage.upsert_stock_target(FINISHED_A, "Finished Widget A", 10.0)
+
+    plan = engine.plan_production(_cfg())
+
+    inv_a = next(r for r in plan["inventory"] if r.type_id == FINISHED_A)
+    assert inv_a.current_stock == pytest.approx(10.0)  # 3 ESI + 7 manual
+    assert inv_a.total_missing == pytest.approx(0.0)
+
+
+def test_market_status_is_a_cheap_target_vs_stock_read(planner_sde):
+    storage.upsert_stock_target(FINISHED_A, "Finished Widget A", 10.0, jita_target=True)
+    storage.replace_assets("character_assets", [
+        (1, FINISHED_A, 60003760, "Hangar", 4, 0, "Test Character"),
+    ])
+
+    rows = engine.market_status(_cfg())
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.type_id == FINISHED_A
+    assert row.target == 10.0
+    assert row.current_stock == pytest.approx(4.0)
+    assert row.missing == pytest.approx(6.0)
+    assert row.jita_target is True
+
+
+def test_stock_value_prices_current_stock_at_home_sell(planner_sde):
+    storage.upsert_stock_target(MINERAL, "Tritanium", 100.0)
+    storage.replace_assets("character_assets", [
+        (1, MINERAL, 60003760, "Hangar", 50, 0, "Test Character"),
+    ])
+
+    result = engine.stock_value(_cfg())
+
+    assert result["priced_items"] == 1
+    assert result["unpriced_items"] == 0
+    assert result["total_value"] == pytest.approx(50 * HOME[MINERAL].sell)
+
+
+def test_stock_value_excludes_unpriced_items_from_total(planner_sde):
+    # FINISHED_A has no home/jita quote in this fixture's HOME/JITA maps.
+    storage.upsert_stock_target(FINISHED_A, "Finished Widget A", 100.0)
+    storage.replace_assets("character_assets", [
+        (1, FINISHED_A, 60003760, "Hangar", 5, 0, "Test Character"),
+    ])
+
+    result = engine.stock_value(_cfg())
+
+    assert result["priced_items"] == 0
+    assert result["unpriced_items"] == 1
+    assert result["total_value"] == 0.0
+
+
 def test_shared_component_demand_pools_across_stock_targets(planner_sde):
     """FINISHED_A (target 10) and FINISHED_B (target 5) both consume
     COMPONENT - its build_runs entry must reflect their combined demand, not
@@ -135,6 +195,80 @@ def test_do_plan_production_raises_without_stock_targets(planner_sde):
 
     with pytest.raises(ActionError):
         do_plan_production()
+
+
+def test_plan_asset_optimized_splits_ready_now_from_blocked(planner_sde):
+    """FINISHED_A needs 18 units of COMPONENT for its 10 runs (2 x 0.9 ME x
+    10, same math test_shared_component_demand_pools_across_stock_targets
+    checks for plan_production) - with only 9 physically on hand, exactly
+    half of FINISHED_A's runs are startable right now, and the remaining
+    COMPONENT shortfall (9 units) becomes its own job, itself entirely
+    blocked since no MINERAL is on hand to build it."""
+    storage.upsert_stock_target(FINISHED_A, "Finished Widget A", 10.0)
+    storage.replace_assets("character_assets", [
+        (1, COMPONENT, 60003760, "Hangar", 9, 0, "Test Character"),
+    ])
+
+    plan = engine.plan_asset_optimized(_cfg())
+
+    jobs_by_type = {j.type_id: j for j in plan["jobs"]}
+    finished_a = jobs_by_type[FINISHED_A]
+    assert finished_a.job_runs == 10
+    assert finished_a.runs_ready_now == 5
+    assert finished_a.stock_coverage == pytest.approx(0.0)  # 0 FINISHED_A units on hand / target 10
+
+    component = jobs_by_type[COMPONENT]
+    assert component.job_runs == 9          # 18 needed - 9 on hand
+    assert component.runs_ready_now == 0    # no MINERAL on hand to build any of it
+    assert component.stock_coverage == pytest.approx(0.5)  # 9 available / 18 buffered demand
+
+    # MINERAL has no blueprint at all - it never becomes a job here (this
+    # planner has no buy_list, unlike plan_production).
+    assert MINERAL not in jobs_by_type
+
+
+def test_plan_asset_optimized_stock_on_hand_excludes_incoming_jobs(planner_sde):
+    """The readiness split (_stock_on_hand) must not count an in-progress
+    industry job's eventual output as startable right now, even though
+    _current_stock (job *sizing*) correctly does - see _stock_on_hand's own
+    docstring for the real bug this guards against."""
+    storage.upsert_stock_target(FINISHED_A, "Finished Widget A", 10.0)
+    # 18 units "as good as in stock" via an incoming job, but 0 physically on hand.
+    storage.replace_industry_jobs("character_industry_jobs", [
+        (1, 1, COMPONENT_BP, COMPONENT, 18, 60003760, "active", "", "", 1, "Test Character"),
+    ])
+
+    plan = engine.plan_asset_optimized(_cfg())
+
+    jobs_by_type = {j.type_id: j for j in plan["jobs"]}
+    # Sizing nets the full 18 incoming units against the 18 needed, so no
+    # further COMPONENT job/shortfall exists at all...
+    assert COMPONENT not in jobs_by_type
+    # ...but readiness sees 0 units physically on hand, so nothing is ready now.
+    assert jobs_by_type[FINISHED_A].runs_ready_now == 0
+    assert jobs_by_type[FINISHED_A].job_runs == 10
+
+
+def test_plan_asset_optimized_respects_min_margin_gate(planner_sde, monkeypatch):
+    """Same margin gate as plan_production: an unprofitable stock target
+    produces no job at all, matching the confirmed "the two Baulisten must
+    never disagree on whether to build something" rule."""
+    home = dict(HOME)
+    home[FINISHED_A] = CurrentPrice(type_id=FINISHED_A, updated="", buy=1.0, sell=1.0)  # near-zero margin
+    monkeypatch.setattr(engine.pricing, "home_prices", lambda type_ids, cfg=None, client=None: home)
+    storage.upsert_stock_target(FINISHED_A, "Finished Widget A", 10.0)
+
+    plan = engine.plan_asset_optimized(_cfg(min_margin=0.5))
+
+    assert plan["jobs"] == []
+
+
+def test_do_plan_asset_optimized_raises_without_stock_targets(planner_sde):
+    from eve_trader_local.production.actions import do_plan_asset_optimized
+    from eve_trader_local.errors import ActionError
+
+    with pytest.raises(ActionError):
+        do_plan_asset_optimized()
 
 
 def test_build_margin_dispatches_home_vs_jita(planner_sde):

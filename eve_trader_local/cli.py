@@ -13,7 +13,11 @@
     eve-trader-local sync-esi
     eve-trader-local discover-build-candidates
     eve-trader-local set-stock-target <item> <quantity> [--jita] / remove-stock-target <item> / list-stock-targets
-    eve-trader-local plan-production
+    eve-trader-local plan-production / plan-asset-optimized
+    eve-trader-local market-status / stock-value
+    eve-trader-local discover-ship-margins
+    eve-trader-local invention-logistics / t1-bpc-invention-needs
+    eve-trader-local set-manual-stock <item> <count> / remove-manual-stock <item> / list-manual-stock
     eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--net-against-stock]
     eve-trader-local list-special-orders / remove-special-order <order_id>
     eve-trader-local compute-special-order <order_id>
@@ -310,6 +314,93 @@ def cmd_plan_production(args: argparse.Namespace) -> None:
                   f"on hand {row.on_hand_pct:5.1f}%")
     if not plan["build_list"] and not plan["buy_list"]:
         print("\nEvery stock target is already fully covered.")
+    if plan["invention_list"]:
+        print("\nInvention Needs:")
+        for row in plan["invention_list"]:
+            print(f"  {row.type_name:<40} attempts {row.recommended_invention_runs:>6,}   "
+                  f"BPCs owned {row.t2_bpc_owned:>6,}   stockpile {row.stockpile_pct:6.1f}%")
+
+
+def cmd_plan_asset_optimized(args: argparse.Namespace) -> None:
+    print("Planning readiness against configured stock targets (this can take a while)...")
+    plan = production_actions.do_plan_asset_optimized()
+    if not plan["jobs"]:
+        print("Nothing to build right now.")
+        return
+    for row in plan["jobs"]:
+        margin = f"{row.margin * 100:6.1f}%" if row.margin is not None else "     -"
+        coverage = f"{row.stock_coverage * 100:5.1f}%" if row.stock_coverage is not None else "    -"
+        print(f"  {row.type_name:<40} {row.job_runs:>6,} runs   ready now {row.runs_ready_now:>6,}   "
+              f"margin {margin}   stock coverage {coverage}")
+
+
+def cmd_market_status(args: argparse.Namespace) -> None:
+    rows = production_actions.do_market_status()["rows"]
+    if not rows:
+        print("No stock targets with a shortfall to report.")
+        return
+    for row in rows:
+        where = "Jita" if row.jita_target else "home"
+        print(f"  {row.type_name:<40} target {row.target:>10,.0f}   on hand {row.current_stock:>10,.0f}   "
+              f"missing {row.missing:>10,.0f}   sells at {where}")
+
+
+def cmd_stock_value(args: argparse.Namespace) -> None:
+    result = production_actions.do_stock_value()
+    print(f"Total stock value: {result['total_value']:,.0f} ISK "
+          f"({result['priced_items']} priced, {result['unpriced_items']} unpriced)")
+
+
+def cmd_discover_ship_margins(args: argparse.Namespace) -> None:
+    print("Scanning ships for build cost/margin (this can take a while)...")
+    rows = production_actions.do_get_ship_margins()["rows"]
+    if not rows:
+        print("No manufacturable ships found - refresh SDE first?")
+        return
+    for r in rows[:20]:
+        home_price = f"{r.home_price:,.0f}" if r.home_price is not None else "-"
+        margin = f"{r.margin_home * 100:6.1f}%" if r.margin_home is not None else "     -"
+        print(f"  {r.type_name:<40} {r.activity:<10} home {home_price:>16}   margin {margin}")
+
+
+def cmd_invention_logistics(args: argparse.Namespace) -> None:
+    rows = production_actions.do_invention_logistics()["rows"]
+    if not rows:
+        print("Nothing needed at the configured invention location right now.")
+        return
+    for row in rows:
+        print(f"  {row.type_name:<40} needed {row.needed:>8,.0f}   available {row.available:>8,.0f}   "
+              f"missing {row.missing:>8,.0f}")
+
+
+def cmd_t1_bpc_invention_needs(args: argparse.Namespace) -> None:
+    rows = production_actions.do_t1_bpc_invention_needs()["rows"]
+    if not rows:
+        print("Nothing needed at the configured invention location right now.")
+        return
+    for row in rows:
+        bpo = "BPO on site" if row.bpo_present else ""
+        print(f"  {row.name:<40} needed {row.needed:>6,}   available {row.available:>6,}   "
+              f"missing {row.missing:>6,}   {row.stockpile_pct:5.1f}%  {bpo}")
+
+
+def cmd_set_manual_stock(args: argparse.Namespace) -> None:
+    result = production_actions.do_set_manual_stock(args.item, args.count)
+    print(f"Manual stock set: {result['type_name']} -> {result['count']:,.0f} units.")
+
+
+def cmd_remove_manual_stock(args: argparse.Namespace) -> None:
+    result = production_actions.do_remove_manual_stock(args.item)
+    print(f"Removed manual stock: {result['type_name']}")
+
+
+def cmd_list_manual_stock(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_manual_stock()["rows"]
+    if not rows:
+        print("No manual stock overrides configured.")
+        return
+    for type_id, type_name, count in rows:
+        print(f"  {type_name:<40} {count:>10,.0f} units")
 
 
 def _resolve_type_for_cli(type_id_or_name: str) -> int:
@@ -726,6 +817,47 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "plan-production", help="run the stock-aware buy/build planner against configured stock targets"
     ).set_defaults(func=cmd_plan_production)
+
+    sub.add_parser(
+        "plan-asset-optimized",
+        help="readiness-focused planner: which jobs are startable right now vs. blocked upstream",
+    ).set_defaults(func=cmd_plan_asset_optimized)
+
+    sub.add_parser(
+        "market-status", help="cheap target-vs-current-stock read, no live pricing needed"
+    ).set_defaults(func=cmd_market_status)
+
+    sub.add_parser(
+        "stock-value", help="total ISK value of current stock, priced at home/Jita sell quotes"
+    ).set_defaults(func=cmd_stock_value)
+
+    sub.add_parser(
+        "discover-ship-margins", help="every manufacturable ship's current price/build cost/margin"
+    ).set_defaults(func=cmd_discover_ship_margins)
+
+    sub.add_parser(
+        "invention-logistics",
+        help="datacores/decryptors/T1 BPCs needed vs. what's at the configured invention location",
+    ).set_defaults(func=cmd_invention_logistics)
+
+    sub.add_parser(
+        "t1-bpc-invention-needs", help="T1-blueprint(-or-relic)-only slice of invention-logistics"
+    ).set_defaults(func=cmd_t1_bpc_invention_needs)
+
+    p_set_manual = sub.add_parser(
+        "set-manual-stock", help="record a manually-counted stock override, on top of ESI-synced assets"
+    )
+    p_set_manual.add_argument("item", help="type_id or exact item name")
+    p_set_manual.add_argument("count", type=float, help="physically counted quantity")
+    p_set_manual.set_defaults(func=cmd_set_manual_stock)
+
+    p_remove_manual = sub.add_parser("remove-manual-stock", help="remove a manual stock override")
+    p_remove_manual.add_argument("item", help="type_id or exact item name")
+    p_remove_manual.set_defaults(func=cmd_remove_manual_stock)
+
+    sub.add_parser(
+        "list-manual-stock", help="list every configured manual stock override"
+    ).set_defaults(func=cmd_list_manual_stock)
 
     p_create_order = sub.add_parser(
         "create-special-order", help="create a one-off build order for an ad-hoc list of items"
