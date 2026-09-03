@@ -120,13 +120,15 @@ coverage).
 ## Deferred (not started, tracked here so it isn't lost)
 
 - All five tools now have real GUI views (see README.md's "Native GUI"
-  section) — what's left is cross-view/app-level GUI work, not another
-  tool's menu: a persistent Settings dialog (Settings changes still go
-  through the CLI/`config.yaml`), an in-app OAuth/character-login flow
-  (`eve-trader-local auth` on the CLI is still how a character gets
-  registered — the GUI has no way to add/remove a character itself), and
-  general polish (column widths/sorting defaults, remembering window/tab
-  state between launches).
+  section), plus a Settings dialog and an in-app Characters (OAuth/login)
+  dialog, both reachable from a new top-level "App" menu (`gui/dialogs/`,
+  `gui/main_window.py`) — Settings changes and character login/removal no
+  longer require dropping to the CLI. What's left is general polish only:
+  column widths/sorting defaults, remembering window/tab state between
+  launches, and a real editor for the handful of tuple/dict-typed config
+  fields the Settings dialog currently shows read-only (e.g.
+  `excluded_path_prefixes`, `ore_family_skill_levels` — edit `config.yaml`
+  directly for those until then).
 - Packaging/installer once the above is far enough along to be worth
   packaging (feeds directly into Stage 2 of the update mechanism above).
 

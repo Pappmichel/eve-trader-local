@@ -16,6 +16,8 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 
+from .dialogs.characters_dialog import CharactersDialog
+from .dialogs.settings_dialog import SettingsDialog
 from .views.doctrine_contract_history import ContractHistoryView
 from .views.doctrine_fittings import FittingsView
 from .views.doctrine_shopping_list import ShoppingListView
@@ -82,6 +84,7 @@ class MainWindow(QMainWindow):
         self._build_menus()
 
     def _build_menus(self) -> None:
+        self._build_app_menu()
         for tool_label, views in _TOOL_MENUS.items():
             menu = self.menuBar().addMenu(tool_label)
             if not views:
@@ -93,6 +96,28 @@ class MainWindow(QMainWindow):
                 action = QAction(view_label, self)
                 action.triggered.connect(lambda checked=False, vc=view_class: self._open_view(vc))
                 menu.addAction(action)
+
+    def _build_app_menu(self) -> None:
+        """Cross-tool, app-level actions (Settings, Characters) - deliberately
+        the one menu that isn't one of `_TOOL_MENUS`' per-tool entries, since
+        neither dialog belongs to just one tool. Both are opened as modal
+        `QDialog`s (`exec()`), not workspace tabs - see `dialogs/__init__.py`
+        for why they can't be `views.base.BaseView` subclasses."""
+        menu = self.menuBar().addMenu("App")
+
+        settings_action = QAction("Settings...", self)
+        settings_action.triggered.connect(self._open_settings)
+        menu.addAction(settings_action)
+
+        characters_action = QAction("Characters...", self)
+        characters_action.triggered.connect(self._open_characters)
+        menu.addAction(characters_action)
+
+    def _open_settings(self) -> None:
+        SettingsDialog(self).exec()
+
+    def _open_characters(self) -> None:
+        CharactersDialog(self).exec()
 
     def _open_view(self, view_class: type) -> None:
         existing_index = self._open_views.get(view_class)

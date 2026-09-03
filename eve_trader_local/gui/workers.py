@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtWidgets import QLabel
 
 from ..errors import ActionError
 
@@ -115,3 +116,63 @@ def run_action(parent: QObject, fn: Callable[[], Any],
     thread.finished.connect(worker.deleteLater)
     thread.start()
     return thread
+
+
+class BusyMixin:
+    """Shared busy-state/status-label/`run_action` machinery for anything
+    that calls into `actions.py` through a worker thread - both
+    `views.base.BaseView` (a QWidget-based workspace tab) and the app-level
+    dialogs (`SettingsDialog`, `CharactersDialog`, both `QDialog`s) mix this
+    in instead of duplicating it.
+
+    Deliberately *not* a `QObject` subclass itself: PySide6 doesn't support
+    a class inheriting from two different `QObject`-derived branches (e.g.
+    `QWidget` and `QDialog`) at once, so this stays a plain Python mixin -
+    it only assumes `self.setEnabled(...)` is provided by whichever real Qt
+    widget/dialog class it's mixed into, and that `_init_busy()` has been
+    called (from that class's own `__init__`, after `super().__init__()`)
+    before any of these methods are used."""
+
+    def _init_busy(self) -> None:
+        self._threads: list = []  # keeps QThreads alive until they finish - see run_action above
+        self.status_label = QLabel("")
+        self.status_label.setWordWrap(True)
+
+    def set_busy(self, busy: bool, message: str = "Wird geladen...") -> None:
+        self.setEnabled(not busy)
+        if busy:
+            self.status_label.setStyleSheet("")
+            self.status_label.setText(message)
+
+    def show_error(self, message: str) -> None:
+        self.status_label.setStyleSheet("color: #c0392b;")
+        self.status_label.setText(message)
+
+    def show_info(self, message: str) -> None:
+        self.status_label.setStyleSheet("color: #27632a;")
+        self.status_label.setText(message)
+
+    def run_action(self, fn: Callable[[], Any], on_success: Callable[[Any], None],
+                   busy_message: str = "Wird geladen...") -> None:
+        """The one call every view/dialog makes to reach `actions.py` (or any
+        other blocking call, e.g. `TokenManager.login`). Runs `fn` (a
+        zero-arg callable) on a worker thread; on success calls
+        `on_success(result)` after clearing the busy state, on an
+        ActionError shows its message in the status label. Disabled while
+        busy so a second click can't fire the same action twice
+        concurrently."""
+        self.set_busy(True, busy_message)
+
+        def _on_success(result):
+            self.set_busy(False)
+            on_success(result)
+
+        def _on_failure(message):
+            self.set_busy(False)
+            self.show_error(message)
+
+        thread = run_action(self, fn, _on_success, _on_failure)
+        self._threads.append(thread)
+        # Same plain-lambda-receiver caveat _ResultBridge documents at length
+        # - harmless here since this only touches a Python list, not a widget.
+        thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)

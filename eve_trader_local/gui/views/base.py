@@ -5,7 +5,11 @@ commands need on screen:
 - `BaseView`: a status bar (busy/error/info text) plus `run_action`, the one
   place every view calls into `actions.py` through `workers.run_action` -
   handles busy-state toggling and error display uniformly so individual
-  views don't each reimplement it.
+  views don't each reimplement it. The actual busy/status/run_action
+  machinery lives in `workers.BusyMixin`, shared with the app-level dialogs
+  (`SettingsDialog`/`CharactersDialog`, both `QDialog`s rather than
+  `QWidget`s) - see that class's own docstring for why it's a plain mixin
+  rather than another shared QWidget base class.
 - `TableView(BaseView)`: adds a `QTableWidget` and `populate_table`, for the
   many views that are fundamentally "a table of rows plus a toolbar of
   actions" (the shortlist, build candidates, logistics rows, ...).
@@ -15,71 +19,27 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QHBoxLayout, QLabel, QPushButton, QTableWidget,
+from PySide6.QtWidgets import (QHBoxLayout, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
-from ..workers import run_action
+from ..workers import BusyMixin
 
 
-class BaseView(QWidget):
+class BaseView(QWidget, BusyMixin):
     """Subclass and set `title` (used as the tab label by MainWindow)."""
 
     title = "View"
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._threads: list = []  # keeps QThreads alive until they finish - see workers.run_action
+        self._init_busy()
         self.root_layout = QVBoxLayout(self)
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
 
     def _finish_status_row(self) -> None:
         """Call once, after subclasses have added their own widgets to
         `root_layout`, to place the status label last (errors/info always
         read at the bottom, under whatever content/toolbar the view has)."""
         self.root_layout.addWidget(self.status_label)
-
-    def set_busy(self, busy: bool, message: str = "Wird geladen...") -> None:
-        self.setEnabled(not busy)
-        if busy:
-            self.status_label.setStyleSheet("")
-            self.status_label.setText(message)
-
-    def show_error(self, message: str) -> None:
-        self.status_label.setStyleSheet("color: #c0392b;")
-        self.status_label.setText(message)
-
-    def show_info(self, message: str) -> None:
-        self.status_label.setStyleSheet("color: #27632a;")
-        self.status_label.setText(message)
-
-    def run_action(self, fn: Callable[[], Any], on_success: Callable[[Any], None],
-                   busy_message: str = "Wird geladen...") -> None:
-        """The one call every view makes to reach `actions.py`. Runs `fn` (a
-        zero-arg callable, typically `functools.partial(do_thing, ...)`) on a
-        worker thread; on success calls `on_success(result)` after clearing
-        the busy state, on an ActionError shows its message in the status
-        label. The view is disabled while busy so a second click can't fire
-        the same action twice concurrently."""
-        self.set_busy(True, busy_message)
-
-        def _on_success(result):
-            self.set_busy(False)
-            on_success(result)
-
-        def _on_failure(message):
-            self.set_busy(False)
-            self.show_error(message)
-
-        thread = run_action(self, fn, _on_success, _on_failure)
-        self._threads.append(thread)
-        # Plain-lambda receiver, same caveat `workers._ResultBridge` explains
-        # at length: Qt can't auto-queue onto a thread a non-QObject slot has
-        # no affinity for, so forcing QueuedConnection here would silently
-        # never fire. Left on the default connection - only Python-list
-        # bookkeeping, not a widget touch, so it's harmless even if Qt ever
-        # runs it off the UI thread.
-        thread.finished.connect(lambda: self._threads.remove(thread) if thread in self._threads else None)
 
 
 class TableView(BaseView):

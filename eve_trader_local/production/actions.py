@@ -13,13 +13,25 @@ from datetime import datetime, timezone
 from .. import storage
 from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, OAuthConfig
-from ..errors import ActionError
+from ..errors import ActionError, ConfigError
 from . import engine, esi_sync
-from .config import PRODUCTION_CONFIG, ProductionConfig
+from .config import PRODUCTION_CONFIG, ProductionConfig, save_config_overrides
 from .constants import JOB_CATEGORIES
 from .models import BuildCandidate, ShipMarginRow, SpecialOrder
 
 SYNC_SCOPE = "production"
+
+
+def do_update_settings(updates: dict, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Persists `updates` and applies them to the live PRODUCTION_CONFIG
+    immediately - same shape as the top-level/doctrine/refining/station
+    trading do_update_settings (this tool was simply missing its own copy
+    until now, see the GUI Settings dialog task that added it)."""
+    try:
+        save_config_overrides(updates, cfg)
+    except ConfigError as e:
+        raise ActionError(str(e)) from e
+    return {"updated": list(updates.keys())}
 
 
 def do_list_producer_characters(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> list[tuple[str, int, str]]:

@@ -33,7 +33,7 @@ def test_main_window_has_one_menu_per_tool(qapp, db):
 
     window = MainWindow()
     menu_labels = [action.text() for action in window.menuBar().actions()]
-    assert menu_labels == ["Trading", "Production", "Doctrine", "Ore && Minerals", "Station Trading"]
+    assert menu_labels == ["App", "Trading", "Production", "Doctrine", "Ore && Minerals", "Station Trading"]
 
 
 def test_production_menu_lists_its_views_not_the_placeholder(qapp, db):

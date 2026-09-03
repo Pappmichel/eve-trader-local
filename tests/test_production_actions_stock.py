@@ -7,6 +7,7 @@ import pytest
 from eve_trader_local import storage
 from eve_trader_local.errors import ActionError
 from eve_trader_local.production import actions
+from eve_trader_local.production.config import ProductionConfig
 
 TRITANIUM = 34
 
@@ -181,3 +182,27 @@ def test_list_category_locations(db):
         "assigned": {"Reactions": 1000000000001},
         "options": {"Reactions": [1000000000001, 1000000000002]},
     }
+
+
+# ---------------------------------------------------------------- settings
+def test_update_settings_persists_and_applies(db):
+    cfg = ProductionConfig()
+    result = actions.do_update_settings({"haul_cost_per_m3": 1200.0}, cfg)
+    assert result == {"updated": ["haul_cost_per_m3"]}
+    assert cfg.haul_cost_per_m3 == 1200.0
+    assert storage.load_settings("production")["haul_cost_per_m3"] == 1200.0
+
+
+def test_update_settings_rejects_a_bad_value_without_persisting(db):
+    cfg = ProductionConfig()
+    with pytest.raises(ActionError):
+        actions.do_update_settings({"haul_cost_per_m3": -5.0}, cfg)
+    assert storage.load_settings("production") == {}
+    assert cfg.haul_cost_per_m3 == ProductionConfig().haul_cost_per_m3
+
+
+def test_update_settings_rejects_unknown_structure_type(db):
+    cfg = ProductionConfig()
+    with pytest.raises(ActionError):
+        actions.do_update_settings({"reaction_structure_type": "Not A Real Structure"}, cfg)
+    assert storage.load_settings("production") == {}

@@ -208,12 +208,43 @@ below (never a 1:1 CLI-command mirror):
   into one tab, same reasoning as Production's own Ship Margins & Market
   Status grouping).
 
+Two app-level dialogs (`gui/dialogs/`), reachable from a new top-level "App"
+menu in `main_window.py` (not one of the per-tool menus, since neither
+belongs to just one tool):
+
+- **Settings** (`dialogs/settings_dialog.py`) — one tab per tool's config
+  dataclass, built generically off each dataclass's own fields (adding a
+  field to `TradingConfig`/`ProductionConfig`/etc. shows up here
+  automatically). Numbers get a ranged `QSpinBox`/`QDoubleSpinBox` (reusing
+  `config._FIELD_RANGES`, the same bounds the backend itself enforces),
+  bools a checkbox, the enum-style Production/Ore & Minerals structure/rig/
+  implant fields a `QComboBox` over their real valid options, and
+  `Optional[...]` fields a text box (blank = `None`). The handful of tuple/
+  dict-typed fields (`excluded_path_prefixes`, `ore_family_skill_levels`)
+  are shown read-only rather than with a real nested editor — genuine
+  future scope, not a gap in "show every field."
+- **Characters** (`dialogs/characters_dialog.py`) — lists every currently
+  authorized character (`auth.TokenManager.list_records`, same data
+  `eve-trader-local whoami` prints), starts a new SSO login for any of the
+  five roles (Buyer/Seller/Producer/Doctrine/Trader — blocking, opens the
+  system browser, so it always runs on a worker thread), and removes a
+  registered character. `eve-trader-local auth`/`whoami` on the CLI still
+  work exactly as before — this is an additional way in, not a replacement.
+
+Both dialogs are the first real callers of any tool's `do_update_settings` -
+there was no CLI command wiring those up before (`cmd_config` only ever
+displayed the resolved config, read-only). Both mix in `gui/workers.py`'s
+`BusyMixin` (the same busy-state/status-label/`run_action` machinery
+`views/base.py`'s `BaseView` itself is now built on top of) rather than
+subclassing `BaseView` directly, since a `QDialog` can't also inherit a
+`QWidget`-based common base in PySide6.
+
 Explicitly **not** done yet:
 
-- Cross-view/app-level features: no persistent Settings dialog in the GUI
-  itself (Settings changes still go through the CLI/`config.yaml`), no
-  in-app OAuth/character-login flow (`eve-trader-local auth` on the CLI is
-  still how a character gets registered).
+- General polish: column widths/sorting defaults, remembering window/tab
+  state between launches.
+- A real editor for the Settings dialog's read-only tuple/dict fields (see
+  above).
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
