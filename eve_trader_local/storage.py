@@ -1107,6 +1107,29 @@ def load_sde_type_groups(path: Optional[Path] = None) -> dict[int, int]:
     return {r[0]: r[1] for r in rows}
 
 
+def load_ore_ice_candidate_types(path: Optional[Path] = None) -> list[tuple[int, str, float, str]]:
+    """Returns (type_id, type_name, volume, group_name) for every published
+    compressed ore/ice type - the Ore Shortlist's fixed, SDE-derived candidate
+    universe (see refining/candidate_discovery.py). category_id 25 is Ore
+    (mirrors refining.constants.ORE_ICE_CATEGORY_ID as a bare literal here,
+    same "storage.py doesn't import a submodule's own constants" reasoning as
+    the parent's own copy of this function).
+
+    Filters on t.type_name LIKE 'Compressed%', not group_name - the parent
+    confirmed live against a real Fuzzwork-fetched SDE that a compressed
+    ore/ice type shares its *raw* ore's own group ("Compressed Veldspar"
+    lives in group "Veldspar" alongside raw "Veldspar" itself) - there is no
+    dedicated "Compressed <Family>" group in the real data, so filtering on
+    group_name instead silently produces an empty candidate universe."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT t.type_id, t.type_name, t.volume, g.group_name FROM sde_types t "
+            "JOIN sde_groups g ON g.group_id = t.group_id "
+            "WHERE g.category_id = 25 AND t.type_name LIKE 'Compressed%' AND t.published = 1"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
 # -------------------------------------------------------- candidate universe
 _CANDIDATE_TABLES = ("candidate_universe", "focused_candidates")
 
