@@ -20,7 +20,7 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine underway (parser + validation); Ore&Minerals not started
+## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine works end to end (CLI); Ore&Minerals not started
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
@@ -34,6 +34,13 @@ stock-target entry, netted against synced assets/incoming jobs) all ported
 and runnable from the CLI. Still missing: the web-only logistics/
 distribution views and the readiness-focused asset-optimized planner
 variant.
+
+The **Doctrine** tool (fitted-ship contract/stockpile tracking against EFT
+fittings) is fully ported and runnable from the CLI too: paste-and-store EFT
+fittings under a named doctrine, sync outstanding contracts + synced-asset
+stock from ESI, match each contract against your fitting definitions, and get
+a contract/stockpile deviation report with red/yellow/green ampel status.
+Only the Shopping List's build-vs-buy comparison is still missing.
 
 What exists:
 
@@ -66,21 +73,25 @@ What exists:
   `esi_sync.py` (producer character blueprints/assets/industry jobs),
   `models.py`, `config.py` (`ProductionConfig`) and `actions.py`.
 - `doctrine/` — the Doctrine tool (fitted-ship contract/stockpile tracking
-  against EFT fittings), underway: `constants.py` (slot sections, SDE
-  category IDs, parse/deviation/ampel vocabularies), `models.py` (the
-  parser-output and master-data dataclasses), `parser.py` (the EFT
-  fitting-format text parser — pure, storage-free, its SDE lookups injected
-  as callables by the caller), and `validation.py` (pure contract-matching/
-  stockpile-deviation scoring — Soll/Ist multisets, missing/short/extra/
-  wrong-variant deviations, and ampel aggregation; still no caller of its
-  own until `engine.py` exists). Contract sync and the orchestration layer
-  are not ported yet.
+  against EFT fittings): `constants.py` (slot sections, SDE category IDs,
+  parse/deviation/ampel vocabularies), `models.py` (the parser-output and
+  master-data dataclasses), `parser.py` (the EFT fitting-format text parser —
+  pure, storage-free, its SDE lookups injected as callables by the caller),
+  `validation.py` (pure contract-matching/stockpile-deviation scoring — Soll/
+  Ist multisets, missing/short/extra/wrong-variant deviations, and ampel
+  aggregation), `esi_sync.py` (one combined contract + asset sync for every
+  registered Doctrine character), `engine.py` (the real-SDE resolver wiring,
+  contract matching/validation, and Soll/Ist stockpile computation that ties
+  parser.py/validation.py to real synced data), `config.py`
+  (`DoctrineConfig`) and `actions.py`.
 - `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
   `refresh-shortlist`, `check-unlisted-stock`, `check-undercut`,
   `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`,
-  `parse-fitting`.
+  `parse-fitting`, `create-doctrine`, `list-doctrines`, `add-fitting`,
+  `list-fittings`, `sync-doctrine`, `validate-contracts`, `doctrine-status`,
+  `stockpile-status`, `list-contracts`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
@@ -93,10 +104,10 @@ Explicitly **not** done yet:
 - Production's logistics/distribution views and the readiness-focused
   asset-optimized planner variant (per-category structure assignments —
   web-UI-shaped concepts with no local equivalent yet).
-- The rest of Doctrine (ESI contract sync, the real-SDE resolver wiring and
-  orchestration that would call `validation.py` against synced data, the
-  shopping list) and the whole Ore & Minerals tool (the parent's
-  `refining/*`) — none of their business logic has been ported.
+- Doctrine's Shopping List (build-vs-buy-vs-buy-Jita pricing for stockpile
+  shortfalls) and its separate append-only contract-history log. The whole
+  Ore & Minerals tool (the parent's `refining/*`) — none of its business
+  logic has been ported.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
@@ -151,6 +162,17 @@ eve-trader-local pipeline                   # the daily workflow: refresh+prune,
 eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
 
 eve-trader-local parse-fitting <path>       # parse an EFT-format fitting file against the local SDE cache
+
+eve-trader-local auth --role doctrine       # authorize a character for Doctrine contracts + assets
+eve-trader-local create-doctrine <name> [--description]   # create a named doctrine
+eve-trader-local list-doctrines                           # list every doctrine
+eve-trader-local add-fitting <doctrine_id> <path> [--name] [--contract-target] [--stockpile-target]
+eve-trader-local list-fittings [doctrine_id]               # list fittings, optionally for one doctrine
+eve-trader-local sync-doctrine               # sync contracts + assets from ESI, match/validate them
+eve-trader-local validate-contracts          # re-match/re-validate synced contracts, no ESI
+eve-trader-local doctrine-status [doctrine_id]    # contract + stockpile ampel status
+eve-trader-local stockpile-status [doctrine_id]   # aggregated stockpile shortfalls
+eve-trader-local list-contracts [--status]        # list every synced Doctrine contract
 ```
 
 `<item>` above accepts either a numeric type_id or an exact (case-insensitive)
@@ -165,9 +187,23 @@ live ESI/Goonmetrics access for pricing, same as `discover-build-candidates`.
 `parse-fitting` needs `refresh-sde` to have run at least once (it resolves
 every item/hull name and slot against the local SDE cache) and takes a plain
 text file containing one EFT-format fitting export (the format EVE's
-in-game "Export" ship-fitting action produces) — it's a smoke test proving
-the parser resolves real data correctly, not the Doctrine tool itself (still
-unported: matching against synced contracts, stockpile scoring, ESI sync).
+in-game "Export" ship-fitting action produces) — it's a standalone preview,
+same parsing `add-fitting` uses, that never persists anything.
+
+The Doctrine workflow: `create-doctrine`, then `add-fitting <doctrine_id>
+<path>` for each fit you want tracked (`--contract-target`/`--stockpile-target`
+set how many outstanding contracts/spare sets you want to maintain), then
+`auth --role doctrine` once per character who should be scanned for
+contracts + assets. `sync-doctrine` pulls outstanding item-exchange
+contracts at your configured structure plus synced asset stock, matches each
+contract against your fittings, and writes a deviation report; run
+`doctrine-status`/`stockpile-status`/`list-contracts` afterward to see it.
+`validate-contracts` re-runs just the matching/deviation logic against
+whatever was synced last, without touching ESI — useful right after editing
+a fitting's targets or tolerance. `doctrine_structure_id` (a plain top-level
+key in `config.yaml`, same as every other config field - see `config`'s own
+output for the full field list) falls back to Trading's own `structure_id`
+if you already have one configured and leave Doctrine's own unset.
 
 `update` is manual and confirmed interactively, and refuses to run unless the
 checkout is exactly a clean install (on `main`, no uncommitted or untracked

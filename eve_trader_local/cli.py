@@ -16,6 +16,13 @@
     eve-trader-local plan-production
     eve-trader-local pipeline [--rebuild-universe]
     eve-trader-local parse-fitting <path>
+    eve-trader-local auth --role doctrine
+    eve-trader-local create-doctrine <name> [--description] / list-doctrines
+    eve-trader-local add-fitting <doctrine_id> <path> [--name] [--contract-target] [--stockpile-target]
+    eve-trader-local list-fittings [doctrine_id]
+    eve-trader-local sync-doctrine / validate-contracts
+    eve-trader-local doctrine-status [doctrine_id] / stockpile-status [doctrine_id]
+    eve-trader-local list-contracts [--status]
     eve-trader-local check-update / update
 
 No logic lives here: every command calls one actions.do_* function and prints
@@ -31,10 +38,13 @@ import time
 
 from . import actions, config, sde, storage, updater
 from .auth import TokenManager
-from .doctrine import parser as doctrine_parser
+from .doctrine import actions as doctrine_actions
+from .doctrine import config as doctrine_config
+from .doctrine import esi_sync as doctrine_esi_sync
 from .errors import ActionError
 from .paths import config_path, db_path
 from .production import actions as production_actions
+from .production import config as production_config
 from .production import esi_sync
 
 
@@ -44,12 +54,17 @@ def cmd_init_db(args: argparse.Namespace) -> None:
 
 
 def cmd_auth(args: argparse.Namespace) -> None:
-    # A producer character is authorized for a different set of scopes than a
-    # buyer/seller (assets, blueprints, industry jobs - see production/
-    # esi_sync.py), and EVE SSO grants exactly what the login asks for, so the
-    # role has to choose the scope list here rather than after the fact.
-    scopes = (esi_sync.PRODUCTION_SCOPES
-              if args.role == esi_sync.PRODUCER_ROLE_PREFIX else None)
+    # A producer/doctrine character is authorized for a different set of
+    # scopes than a buyer/seller (assets, blueprints, industry jobs/contracts
+    # - see production/esi_sync.py and doctrine/esi_sync.py), and EVE SSO
+    # grants exactly what the login asks for, so the role has to choose the
+    # scope list here rather than after the fact.
+    if args.role == esi_sync.PRODUCER_ROLE_PREFIX:
+        scopes = esi_sync.PRODUCTION_SCOPES
+    elif args.role == doctrine_esi_sync.DOCTRINE_ROLE_PREFIX:
+        scopes = doctrine_esi_sync.DOCTRINE_SCOPES
+    else:
+        scopes = None
     record = TokenManager().login(args.role, scopes)
     print(f"Authorized {record.character_name} ({record.character_id}) as '{record.role}'.")
 
@@ -67,9 +82,15 @@ def cmd_whoami(args: argparse.Namespace) -> None:
 
 
 def cmd_config(args: argparse.Namespace) -> None:
-    cfg = config.reload()
     print(f"config.yaml: {config_path()}{'' if config_path().exists() else ' (not present, using defaults)'}")
-    for key, value in vars(cfg).items():
+    print("\n[trading]")
+    for key, value in vars(config.reload()).items():
+        print(f"  {key} = {value!r}")
+    print("\n[production]")
+    for key, value in vars(production_config.reload()).items():
+        print(f"  {key} = {value!r}")
+    print("\n[doctrine]")
+    for key, value in vars(doctrine_config.reload()).items():
         print(f"  {key} = {value!r}")
 
 
@@ -278,42 +299,127 @@ def cmd_plan_production(args: argparse.Namespace) -> None:
         print("\nEvery stock target is already fully covered.")
 
 
-def _doctrine_resolve_name(name: str):
-    row = storage.resolve_sde_type_by_name(name)
-    if row is None:
-        return None
-    type_id, group_id, category_id, meta_group_id, meta_level, type_name = row
-    return doctrine_parser.ResolvedType(type_id=type_id, group_id=group_id, category_id=category_id,
-                                         meta_group_id=meta_group_id, meta_level=meta_level, type_name=type_name)
-
-
 def cmd_parse_fitting(args: argparse.Namespace) -> None:
-    # A standalone "prove the SDE-backed parser works" command, ahead of a
-    # real doctrine/engine.py - the same real-SDE resolver wiring the parent
-    # repo's engine.parse_fitting_text does, inlined here since no engine
-    # module exists yet to own it (see SYNC.md).
+    # A standalone "prove the SDE-backed parser works" preview - do_parse_
+    # fitting never persists (see its own docstring).
     with open(args.path, encoding="utf-8") as f:
         raw_eft = f.read()
-    try:
-        result = doctrine_parser.parse_fitting(
-            raw_eft, _doctrine_resolve_name, storage.get_type_slot,
-            hull_name_candidates=storage.list_hull_type_names(),
-        )
-    except doctrine_parser.FittingParseError as e:
-        raise ActionError(str(e)) from e
+    result = doctrine_actions.do_parse_fitting(raw_eft)
 
-    print(f"Hull: {result.hull_name} (type_id {result.hull_type_id})")
-    print(f"Fit name: {result.fit_name}")
-    if result.items:
+    print(f"Hull: {result['hull_name']} (type_id {result['hull_type_id']})")
+    print(f"Fit name: {result['fit_name']}")
+    if result["items"]:
         print("\nItems:")
-        for item in result.items:
-            offline = "  /offline" if item.is_offline else ""
-            print(f"  line {item.line_no:<4} {item.slot_section:<18} type_id {item.type_id:<10} "
-                  f"qty {item.quantity:g}{offline}")
-    if result.issues:
+        for item in result["items"]:
+            offline = "  /offline" if item["is_offline"] else ""
+            print(f"  line {item['line_no']:<4} {item['slot_section']:<18} type_id {item['type_id']:<10} "
+                  f"qty {item['quantity']:g}{offline}")
+    if result["issues"]:
         print("\nIssues:")
-        for issue in result.issues:
-            print(f"  line {issue.line_no:<4} {issue.issue_kind:<18} {issue.message}")
+        for issue in result["issues"]:
+            print(f"  line {issue['line_no']:<4} {issue['issue_kind']:<18} {issue['message']}")
+
+
+def cmd_create_doctrine(args: argparse.Namespace) -> None:
+    result = doctrine_actions.do_create_doctrine(args.name, args.description)
+    print(f"Created doctrine '{result['name']}' ({result['doctrine_id']}).")
+
+
+def cmd_list_doctrines(args: argparse.Namespace) -> None:
+    rows = doctrine_actions.do_list_doctrines()["rows"]
+    if not rows:
+        print("No doctrines yet. Run: eve-trader-local create-doctrine <name>")
+        return
+    for r in rows:
+        state = "active" if r["active"] else "inactive"
+        print(f"  {r['doctrine_id']}  {r['name']:<30} {state}")
+
+
+def cmd_add_fitting(args: argparse.Namespace) -> None:
+    with open(args.path, encoding="utf-8") as f:
+        raw_eft = f.read()
+    result = doctrine_actions.do_add_fitting(
+        args.doctrine_id, raw_eft, name=args.name, contract_target=args.contract_target,
+        stockpile_target=args.stockpile_target,
+    )
+    fitting = result["fitting"]
+    print(f"Added fitting '{fitting['name']}' ({fitting['fitting_id']}) - hull type_id {fitting['hull_type_id']}.")
+    if result["issues"]:
+        print(f"{len(result['issues'])} parse issue(s):")
+        for issue in result["issues"]:
+            print(f"  line {issue['line_no']:<4} {issue['issue_kind']:<18} {issue['message']}")
+
+
+def cmd_list_fittings(args: argparse.Namespace) -> None:
+    rows = doctrine_actions.do_list_fittings(args.doctrine_id)["rows"]
+    if not rows:
+        print("No fittings yet. Run: eve-trader-local add-fitting <doctrine_id> <path>")
+        return
+    for r in rows:
+        state = "active" if r["active"] else "inactive"
+        print(f"  {r['fitting_id']}  {r['name']:<30} contract target {r['contract_target']:>3}  "
+              f"stockpile target {r['stockpile_target']:>5}  {state}")
+
+
+def cmd_sync_doctrine(args: argparse.Namespace) -> None:
+    print("Syncing Doctrine contracts and assets from ESI...")
+    result = doctrine_actions.do_sync_doctrine()
+    contracts = result.get("contracts", {})
+    if "error" in contracts:
+        print(f"  contracts: failed - {contracts['error']}")
+    else:
+        print(f"  contracts synced: {contracts['contracts_synced']:,}  "
+              f"(not a relevant hull: {contracts['contracts_no_relevant_hull']:,})")
+    assets = result.get("assets", {})
+    if "error" in assets:
+        print(f"  assets: failed - {assets['error']}")
+    else:
+        for owner, summary in list(assets["characters"].items()) + list(assets["corporations"].items()):
+            if isinstance(summary, dict):
+                print(f"  {owner:<32} {summary['assets']:>7,} assets")
+            else:
+                print(f"  {owner:<32} {summary}")
+
+
+def cmd_validate_contracts(args: argparse.Namespace) -> None:
+    result = doctrine_actions.do_validate_contracts()
+    print(f"Revalidated {result['revalidated']:,} contract(s).")
+
+
+def cmd_doctrine_status(args: argparse.Namespace) -> None:
+    for d in doctrine_actions.do_get_doctrine_status(args.doctrine_id)["doctrines"]:
+        print(f"{d['doctrine_name']}  overall={d['overall']}  "
+              f"contracts={d['contract_rollup']}  stockpile={d['stockpile_rollup']}")
+        for f in d["fittings"]:
+            print(f"  {f['fitting_name']:<30} contracts {f['valid_contracts']}/{f['contract_target']} "
+                  f"({f['contract_status']})   stockpile shortfall "
+                  f"{f['worst_stockpile_shortfall_pct'] * 100:5.1f}% ({f['stockpile_status']})")
+
+
+def cmd_stockpile_status(args: argparse.Namespace) -> None:
+    result = doctrine_actions.do_get_stockpile_status(args.doctrine_id)
+    if not result["assets_available"]:
+        print("No Doctrine asset sync has ever run - stockpile figures are unavailable. "
+              "Run: eve-trader-local sync-doctrine")
+    rows = result["aggregated_rows"]
+    if not rows:
+        print("Nothing short of target.")
+        return
+    print("Aggregated shortfalls (across every doctrine/fitting that needs the item):")
+    for r in rows:
+        print(f"  {r['type_name']:<40} required {r['required_total']:>8,.0f}   available {r['available']:>8,.0f}   "
+              f"short {r['shortfall']:>8,.0f}   severity {r['severity'] or '-'}")
+
+
+def cmd_list_contracts(args: argparse.Namespace) -> None:
+    rows = doctrine_actions.do_list_contracts(status=args.status)["rows"]
+    if not rows:
+        print("No synced contracts.")
+        return
+    for r in rows:
+        hull = r["hull_name"] or "-"
+        print(f"  {r['contract_id']:<12} {hull:<30} {r['validation_status']:<10} {r['status']:<12} "
+              f"{r['price'] or 0:>14,.0f} ISK")
 
 
 def cmd_pipeline(args: argparse.Namespace) -> None:
@@ -343,7 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-db", help="create the SQLite database/tables (idempotent)").set_defaults(func=cmd_init_db)
 
     p_auth = sub.add_parser("auth", help="run the interactive EVE SSO login for a role")
-    p_auth.add_argument("--role", required=True, help="role prefix: buyer / seller / producer")
+    p_auth.add_argument("--role", required=True, help="role prefix: buyer / seller / producer / doctrine")
     p_auth.set_defaults(func=cmd_auth)
 
     sub.add_parser("whoami", help="list authorized characters").set_defaults(func=cmd_whoami)
@@ -430,6 +536,54 @@ def build_parser() -> argparse.ArgumentParser:
     p_parse_fitting.add_argument("path", help="path to a text file containing an EFT fitting export")
     p_parse_fitting.set_defaults(func=cmd_parse_fitting)
 
+    p_create_doctrine = sub.add_parser("create-doctrine", help="create a new doctrine")
+    p_create_doctrine.add_argument("name")
+    p_create_doctrine.add_argument("--description", default=None)
+    p_create_doctrine.set_defaults(func=cmd_create_doctrine)
+
+    sub.add_parser("list-doctrines", help="list every doctrine").set_defaults(func=cmd_list_doctrines)
+
+    p_add_fitting = sub.add_parser(
+        "add-fitting", help="parse an EFT fitting file and add it to a doctrine"
+    )
+    p_add_fitting.add_argument("doctrine_id")
+    p_add_fitting.add_argument("path", help="path to a text file containing an EFT fitting export")
+    p_add_fitting.add_argument("--name", default=None, help="override the fit name parsed from the EFT header")
+    p_add_fitting.add_argument("--contract-target", type=int, default=0,
+                               help="how many contracts of this fit should be listed at once")
+    p_add_fitting.add_argument("--stockpile-target", type=int, default=0,
+                               help="how many complete sets of this fit's materials to keep in stock")
+    p_add_fitting.set_defaults(func=cmd_add_fitting)
+
+    p_list_fittings = sub.add_parser("list-fittings", help="list fittings, optionally for one doctrine")
+    p_list_fittings.add_argument("doctrine_id", nargs="?", default=None)
+    p_list_fittings.set_defaults(func=cmd_list_fittings)
+
+    sub.add_parser(
+        "sync-doctrine", help="sync Doctrine contracts + assets from ESI and match/validate them"
+    ).set_defaults(func=cmd_sync_doctrine)
+
+    sub.add_parser(
+        "validate-contracts", help="re-match/re-validate every synced contract against current fittings, no ESI"
+    ).set_defaults(func=cmd_validate_contracts)
+
+    p_doctrine_status = sub.add_parser(
+        "doctrine-status", help="contract + stockpile ampel status per doctrine/fitting"
+    )
+    p_doctrine_status.add_argument("doctrine_id", nargs="?", default=None)
+    p_doctrine_status.set_defaults(func=cmd_doctrine_status)
+
+    p_stockpile_status = sub.add_parser(
+        "stockpile-status", help="aggregated stockpile shortfalls across every doctrine/fitting"
+    )
+    p_stockpile_status.add_argument("doctrine_id", nargs="?", default=None)
+    p_stockpile_status.set_defaults(func=cmd_stockpile_status)
+
+    p_list_contracts = sub.add_parser("list-contracts", help="list every synced Doctrine contract")
+    p_list_contracts.add_argument("--status", default=None,
+                                  help="filter by validation_status (valid/tolerable/unmatched/invalid)")
+    p_list_contracts.set_defaults(func=cmd_list_contracts)
+
     sub.add_parser(
         "check-update", help="check GitHub for a newer commit (read-only)"
     ).set_defaults(func=cmd_check_update)
@@ -445,6 +599,13 @@ def main(argv: list[str] | None = None) -> int:
     # cheaper than making each command remember to check.
     storage.init_db()
     config.reload()
+    # Same layered load as TRADING_CONFIG (config.yaml + stored Settings
+    # overrides) - previously only done on demand inside `cmd_config`, which
+    # meant a saved Production/Doctrine override never actually took effect
+    # on the next CLI invocation. Fixed here rather than left as a doctrine-
+    # only patch, since the same gap applied to Production too.
+    production_config.reload()
+    doctrine_config.reload()
     try:
         args.func(args)
     except ActionError as e:

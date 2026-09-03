@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Optional, Sequence
@@ -453,6 +454,146 @@ CREATE TABLE IF NOT EXISTS stock_targets (
     quantity    REAL NOT NULL,
     jita_target INTEGER NOT NULL DEFAULT 0
 );
+
+-- ------------------------------------------------------------------ Doctrine
+-- Ported from the parent's docs/doctrine_schema.sql minus tenant_id/RLS - see
+-- that file for the full multi-tenant reasoning behind each shape. ids are
+-- plain TEXT UUIDs generated in Python (str(uuid.uuid4())) rather than
+-- Postgres's gen_random_uuid() default.
+--
+-- Deliberately not ported: doctrine_contract_history (GitHub issue #19's
+-- separate append-only "who bought what and when" log) - a real feature, but
+-- additive on top of the contract sync/matching this step exists to prove
+-- end-to-end; left for a future pass, same "documented, not started" status
+-- as the Shopping List (needs DoctrineConfig.import_cost_per_m3 plus
+-- Production's build-cost engine, no consumer here yet either).
+
+CREATE TABLE IF NOT EXISTS doctrines (
+    doctrine_id TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT,
+    active      INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS doctrine_fittings (
+    fitting_id           TEXT PRIMARY KEY,
+    doctrine_id          TEXT NOT NULL,
+    name                 TEXT NOT NULL,
+    variant_label        TEXT,
+    hull_type_id         INTEGER NOT NULL,
+    raw_eft              TEXT NOT NULL,
+    contract_target      INTEGER NOT NULL DEFAULT 0,
+    stockpile_target     INTEGER NOT NULL DEFAULT 0,
+    cargo_tolerance_pct  REAL,
+    active               INTEGER NOT NULL DEFAULT 1,
+    created_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at           TEXT NOT NULL DEFAULT (datetime('now')),
+    -- GitHub issue #18: Fuel Bay / Ship Maintenance Bay plain-text item
+    -- lists, entered/stored separately from raw_eft - see doctrine/
+    -- parser.py's parse_bay_items. NULL means "not a capital fit".
+    fuel_bay_text              TEXT,
+    ship_maintenance_bay_text  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_fittings_doctrine ON doctrine_fittings (doctrine_id);
+
+-- Composite PK (fitting_id, line_no, item_index): one EFT line can produce
+-- two items (a module + its comma-paired charge) sharing the same line_no -
+-- item_index (0, then 1) discriminates them, assigned by
+-- replace_fitting_items from input order, never passed in by callers.
+CREATE TABLE IF NOT EXISTS doctrine_fitting_items (
+    fitting_id    TEXT NOT NULL,
+    line_no       INTEGER NOT NULL,
+    item_index    INTEGER NOT NULL DEFAULT 0,
+    slot_section  TEXT NOT NULL,
+    type_id       INTEGER NOT NULL,
+    quantity      REAL NOT NULL DEFAULT 1,
+    is_offline    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (fitting_id, line_no, item_index)
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_fitting_items_fitting ON doctrine_fitting_items (fitting_id);
+
+CREATE TABLE IF NOT EXISTS doctrine_fitting_parse_issues (
+    fitting_id  TEXT NOT NULL,
+    line_no     INTEGER NOT NULL,
+    raw_line    TEXT NOT NULL,
+    issue_kind  TEXT NOT NULL,
+    message     TEXT NOT NULL,
+    PRIMARY KEY (fitting_id, line_no)
+);
+
+-- Single-user, so no tenant/contract_id collision risk (the parent's
+-- composite PK exists purely for that) - contract_id alone is the PK here.
+CREATE TABLE IF NOT EXISTS doctrine_contracts (
+    contract_id         INTEGER PRIMARY KEY,
+    source_role         TEXT NOT NULL,
+    for_corporation     INTEGER NOT NULL DEFAULT 0,
+    issuer_id           INTEGER,
+    start_location_id   INTEGER,
+    status              TEXT NOT NULL,
+    title               TEXT,
+    price               REAL,
+    date_expired        TEXT,
+    matched_fitting_id  TEXT,
+    match_score         REAL,
+    validation_status   TEXT NOT NULL,
+    synced_at           TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_contracts_fitting ON doctrine_contracts (matched_fitting_id);
+CREATE INDEX IF NOT EXISTS idx_doctrine_contracts_status ON doctrine_contracts (validation_status);
+
+CREATE TABLE IF NOT EXISTS doctrine_contract_items (
+    contract_id   INTEGER NOT NULL,
+    record_id     INTEGER NOT NULL,
+    type_id       INTEGER NOT NULL,
+    quantity      REAL NOT NULL,
+    is_included   INTEGER NOT NULL DEFAULT 1,
+    is_singleton  INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (contract_id, record_id)
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_contract_items_contract ON doctrine_contract_items (contract_id);
+
+CREATE TABLE IF NOT EXISTS doctrine_contract_deviations (
+    contract_id   INTEGER NOT NULL,
+    type_id       INTEGER NOT NULL,
+    kind          TEXT NOT NULL,
+    expected_qty  REAL NOT NULL DEFAULT 0,
+    actual_qty    REAL NOT NULL DEFAULT 0,
+    severity      TEXT NOT NULL,
+    PRIMARY KEY (contract_id, type_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_deviations_contract ON doctrine_contract_deviations (contract_id);
+
+-- Doctrine's own ESI-synced asset cache (Stockpile's Ist side) - kept
+-- separate from Production's character_assets/corp_assets so Doctrine works
+-- standalone without ever requiring Production to have been set up, same
+-- reasoning the parent's own schema comment gives. Same shape/resolved_
+-- location_id convention as those tables (see replace_assets).
+CREATE TABLE IF NOT EXISTS doctrine_character_assets (
+    item_id               INTEGER PRIMARY KEY,
+    type_id               INTEGER,
+    location_id           INTEGER,
+    location_flag         TEXT,
+    quantity              INTEGER,
+    is_blueprint_copy     INTEGER,
+    owner_name            TEXT,
+    resolved_location_id  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_character_assets_type_resolved_location
+    ON doctrine_character_assets (type_id, resolved_location_id);
+
+CREATE TABLE IF NOT EXISTS doctrine_corp_assets (
+    item_id               INTEGER PRIMARY KEY,
+    type_id               INTEGER,
+    location_id           INTEGER,
+    location_flag         TEXT,
+    quantity              INTEGER,
+    is_blueprint_copy     INTEGER,
+    owner_name            TEXT,
+    resolved_location_id  INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_doctrine_corp_assets_type_resolved_location
+    ON doctrine_corp_assets (type_id, resolved_location_id);
 """
 
 # Insert order matters only for readability; the tuple arity per table is what
@@ -1337,6 +1478,11 @@ def _resolve_locations(rows: Sequence[tuple], location_index: int = 2) -> list[i
 
 
 _ASSET_TABLES = ("character_assets", "corp_assets")
+# Doctrine's own independent asset cache (Stockpile's Ist side) - a separate
+# pair from _ASSET_TABLES above so Doctrine works standalone without
+# Production ever having been synced (see the schema's own comment).
+DOCTRINE_ASSET_TABLES = ("doctrine_character_assets", "doctrine_corp_assets")
+_ALL_ASSET_TABLES = _ASSET_TABLES + DOCTRINE_ASSET_TABLES
 _BLUEPRINT_TABLES = ("character_blueprints", "corp_blueprints")
 _JOB_TABLES = ("character_industry_jobs", "corp_industry_jobs")
 
@@ -1346,7 +1492,7 @@ def replace_assets(table: str, rows: Sequence[tuple], path: Optional[Path] = Non
     is_blueprint_copy, owner_name). resolved_location_id is computed here, not
     by the caller, so every caller gets it just by going through this one
     function - see _resolve_locations."""
-    if table not in _ASSET_TABLES:
+    if table not in _ALL_ASSET_TABLES:
         raise ValueError(f"unknown asset table {table!r}")
     resolved = _resolve_locations(rows)
     with connect(path) as conn:
@@ -1415,18 +1561,24 @@ NON_STOCK_LOCATION_FLAGS = ("AssetSafety", "Deliveries", "CorpDeliveries", "Corp
 
 
 def esi_stock_at_location(type_id: int, location_id: Optional[int],
-                          path: Optional[Path] = None) -> float:
-    """Owned quantity of `type_id` across character + corp assets, optionally
-    filtered to one station/structure (None = everywhere, which is what a setup
-    with no home structure id configured wants). Excludes
-    NON_STOCK_LOCATION_FLAGS.
+                          path: Optional[Path] = None,
+                          tables: tuple = _ASSET_TABLES) -> float:
+    """Owned quantity of `type_id` across `tables` (default: Production's
+    character + corp assets), optionally filtered to one station/structure
+    (None = everywhere, which is what a setup with no home structure id
+    configured wants). Excludes NON_STOCK_LOCATION_FLAGS.
+
+    `tables` lets a caller point this at a different asset-table pair -
+    doctrine/engine.py's stockpile computation passes DOCTRINE_ASSET_TABLES,
+    since Doctrine keeps its own independent synced-asset cache (see the
+    schema's own comment on doctrine_character_assets).
 
     Filters on resolved_location_id, not the raw location_id column - see
     replace_assets."""
     flags = ",".join("?" * len(NON_STOCK_LOCATION_FLAGS))
     total = 0.0
     with connect(path) as conn:
-        for table in _ASSET_TABLES:
+        for table in tables:
             sql = (f"SELECT COALESCE(SUM(quantity), 0) FROM {table} WHERE type_id = ? "
                    f"AND (location_flag IS NULL OR location_flag NOT IN ({flags}))")
             params: tuple = (type_id, *NON_STOCK_LOCATION_FLAGS)
@@ -1519,3 +1671,272 @@ def load_stock_targets(path: Optional[Path] = None) -> list[tuple[int, str, floa
             "SELECT type_id, type_name, quantity, jita_target FROM stock_targets"
         ).fetchall()
     return [(r[0], r[1], r[2], bool(r[3])) for r in rows]
+
+
+# -------------------------------------------------------------------- Doctrine
+# Thin plain-tuple storage layer only, matching the parent's own division of
+# labour (doctrine/engine.py wraps these into doctrine.models dataclasses,
+# not this module - see that module's docstring).
+
+def create_doctrine(name: str, description: Optional[str], path: Optional[Path] = None) -> str:
+    doctrine_id = str(uuid.uuid4())
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO doctrines (doctrine_id, name, description) VALUES (?, ?, ?)",
+            (doctrine_id, name, description),
+        )
+    return doctrine_id
+
+
+def list_doctrines(path: Optional[Path] = None) -> list[tuple]:
+    """(doctrine_id, name, description, active, created_at), most-recently-
+    created first."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT doctrine_id, name, description, active, created_at FROM doctrines ORDER BY created_at DESC"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def get_doctrine(doctrine_id: str, path: Optional[Path] = None) -> Optional[tuple]:
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT doctrine_id, name, description, active, created_at FROM doctrines WHERE doctrine_id = ?",
+            (doctrine_id,),
+        ).fetchone()
+    return tuple(row) if row else None
+
+
+def update_doctrine(doctrine_id: str, updates: dict, path: Optional[Path] = None) -> None:
+    """Caller (doctrine/actions.py) is responsible for only passing real
+    column names - same "thin storage layer" convention as every other
+    update_* function in this file."""
+    if not updates:
+        return
+    cols = ", ".join(f"{k} = ?" for k in updates)
+    with connect(path) as conn:
+        conn.execute(f"UPDATE doctrines SET {cols} WHERE doctrine_id = ?", (*updates.values(), doctrine_id))
+
+
+def delete_doctrine(doctrine_id: str, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM doctrines WHERE doctrine_id = ?", (doctrine_id,))
+
+
+def create_fitting(doctrine_id: str, name: str, hull_type_id: int, raw_eft: str,
+                   variant_label: Optional[str], contract_target: int, stockpile_target: int,
+                   cargo_tolerance_pct: Optional[float], fuel_bay_text: Optional[str],
+                   ship_maintenance_bay_text: Optional[str], path: Optional[Path] = None) -> str:
+    fitting_id = str(uuid.uuid4())
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO doctrine_fittings (fitting_id, doctrine_id, name, hull_type_id, raw_eft, "
+            "variant_label, contract_target, stockpile_target, cargo_tolerance_pct, fuel_bay_text, "
+            "ship_maintenance_bay_text) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (fitting_id, doctrine_id, name, hull_type_id, raw_eft, variant_label, contract_target,
+             stockpile_target, cargo_tolerance_pct, fuel_bay_text, ship_maintenance_bay_text),
+        )
+    return fitting_id
+
+
+_FITTING_COLUMNS = ("fitting_id", "doctrine_id", "name", "variant_label", "hull_type_id", "raw_eft",
+                    "contract_target", "stockpile_target", "cargo_tolerance_pct", "active", "created_at",
+                    "updated_at", "fuel_bay_text", "ship_maintenance_bay_text")
+
+
+def get_fitting(fitting_id: str, path: Optional[Path] = None) -> Optional[tuple]:
+    with connect(path) as conn:
+        row = conn.execute(
+            f"SELECT {', '.join(_FITTING_COLUMNS)} FROM doctrine_fittings WHERE fitting_id = ?",
+            (fitting_id,),
+        ).fetchone()
+    return tuple(row) if row else None
+
+
+def list_fittings_for_doctrine(doctrine_id: str, path: Optional[Path] = None) -> list[tuple]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join(_FITTING_COLUMNS)} FROM doctrine_fittings WHERE doctrine_id = ? ORDER BY created_at",
+            (doctrine_id,),
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def list_active_fittings(path: Optional[Path] = None) -> list[tuple]:
+    """Every active fitting belonging to an active doctrine, across the whole
+    install - the candidate pool for contract matching and stockpile
+    computation, in doctrine-then-fitting creation order."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            f"SELECT {', '.join('f.' + c for c in _FITTING_COLUMNS)} FROM doctrine_fittings f "
+            "JOIN doctrines d ON d.doctrine_id = f.doctrine_id "
+            "WHERE f.active = 1 AND d.active = 1 ORDER BY d.created_at, f.created_at"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def update_fitting(fitting_id: str, updates: dict, path: Optional[Path] = None) -> None:
+    if not updates:
+        return
+    cols = ", ".join(f"{k} = ?" for k in updates)
+    with connect(path) as conn:
+        conn.execute(
+            f"UPDATE doctrine_fittings SET {cols}, updated_at = datetime('now') WHERE fitting_id = ?",
+            (*updates.values(), fitting_id),
+        )
+
+
+def delete_fitting(fitting_id: str, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM doctrine_fitting_items WHERE fitting_id = ?", (fitting_id,))
+        conn.execute("DELETE FROM doctrine_fitting_parse_issues WHERE fitting_id = ?", (fitting_id,))
+        conn.execute("DELETE FROM doctrine_fittings WHERE fitting_id = ?", (fitting_id,))
+
+
+def unmatch_contracts_for_fitting(fitting_id: str, path: Optional[Path] = None) -> None:
+    """Deleting a fitting must never delete the contracts matched to it (a
+    contract is real inventory-tracking data, independent of whichever
+    fitting definition it happened to match) - just clear the match."""
+    with connect(path) as conn:
+        conn.execute(
+            "UPDATE doctrine_contracts SET matched_fitting_id = NULL, match_score = NULL, "
+            "validation_status = 'unmatched' WHERE matched_fitting_id = ?",
+            (fitting_id,),
+        )
+        conn.execute("DELETE FROM doctrine_contract_deviations WHERE contract_id IN "
+                     "(SELECT contract_id FROM doctrine_contracts WHERE matched_fitting_id IS NULL)")
+
+
+def replace_fitting_items(fitting_id: str, items: Sequence[tuple], path: Optional[Path] = None) -> None:
+    """`items`: (line_no, slot_section, type_id, quantity, is_offline).
+    item_index (0, then 1 for a same-line_no comma-paired charge) is derived
+    here automatically from input order, never passed in by callers."""
+    with connect(path) as conn:
+        conn.execute("DELETE FROM doctrine_fitting_items WHERE fitting_id = ?", (fitting_id,))
+        seen: dict[int, int] = {}
+        rows = []
+        for line_no, slot_section, type_id, quantity, is_offline in items:
+            item_index = seen.get(line_no, 0)
+            seen[line_no] = item_index + 1
+            rows.append((fitting_id, line_no, item_index, slot_section, type_id, quantity, int(is_offline)))
+        conn.executemany(
+            "INSERT INTO doctrine_fitting_items (fitting_id, line_no, item_index, slot_section, type_id, "
+            "quantity, is_offline) VALUES (?,?,?,?,?,?,?)",
+            rows,
+        )
+
+
+def load_fitting_items(fitting_id: str, path: Optional[Path] = None) -> list[tuple]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT line_no, slot_section, type_id, quantity, is_offline FROM doctrine_fitting_items "
+            "WHERE fitting_id = ? ORDER BY line_no, item_index",
+            (fitting_id,),
+        ).fetchall()
+    return [(r[0], r[1], r[2], r[3], bool(r[4])) for r in rows]
+
+
+def replace_fitting_parse_issues(fitting_id: str, issues: Sequence[tuple], path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM doctrine_fitting_parse_issues WHERE fitting_id = ?", (fitting_id,))
+        conn.executemany(
+            "INSERT INTO doctrine_fitting_parse_issues (fitting_id, line_no, raw_line, issue_kind, message) "
+            "VALUES (?,?,?,?,?)",
+            [(fitting_id, *row) for row in issues],
+        )
+
+
+def load_fitting_parse_issues(fitting_id: str, path: Optional[Path] = None) -> list[tuple]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT line_no, raw_line, issue_kind, message FROM doctrine_fitting_parse_issues "
+            "WHERE fitting_id = ? ORDER BY line_no",
+            (fitting_id,),
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+_CONTRACT_COLUMNS = ("contract_id", "source_role", "for_corporation", "issuer_id", "start_location_id",
+                     "status", "title", "price", "date_expired", "matched_fitting_id", "match_score",
+                     "validation_status", "synced_at")
+
+
+def load_doctrine_contracts(path: Optional[Path] = None) -> list[tuple]:
+    """Every synced contract, unfiltered - esi_sync.sync_contracts' own
+    "reuse an unchanged contract's already-fetched items" optimization reads
+    this to find what's already known before touching ESI again."""
+    with connect(path) as conn:
+        return [tuple(r) for r in
+                conn.execute(f"SELECT {', '.join(_CONTRACT_COLUMNS)} FROM doctrine_contracts").fetchall()]
+
+
+def load_doctrine_contract_items(contract_id: int, path: Optional[Path] = None) -> list[tuple]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT record_id, type_id, quantity, is_included, is_singleton FROM doctrine_contract_items "
+            "WHERE contract_id = ?",
+            (contract_id,),
+        ).fetchall()
+    return [(r[0], r[1], r[2], bool(r[3]), bool(r[4])) for r in rows]
+
+
+def load_doctrine_contract_deviations(contract_id: int, path: Optional[Path] = None) -> list[tuple]:
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT type_id, kind, expected_qty, actual_qty, severity FROM doctrine_contract_deviations "
+            "WHERE contract_id = ?",
+            (contract_id,),
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def replace_doctrine_sync_snapshot(contracts: Sequence[tuple], items: Sequence[tuple],
+                                   deviations: Sequence[tuple], path: Optional[Path] = None) -> None:
+    """Wholesale-replaces all three doctrine-contract tables in one
+    transaction - a contract sync's snapshot is the complete current picture
+    (Phase 2 E.3), not an incremental merge, so a contract that finished/
+    expired off ESI's own list must disappear here too."""
+    with connect(path) as conn:
+        conn.execute("DELETE FROM doctrine_contract_deviations")
+        conn.execute("DELETE FROM doctrine_contract_items")
+        conn.execute("DELETE FROM doctrine_contracts")
+        conn.executemany(
+            f"INSERT INTO doctrine_contracts ({', '.join(_CONTRACT_COLUMNS)}) "
+            f"VALUES ({', '.join('?' * len(_CONTRACT_COLUMNS))})",
+            contracts,
+        )
+        conn.executemany(
+            "INSERT INTO doctrine_contract_items (contract_id, record_id, type_id, quantity, is_included, "
+            "is_singleton) VALUES (?,?,?,?,?,?)",
+            items,
+        )
+        conn.executemany(
+            "INSERT INTO doctrine_contract_deviations (contract_id, type_id, kind, expected_qty, actual_qty, "
+            "severity) VALUES (?,?,?,?,?,?)",
+            deviations,
+        )
+
+
+def list_doctrine_contracts(fitting_id: Optional[str] = None, status: Optional[str] = None,
+                            path: Optional[Path] = None) -> list[tuple]:
+    query = f"SELECT {', '.join(_CONTRACT_COLUMNS)} FROM doctrine_contracts WHERE 1=1"
+    params: list = []
+    if fitting_id is not None:
+        query += " AND matched_fitting_id = ?"
+        params.append(fitting_id)
+    if status is not None:
+        query += " AND validation_status = ?"
+        params.append(status)
+    with connect(path) as conn:
+        return [tuple(r) for r in conn.execute(query, params).fetchall()]
+
+
+def has_any_doctrine_synced_assets(path: Optional[Path] = None) -> bool:
+    """True if either doctrine_character_assets or doctrine_corp_assets has
+    ever been populated - lets Stockpile distinguish "you have zero of
+    everything" from "you've never run a Doctrine asset sync at all"."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT EXISTS(SELECT 1 FROM doctrine_character_assets) OR EXISTS(SELECT 1 FROM doctrine_corp_assets)"
+        ).fetchone()
+    return bool(row[0])
