@@ -46,6 +46,13 @@ def test_production_menu_lists_its_views_not_the_placeholder(qapp, db):
     ]
 
 
+def test_doctrine_menu_lists_its_views_not_the_placeholder(qapp, db):
+    from eve_trader_local.gui.main_window import _TOOL_MENUS
+
+    labels = [label for label, _view_class in _TOOL_MENUS["Doctrine"]]
+    assert labels == ["Fittings", "Stockpile Status", "Shopping List", "Contract History"]
+
+
 def test_opening_same_view_twice_refocuses_not_duplicates(qapp, db):
     from eve_trader_local.gui.main_window import MainWindow
     from eve_trader_local.gui.views.trading_shortlist import TradingShortlistView

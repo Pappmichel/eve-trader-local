@@ -16,6 +16,10 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 
+from .views.doctrine_contract_history import ContractHistoryView
+from .views.doctrine_fittings import FittingsView
+from .views.doctrine_shopping_list import ShoppingListView
+from .views.doctrine_stockpile import StockpileStatusView
 from .views.production_asset_optimized import AssetOptimizedPlannerView
 from .views.production_build_candidates import BuildCandidatesView
 from .views.production_logistics import LogisticsView
@@ -40,7 +44,12 @@ _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
         ("Special Orders", SpecialOrdersView),
         ("Ship Margins && Market Status", MarginsMarketView),
     ],
-    "Doctrine": [],
+    "Doctrine": [
+        ("Fittings", FittingsView),
+        ("Stockpile Status", StockpileStatusView),
+        ("Shopping List", ShoppingListView),
+        ("Contract History", ContractHistoryView),
+    ],
     "Ore && Minerals": [],
     "Station Trading": [],
 }
