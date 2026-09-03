@@ -4,10 +4,9 @@ layering: dataclass defaults -> config.yaml -> overrides stored in SQLite,
 validated before applied). Stored-override scope key is "refining", matching
 the parent repo.
 
-Only the fields the ported reprocessing-yield math (reprocessing.py) actually
-reads live here - the parent's RefiningConfig also carries refining_tax_rate
-for the not-yet-ported Reprocessing-tab/Ore-Shortlist quote calculations (see
-SYNC.md); port it when that lands.
+Ported in two passes: the yield-math fields (structure/rig/security/implant/
+skills) first, then `refining_tax_rate` alongside `pricing.py`/`quote.py`
+(the Ore-Shortlist and Reprocessing-tab quote calculations - see SYNC.md).
 
 Layering: the shared config.py must never import this module, same reasoning
 as production/config.py's own layering note - the enum-style structure/rig/
@@ -66,6 +65,13 @@ class RefiningConfig:
     # module docstring for why structure/rig/security/implant/the two skills
     # above don't apply here) --
     scrapmetal_processing_skill_level: int = 0
+
+    # -- Economics --
+    # Deducted from mineral value on both the Ore Shortlist (pricing.py) and
+    # Reprocessing-tab (quote.py) quotes - a separate field from Production's
+    # facility_tax_rate/market_fees, since this tool's own refining structure
+    # may not be the same one Production builds in.
+    refining_tax_rate: float = 0.0
 
 
 def validate_refining_overrides(overrides: dict[str, Any]) -> None:

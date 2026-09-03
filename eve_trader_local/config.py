@@ -154,6 +154,7 @@ _FIELD_RANGES: dict[str, tuple[Optional[float], Optional[float]]] = {
     "reprocessing_efficiency_skill_level": (0, 5),
     "scrapmetal_processing_skill_level": (0, 5),
     "security_status": (-1.0, 1.0),
+    "refining_tax_rate": (0, 1),
 }
 
 
