@@ -20,7 +20,7 @@ native desktop GUI and a plain installer.
 | UI | React web app | CLI today, native GUI planned |
 | EVE SSO | shared hosted callback route | throwaway loopback server per login |
 
-## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine/Ore&Minerals not started
+## Status: Trading pipeline works end to end (CLI); Production well underway; Doctrine just started (parser only); Ore&Minerals not started
 
 The **Trading** tool (buy in Jita, sell at your own structure) is fully
 ported and wired up — discovery, backtesting, shortlist, order checks and
@@ -65,11 +65,19 @@ What exists:
   cost/margin, build-candidate discovery), `pricing.py`, `invention.py`,
   `esi_sync.py` (producer character blueprints/assets/industry jobs),
   `models.py`, `config.py` (`ProductionConfig`) and `actions.py`.
+- `doctrine/` — the start of the Doctrine tool (fitted-ship contract/
+  stockpile tracking against EFT fittings): `constants.py` (slot sections,
+  SDE category IDs, parse/deviation/ampel vocabularies), `models.py` (the
+  parser-output and master-data dataclasses), and `parser.py` (the EFT
+  fitting-format text parser — pure, storage-free, its SDE lookups injected
+  as callables by the caller). Matching/validation, contract sync and the
+  orchestration layer are not ported yet.
 - `cli.py` — every layer above has a command: `init-db`, `auth`, `whoami`,
   `config`, `refresh-sde`, `sde-status`, `check-update`, `update`,
   `build-universe`, `find-candidates`, `add-to-shortlist`,
   `refresh-shortlist`, `check-unlisted-stock`, `check-undercut`,
-  `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`.
+  `reconcile-trades`, `sync-esi`, `discover-build-candidates`, `pipeline`,
+  `parse-fitting`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why.
@@ -79,11 +87,13 @@ Explicitly **not** done yet:
 - Native GUI (PyQt/PySide) — planned, not started. The CLI is a smoke test
   and a working end-to-end proof, not the intended interface — see
   `ROADMAP.md` for the planned menu/tab navigation model.
-- Production's stock-aware planner and logistics/distribution views (need
-  manual stock-target data entry and per-category structure assignments —
-  web-UI-shaped concepts with no local equivalent yet), and the whole
-  Doctrine and Ore & Minerals tools (the parent's `doctrine/*`, `refining/*`)
-  — none of their business logic has been ported.
+- Production's logistics/distribution views and the readiness-focused
+  asset-optimized planner variant (per-category structure assignments —
+  web-UI-shaped concepts with no local equivalent yet).
+- The rest of Doctrine (matching a synced contract against a fitting,
+  stockpile/deviation scoring, ESI contract sync, the shopping list) and the
+  whole Ore & Minerals tool (the parent's `refining/*`) — none of their
+  business logic has been ported.
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.
@@ -136,6 +146,8 @@ eve-trader-local list-stock-targets                      # show every configured
 eve-trader-local plan-production            # stock-aware buy/build plan against your stock targets
 eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile
 eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
+
+eve-trader-local parse-fitting <path>       # parse an EFT-format fitting file against the local SDE cache
 ```
 
 `<item>` above accepts either a numeric type_id or an exact (case-insensitive)
@@ -146,6 +158,13 @@ doesn't change where `plan-production` recommends sourcing materials from.
 `plan-production` needs `sync-esi` to have run at least once for accurate
 current-stock numbers (otherwise every target reads as fully unstocked) and
 live ESI/Goonmetrics access for pricing, same as `discover-build-candidates`.
+
+`parse-fitting` needs `refresh-sde` to have run at least once (it resolves
+every item/hull name and slot against the local SDE cache) and takes a plain
+text file containing one EFT-format fitting export (the format EVE's
+in-game "Export" ship-fitting action produces) — it's a smoke test proving
+the parser resolves real data correctly, not the Doctrine tool itself (still
+unported: matching against synced contracts, stockpile scoring, ESI sync).
 
 `update` is manual and confirmed interactively, and refuses to run unless the
 checkout is exactly a clean install (on `main`, no uncommitted or untracked

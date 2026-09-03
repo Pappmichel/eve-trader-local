@@ -15,6 +15,7 @@
     eve-trader-local set-stock-target <item> <quantity> [--jita] / remove-stock-target <item> / list-stock-targets
     eve-trader-local plan-production
     eve-trader-local pipeline [--rebuild-universe]
+    eve-trader-local parse-fitting <path>
     eve-trader-local check-update / update
 
 No logic lives here: every command calls one actions.do_* function and prints
@@ -30,6 +31,7 @@ import time
 
 from . import actions, config, sde, storage, updater
 from .auth import TokenManager
+from .doctrine import parser as doctrine_parser
 from .errors import ActionError
 from .paths import config_path, db_path
 from .production import actions as production_actions
@@ -276,6 +278,44 @@ def cmd_plan_production(args: argparse.Namespace) -> None:
         print("\nEvery stock target is already fully covered.")
 
 
+def _doctrine_resolve_name(name: str):
+    row = storage.resolve_sde_type_by_name(name)
+    if row is None:
+        return None
+    type_id, group_id, category_id, meta_group_id, meta_level, type_name = row
+    return doctrine_parser.ResolvedType(type_id=type_id, group_id=group_id, category_id=category_id,
+                                         meta_group_id=meta_group_id, meta_level=meta_level, type_name=type_name)
+
+
+def cmd_parse_fitting(args: argparse.Namespace) -> None:
+    # A standalone "prove the SDE-backed parser works" command, ahead of a
+    # real doctrine/engine.py - the same real-SDE resolver wiring the parent
+    # repo's engine.parse_fitting_text does, inlined here since no engine
+    # module exists yet to own it (see SYNC.md).
+    with open(args.path, encoding="utf-8") as f:
+        raw_eft = f.read()
+    try:
+        result = doctrine_parser.parse_fitting(
+            raw_eft, _doctrine_resolve_name, storage.get_type_slot,
+            hull_name_candidates=storage.list_hull_type_names(),
+        )
+    except doctrine_parser.FittingParseError as e:
+        raise ActionError(str(e)) from e
+
+    print(f"Hull: {result.hull_name} (type_id {result.hull_type_id})")
+    print(f"Fit name: {result.fit_name}")
+    if result.items:
+        print("\nItems:")
+        for item in result.items:
+            offline = "  /offline" if item.is_offline else ""
+            print(f"  line {item.line_no:<4} {item.slot_section:<18} type_id {item.type_id:<10} "
+                  f"qty {item.quantity:g}{offline}")
+    if result.issues:
+        print("\nIssues:")
+        for issue in result.issues:
+            print(f"  line {issue.line_no:<4} {issue.issue_kind:<18} {issue.message}")
+
+
 def cmd_pipeline(args: argparse.Namespace) -> None:
     results = actions.do_pipeline(safe=args.safe, rebuild_universe=args.rebuild_universe)
     for step, result in results.items():
@@ -383,6 +423,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_pipeline.add_argument("--rebuild-universe", action="store_true",
                             help="rebuild the candidate universe first (occasional setup step)")
     p_pipeline.set_defaults(func=cmd_pipeline)
+
+    p_parse_fitting = sub.add_parser(
+        "parse-fitting", help="parse an EFT-format fitting file against the local SDE cache and print the result"
+    )
+    p_parse_fitting.add_argument("path", help="path to a text file containing an EFT fitting export")
+    p_parse_fitting.set_defaults(func=cmd_parse_fitting)
 
     sub.add_parser(
         "check-update", help="check GitHub for a newer commit (read-only)"

@@ -847,6 +847,48 @@ def search_sde_types(query: str, limit: int = 20,
     return [tuple(r) for r in rows]
 
 
+def get_type_slot(type_id: int, path: Optional[Path] = None) -> Optional[str]:
+    """Returns the type's fitting slot ("low"|"med"|"high"|"rig"|"subsystem"|
+    "service"), derived from dgmTypeEffects.csv's slot-defining dogma
+    effects (see production/sde.py's refresh_sde) - None if the type has no
+    slot effect at all (not fittable - ammo, drones, ships, ...). Used by
+    doctrine/parser.py's SDE-verification step (injected as a callable, not
+    called by parser.py directly), not by anything Trading/Production-side.
+    Not cached - see get_sde_type's own docstring for why."""
+    with connect(path) as conn:
+        row = conn.execute("SELECT slot FROM sde_type_slots WHERE type_id = ?", (type_id,)).fetchone()
+    return row[0] if row else None
+
+
+def resolve_sde_type_by_name(name: str, path: Optional[Path] = None) -> Optional[tuple]:
+    """Exact, case-insensitive type-name lookup for doctrine/parser.py's
+    injected name resolver - (type_id, group_id, category_id, meta_group_id,
+    meta_level, type_name), or None. Deliberately exact-only (no fuzzy
+    matching in real resolution, ever - see parser.py's own docstring);
+    Levenshtein suggestions for a *failed* lookup use list_hull_type_names
+    separately, only for the hull-name case."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT t.type_id, t.group_id, g.category_id, t.meta_group_id, t.meta_level, t.type_name "
+            "FROM sde_types t JOIN sde_groups g ON g.group_id = t.group_id "
+            "WHERE LOWER(t.type_name) = LOWER(?) LIMIT 1",
+            (name,),
+        ).fetchone()
+    return tuple(row) if row else None
+
+
+def list_hull_type_names(path: Optional[Path] = None) -> list[str]:
+    """Every published ship/structure type name - used only to compute a
+    Levenshtein "did you mean" suggestion when a fitting's hull name fails
+    to resolve (doctrine/parser.py's hull_name_candidates)."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT t.type_name FROM sde_types t JOIN sde_groups g ON g.group_id = t.group_id "
+            "WHERE g.category_id IN (6, 65) AND t.published = 1"
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
 def load_sde_category_names(path: Optional[Path] = None) -> dict[int, str]:
     """category_id -> real SDE category name (e.g. 7 -> "Module", 20 ->
     "Implant") - lets candidate_discovery.guess_category show the actual EVE
