@@ -6,12 +6,17 @@ no network) so it loads on open, same convention as
 production_special_orders.py's own orders list."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton
 
 from ...doctrine import actions as doctrine_actions
 from .base import TableView
 
 _COLUMNS = ["Contract ID", "Hull", "Fitting", "Character", "Price", "Buyer", "Issued", "Completed"]
+_COLUMN_WIDTHS = [220, 140, 160, 160, None, 160, 130, 130]
+# storage.load_doctrine_contract_history: "ORDER BY date_completed DESC
+# NULLS LAST" - most-recently-completed first.
+_DEFAULT_SORT = (7, Qt.SortOrder.DescendingOrder)
 
 
 def _row_to_cells(row: dict) -> list:
@@ -38,7 +43,7 @@ class ContractHistoryView(TableView):
         filter_row.addStretch(1)
         self.root_layout.addLayout(filter_row)
 
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
         self._load_history()
 

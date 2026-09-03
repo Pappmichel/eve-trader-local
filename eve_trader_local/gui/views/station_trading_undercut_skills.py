@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ...station_trading import actions as station_trading_actions
@@ -28,7 +29,15 @@ from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
 _UNDERCUT_COLUMNS = ["Item", "My Price", "Competitor Price", "Difference"]
+_UNDERCUT_WIDTHS = [200, None, None, None]
+# undercut.py: "results.sort(key=lambda r: r['difference'], reverse=True)",
+# shared by both the sell and buy undercut checks.
+_UNDERCUT_SORT = (3, Qt.SortOrder.DescendingOrder)
+
 _SKILL_COLUMNS = ["Character", "Order Slots", *SKILL_LABELS.values(), "Note"]
+_SKILL_WIDTHS = [160, None, *([None] * len(SKILL_LABELS)), 160]
+# One row per registered trader character, in registration order - no
+# inherent ranking to default-sort by.
 
 
 def _undercut_row(row: dict) -> list:
@@ -60,9 +69,9 @@ class UndercutSkillsView(BaseView):
         self.root_layout.addLayout(toolbar)
 
         self.tabs = QTabWidget()
-        self.sell_table = build_table(_UNDERCUT_COLUMNS)
-        self.buy_table = build_table(_UNDERCUT_COLUMNS)
-        self.skills_table = build_table(_SKILL_COLUMNS)
+        self.sell_table = build_table(_UNDERCUT_COLUMNS, column_widths=_UNDERCUT_WIDTHS)
+        self.buy_table = build_table(_UNDERCUT_COLUMNS, column_widths=_UNDERCUT_WIDTHS)
+        self.skills_table = build_table(_SKILL_COLUMNS, column_widths=_SKILL_WIDTHS)
         self.tabs.addTab(self.sell_table, "Sell Orders Undercut")
         self.tabs.addTab(self.buy_table, "Buy Orders Outbid")
         self.tabs.addTab(self.skills_table, "Trader Skills")
@@ -75,8 +84,8 @@ class UndercutSkillsView(BaseView):
                         busy_message="Fetching your own and competing Jita orders...")
 
     def _on_undercut(self, result: dict) -> None:
-        populate(self.sell_table, [_undercut_row(r) for r in result["sell"]])
-        populate(self.buy_table, [_undercut_row(r) for r in result["buy"]])
+        populate(self.sell_table, [_undercut_row(r) for r in result["sell"]], default_sort=_UNDERCUT_SORT)
+        populate(self.buy_table, [_undercut_row(r) for r in result["buy"]], default_sort=_UNDERCUT_SORT)
         total = len(result["sell"]) + len(result["buy"])
         self.show_info(f"{len(result['sell'])} sell order(s) undercut, {len(result['buy'])} buy order(s) outbid."
                        if total else "None of your Jita orders are currently undercut/outbid.")

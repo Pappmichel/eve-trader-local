@@ -22,12 +22,20 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
+
 from ...station_trading import actions as station_trading_actions
 from .base import TableView
 from .production_common import fmt_isk, fmt_pct
 
 _COLUMNS = ["Item", "Category", "Spread %", "Avg Daily Vol", "Live Buy", "Live Sell",
             "Profit/Unit", "Margin", "Profit/Day", "Active"]
+_COLUMN_WIDTHS = [170, 120, None, None, None, None, None, None, None, None]
+# storage.load_station_trading_shortlist has no ORDER BY of its own - Profit/
+# Day is this tool's own "theoretical ceiling" ranking (see CLAUDE.md), the
+# same decision-relevance reasoning trading_shortlist.py's own Margin default
+# uses for its unordered shortlist.
+_DEFAULT_SORT = (8, Qt.SortOrder.DescendingOrder)
 
 
 def _row_to_cells(row: dict) -> list:
@@ -45,7 +53,7 @@ class StationShortlistView(TableView):
             ("Show Shortlist", self._show),
             ("Discover && Refresh", self._refresh),
         ])
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
 
     def _show(self) -> None:

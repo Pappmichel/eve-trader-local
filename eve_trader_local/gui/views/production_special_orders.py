@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
@@ -20,10 +21,25 @@ from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
 _ORDER_COLUMNS = ["Order ID", "Status", "Items", "Net Against Stock", "Note", "Created At"]
+_ORDER_WIDTHS = [220, 90, None, None, 200, 160]
+# storage.list_special_orders: "ORDER BY created_at DESC" - newest first.
+_ORDER_SORT = (5, Qt.SortOrder.DescendingOrder)
+
 _LINE_ITEM_COLUMNS = ["Item", "Quantity"]
+_LINE_ITEM_WIDTHS = [220, None]
+
 _BUILD_COLUMNS = ["Item", "Activity", "Runs", "Cost/Unit", "Category"]
+_BUILD_WIDTHS = [220, 120, None, None, 110]
+# plan_special_order reuses engine._build_build_list, sorted by job runs desc.
+_BUILD_SORT = (2, Qt.SortOrder.DescendingOrder)
+
 _BUY_COLUMNS = ["Item", "Quantity", "Unit Price", "Total Price", "Buy From"]
+_BUY_WIDTHS = [220, None, None, None, 110]
+# plan_special_order reuses engine._build_buy_list, sorted by total price desc.
+_BUY_SORT = (3, Qt.SortOrder.DescendingOrder)
+
 _OVERLAP_COLUMNS = ["Item", "Current Stock"]
+_OVERLAP_WIDTHS = [220, None]
 
 
 def _order_row(order) -> list:
@@ -63,7 +79,7 @@ class SpecialOrdersView(BaseView):
         toolbar.addStretch(1)
         self.root_layout.addLayout(toolbar)
 
-        self.orders_table = build_table(_ORDER_COLUMNS)
+        self.orders_table = build_table(_ORDER_COLUMNS, column_widths=_ORDER_WIDTHS)
         self.orders_table.setMaximumHeight(200)
         self.orders_table.itemSelectionChanged.connect(self._on_selection_changed)
         self.root_layout.addWidget(self.orders_table)
@@ -71,10 +87,10 @@ class SpecialOrdersView(BaseView):
         self.root_layout.addWidget(self._build_action_box())
 
         self.tabs = QTabWidget()
-        self.line_items_table = build_table(_LINE_ITEM_COLUMNS)
-        self.build_table_widget = build_table(_BUILD_COLUMNS)
-        self.buy_table = build_table(_BUY_COLUMNS)
-        self.overlap_table = build_table(_OVERLAP_COLUMNS)
+        self.line_items_table = build_table(_LINE_ITEM_COLUMNS, column_widths=_LINE_ITEM_WIDTHS)
+        self.build_table_widget = build_table(_BUILD_COLUMNS, column_widths=_BUILD_WIDTHS)
+        self.buy_table = build_table(_BUY_COLUMNS, column_widths=_BUY_WIDTHS)
+        self.overlap_table = build_table(_OVERLAP_COLUMNS, column_widths=_OVERLAP_WIDTHS)
         self.tabs.addTab(self.line_items_table, "Line Items")
         self.tabs.addTab(self.build_table_widget, "Build List")
         self.tabs.addTab(self.buy_table, "Buy List")
@@ -137,7 +153,7 @@ class SpecialOrdersView(BaseView):
     def _load_orders(self) -> None:
         # storage.list_special_orders is a cheap local read (no network).
         orders = production_actions.do_list_special_orders()
-        populate(self.orders_table, [_order_row(o) for o in orders])
+        populate(self.orders_table, [_order_row(o) for o in orders], default_sort=_ORDER_SORT)
 
     def _parse_items(self) -> list[dict] | None:
         specs = [s.strip() for s in self.items_input.text().split(",") if s.strip()]
@@ -230,8 +246,8 @@ class SpecialOrdersView(BaseView):
 
     def _on_computed(self, plan: dict) -> None:
         populate(self.line_items_table, [_line_item_row(r) for r in plan["line_items"]])
-        populate(self.build_table_widget, [_build_row(r) for r in plan["build_list"]])
-        populate(self.buy_table, [_buy_row(r) for r in plan["buy_list"]])
+        populate(self.build_table_widget, [_build_row(r) for r in plan["build_list"]], default_sort=_BUILD_SORT)
+        populate(self.buy_table, [_buy_row(r) for r in plan["buy_list"]], default_sort=_BUY_SORT)
         populate(self.overlap_table, [_overlap_row(r) for r in plan["stock_overlap_warning"]])
         self.show_info(f"Computed - {len(plan['build_list'])} build job(s), {len(plan['buy_list'])} "
                        f"buy item(s), {len(plan['stock_overlap_warning'])} stock overlap warning(s).")

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QTabWidget, QVBoxLayout)
 
@@ -31,9 +32,24 @@ from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
 _REQUIREMENT_COLUMNS = ["Type ID", "Name", "Required Qty"]
+_REQUIREMENT_WIDTHS = [90, 200, None]
+# storage.load_mineral_requirements: "ORDER BY mineral_name".
+_REQUIREMENT_SORT = (1, Qt.SortOrder.AscendingOrder)
+
 _ORE_COLUMNS = ["Item", "Family", "Ice?", "Portions", "Units", "Volume/m3", "Landed Cost/Unit", "Total Cost"]
+_ORE_WIDTHS = [180, 120, None, None, None, None, None, None]
+# optimizer.py: "ore_purchases.sort(key=lambda p: -p.total_cost)".
+_ORE_SORT = (7, Qt.SortOrder.DescendingOrder)
+
 _DIRECT_COLUMNS = ["Name", "Quantity", "Landed Cost/Unit", "Source", "Total Cost"]
+_DIRECT_WIDTHS = [200, None, None, 110, None]
+# optimizer.py: "direct_purchases.sort(key=lambda p: -p.total_cost)".
+_DIRECT_SORT = (4, Qt.SortOrder.DescendingOrder)
+
 _COVERAGE_COLUMNS = ["Name", "Required", "From Ore", "From Direct", "Delivered", "Surplus"]
+_COVERAGE_WIDTHS = [200, None, None, None, None, None]
+# optimizer.py: "coverage.sort(key=lambda c: c.name)".
+_COVERAGE_SORT = (0, Qt.SortOrder.AscendingOrder)
 
 
 def _requirement_row(row: dict) -> list:
@@ -67,9 +83,9 @@ class MineralShoppingListView(BaseView):
         self.root_layout.addWidget(solve_btn)
 
         self.result_tabs = QTabWidget()
-        self.ore_table = build_table(_ORE_COLUMNS)
-        self.direct_table = build_table(_DIRECT_COLUMNS)
-        self.coverage_table = build_table(_COVERAGE_COLUMNS)
+        self.ore_table = build_table(_ORE_COLUMNS, column_widths=_ORE_WIDTHS)
+        self.direct_table = build_table(_DIRECT_COLUMNS, column_widths=_DIRECT_WIDTHS)
+        self.coverage_table = build_table(_COVERAGE_COLUMNS, column_widths=_COVERAGE_WIDTHS)
         self.result_tabs.addTab(self.ore_table, "Buy Ore && Refine")
         self.result_tabs.addTab(self.direct_table, "Buy Direct")
         self.result_tabs.addTab(self.coverage_table, "Coverage")
@@ -97,7 +113,7 @@ class MineralShoppingListView(BaseView):
         form.addWidget(remove_btn)
         outer.addLayout(form)
 
-        self.requirements_table = build_table(_REQUIREMENT_COLUMNS)
+        self.requirements_table = build_table(_REQUIREMENT_COLUMNS, column_widths=_REQUIREMENT_WIDTHS)
         self.requirements_table.setMaximumHeight(180)
         self.requirements_table.itemSelectionChanged.connect(self._on_requirement_selected)
         outer.addWidget(self.requirements_table)
@@ -105,7 +121,7 @@ class MineralShoppingListView(BaseView):
 
     def _load_requirements(self) -> None:
         rows = refining_actions.do_load_mineral_requirements()
-        populate(self.requirements_table, [_requirement_row(r) for r in rows])
+        populate(self.requirements_table, [_requirement_row(r) for r in rows], default_sort=_REQUIREMENT_SORT)
 
     def _set_requirement(self) -> None:
         item = self.item_input.text().strip()
@@ -153,9 +169,10 @@ class MineralShoppingListView(BaseView):
                                      "(this can take a moment)...")
 
     def _on_solved(self, plan: dict) -> None:
-        populate(self.ore_table, [_ore_purchase_row(p) for p in plan["ore_purchases"]])
-        populate(self.direct_table, [_direct_purchase_row(p) for p in plan["direct_purchases"]])
-        populate(self.coverage_table, [_coverage_row(c) for c in plan["coverage"]])
+        populate(self.ore_table, [_ore_purchase_row(p) for p in plan["ore_purchases"]], default_sort=_ORE_SORT)
+        populate(self.direct_table, [_direct_purchase_row(p) for p in plan["direct_purchases"]],
+                default_sort=_DIRECT_SORT)
+        populate(self.coverage_table, [_coverage_row(c) for c in plan["coverage"]], default_sort=_COVERAGE_SORT)
         message = (f"Total cost: {plan['total_cost']:,.0f} ISK "
                    f"(ore {plan['ore_cost']:,.0f} + direct {plan['direct_cost']:,.0f})")
         if plan.get("savings_vs_all_direct") is not None:

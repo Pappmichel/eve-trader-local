@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
@@ -21,11 +22,31 @@ from .base import BaseView
 from .production_common import build_table, fmt_isk, fmt_pct, populate
 
 _STOCK_COLUMNS = ["Item", "Quantity", "Sells At"]
+_STOCK_WIDTHS = [200, None, None]
+# storage.load_stock_targets has no ORDER BY of its own - default to
+# alphabetical by item name, the most usable order for a manually-maintained
+# list with no other inherent ranking.
+_STOCK_SORT = (0, Qt.SortOrder.AscendingOrder)
+
 _INVENTORY_COLUMNS = ["Item", "Activity", "Target", "On Hand", "Missing"]
+_INVENTORY_WIDTHS = [200, 120, None, None, None]
+
 _BUILD_COLUMNS = ["Item", "Activity", "Runs", "Cost/Unit", "Margin", "Category", "Decryptor"]
+_BUILD_WIDTHS = [200, 120, None, None, None, 110, 110]
+# engine._build_build_list's own docstring: "sorted by job runs desc".
+_BUILD_SORT = (2, Qt.SortOrder.DescendingOrder)
+
 _BUY_COLUMNS = ["Item", "Quantity", "Unit Price", "Total Price", "On Hand %", "Buy From"]
+_BUY_WIDTHS = [200, None, None, None, None, 110]
+# engine._build_buy_list's own docstring: "sorted by total price desc".
+_BUY_SORT = (3, Qt.SortOrder.DescendingOrder)
+
 _INVENTION_COLUMNS = ["Item", "T1 Blueprint", "Decryptor", "Probability", "Attempts",
                       "BPCs Owned", "Stockpile %"]
+_INVENTION_WIDTHS = [200, 200, 110, None, None, None, None]
+# plan_production's own docstring: invention_list "sorted by recommended
+# invention runs desc".
+_INVENTION_SORT = (4, Qt.SortOrder.DescendingOrder)
 
 
 def _stock_target_row(row) -> list:
@@ -69,10 +90,10 @@ class ProductionPlannerView(BaseView):
         self.root_layout.addWidget(self._build_stock_target_box())
 
         self.tabs = QTabWidget()
-        self.inventory_table = build_table(_INVENTORY_COLUMNS)
-        self.build_table_widget = build_table(_BUILD_COLUMNS)
-        self.buy_table = build_table(_BUY_COLUMNS)
-        self.invention_table = build_table(_INVENTION_COLUMNS)
+        self.inventory_table = build_table(_INVENTORY_COLUMNS, column_widths=_INVENTORY_WIDTHS)
+        self.build_table_widget = build_table(_BUILD_COLUMNS, column_widths=_BUILD_WIDTHS)
+        self.buy_table = build_table(_BUY_COLUMNS, column_widths=_BUY_WIDTHS)
+        self.invention_table = build_table(_INVENTION_COLUMNS, column_widths=_INVENTION_WIDTHS)
         self.tabs.addTab(self.inventory_table, "Inventory")
         self.tabs.addTab(self.build_table_widget, "Build List")
         self.tabs.addTab(self.buy_table, "Buy List")
@@ -110,7 +131,7 @@ class ProductionPlannerView(BaseView):
         form.addStretch(1)
         outer.addLayout(form)
 
-        self.stock_target_table = build_table(_STOCK_COLUMNS)
+        self.stock_target_table = build_table(_STOCK_COLUMNS, column_widths=_STOCK_WIDTHS)
         self.stock_target_table.setMaximumHeight(160)
         outer.addWidget(self.stock_target_table)
         return box
@@ -120,7 +141,7 @@ class ProductionPlannerView(BaseView):
         # do_list_stock_targets wraps it 1:1, so it's fine to call inline the
         # way trading_shortlist.py's own _load_last_snapshot does.
         result = production_actions.do_list_stock_targets()
-        populate(self.stock_target_table, [_stock_target_row(r) for r in result["rows"]])
+        populate(self.stock_target_table, [_stock_target_row(r) for r in result["rows"]], default_sort=_STOCK_SORT)
 
     def _set_stock_target(self) -> None:
         item = self.item_input.text().strip()
@@ -159,9 +180,10 @@ class ProductionPlannerView(BaseView):
 
     def _on_plan(self, plan: dict) -> None:
         populate(self.inventory_table, [_inventory_row(r) for r in plan["inventory"]])
-        populate(self.build_table_widget, [_build_row(r) for r in plan["build_list"]])
-        populate(self.buy_table, [_buy_row(r) for r in plan["buy_list"]])
-        populate(self.invention_table, [_invention_row(r) for r in plan["invention_list"]])
+        populate(self.build_table_widget, [_build_row(r) for r in plan["build_list"]], default_sort=_BUILD_SORT)
+        populate(self.buy_table, [_buy_row(r) for r in plan["buy_list"]], default_sort=_BUY_SORT)
+        populate(self.invention_table, [_invention_row(r) for r in plan["invention_list"]],
+                default_sort=_INVENTION_SORT)
         self.show_info(f"Planned - {len(plan['inventory'])} target(s), {len(plan['build_list'])} build "
                        f"job(s), {len(plan['buy_list'])} buy item(s), {len(plan['invention_list'])} "
                        "invention need(s).")

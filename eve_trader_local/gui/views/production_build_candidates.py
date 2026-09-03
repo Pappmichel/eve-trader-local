@@ -12,12 +12,20 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
+
 from ...production import actions as production_actions
 from .base import TableView
 from .production_common import fmt_pct
 
 _COLUMNS = ["Item", "Activity", "Build Cost", "Margin", "Daily Movement",
             "Potential Daily Profit", "Meta Level"]
+_COLUMN_WIDTHS = [200, 120, None, None, None, None, None]
+# discover_build_candidates ranks its own results by potential_daily_profit
+# desc (production/engine.py) - the view's own docstring/status message
+# already says "ranked by potential daily profit"; default-apply that same
+# order rather than inventing a new one.
+_DEFAULT_SORT = (5, Qt.SortOrder.DescendingOrder)
 
 
 def _row_to_cells(row) -> list:
@@ -33,7 +41,7 @@ class BuildCandidatesView(TableView):
         self._build_toolbar([
             ("Discover", self._discover),
         ])
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
         self.show_info("Click Discover to scan the SDE for build-vs-buy opportunities.")
 

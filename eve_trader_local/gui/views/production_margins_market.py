@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ...production import actions as production_actions
@@ -16,7 +17,12 @@ from .production_common import build_table, fmt_isk, fmt_pct, populate
 
 _MARGIN_COLUMNS = ["Item", "Activity", "Home Price", "Jita Price", "Build Cost",
                    "Margin (Home)", "Margin (Jita)", "Meta Level"]
+_MARGIN_WIDTHS = [200, 120, None, None, None, None, None, None]
+# discover_ship_margins's own docstring: sorted by margin_home desc.
+_MARGIN_SORT = (5, Qt.SortOrder.DescendingOrder)
+
 _MARKET_STATUS_COLUMNS = ["Item", "Target", "On Hand", "Missing", "Sells At"]
+_MARKET_STATUS_WIDTHS = [200, None, None, None, 90]
 
 
 def _margin_row(row) -> list:
@@ -49,8 +55,8 @@ class MarginsMarketView(BaseView):
         self.root_layout.addLayout(toolbar)
 
         self.tabs = QTabWidget()
-        self.margins_table = build_table(_MARGIN_COLUMNS)
-        self.market_status_table = build_table(_MARKET_STATUS_COLUMNS)
+        self.margins_table = build_table(_MARGIN_COLUMNS, column_widths=_MARGIN_WIDTHS)
+        self.market_status_table = build_table(_MARKET_STATUS_COLUMNS, column_widths=_MARKET_STATUS_WIDTHS)
         self.tabs.addTab(self.margins_table, "Ship Margins")
         self.tabs.addTab(self.market_status_table, "Market Status")
         self.root_layout.addWidget(self.tabs)
@@ -63,7 +69,7 @@ class MarginsMarketView(BaseView):
 
     def _on_margins(self, result: dict) -> None:
         rows = result["rows"]
-        populate(self.margins_table, [_margin_row(r) for r in rows])
+        populate(self.margins_table, [_margin_row(r) for r in rows], default_sort=_MARGIN_SORT)
         self.show_info(f"{len(rows)} ship(s)." if rows else "No manufacturable ships found - refresh SDE first?")
 
     def _refresh_market_status(self) -> None:

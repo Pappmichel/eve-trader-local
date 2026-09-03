@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QTabWidget, QVBoxLayout)
 
@@ -28,8 +29,22 @@ from .production_common import build_table, fmt_pct, populate
 
 _FITTING_STATUS_COLUMNS = ["Doctrine", "Fitting", "Hull", "Contract Status", "Valid/Target",
                           "Stockpile Status", "Worst Shortfall %"]
+_FITTING_STATUS_WIDTHS = [140, 180, 140, 120, None, 130, None]
+# No explicit sort in doctrine_status/fitting_status - rows come back in
+# doctrine/fitting creation order (not itself a displayed column), so no
+# default_sort here, same reasoning as doctrine_fittings.py's own tables.
+
 _STOCKPILE_COLUMNS = ["Item", "Required", "Available", "Shortfall", "Severity", "# Fittings"]
+_STOCKPILE_WIDTHS = [200, None, None, None, 100, None]
+# aggregate_stockpile_rows's own call site: "aggregated.sort(key=lambda r:
+# r.shortfall, reverse=True)".
+_STOCKPILE_SORT = (3, Qt.SortOrder.DescendingOrder)
+
 _CONTRACT_COLUMNS = ["Contract ID", "Hull", "Character", "Validation", "Status", "Price"]
+_CONTRACT_WIDTHS = [220, 140, 160, 100, 100, None]
+# storage.list_doctrine_contracts (this synced/live snapshot, distinct from
+# Contract History's own permanent log) has no ORDER BY of its own -
+# no default_sort.
 
 
 def _fitting_status_row(doctrine_name: str, row: dict) -> list:
@@ -57,9 +72,9 @@ class StockpileStatusView(BaseView):
         self.root_layout.addWidget(self._build_filter_and_sync_box())
 
         self.tabs = QTabWidget()
-        self.fitting_status_table = build_table(_FITTING_STATUS_COLUMNS)
-        self.stockpile_table = build_table(_STOCKPILE_COLUMNS)
-        self.contracts_table = build_table(_CONTRACT_COLUMNS)
+        self.fitting_status_table = build_table(_FITTING_STATUS_COLUMNS, column_widths=_FITTING_STATUS_WIDTHS)
+        self.stockpile_table = build_table(_STOCKPILE_COLUMNS, column_widths=_STOCKPILE_WIDTHS)
+        self.contracts_table = build_table(_CONTRACT_COLUMNS, column_widths=_CONTRACT_WIDTHS)
         self.tabs.addTab(self.fitting_status_table, "Fitting Status")
         self.tabs.addTab(self.stockpile_table, "Stockpile Shortfalls")
         self.tabs.addTab(self.contracts_table, "Synced Contracts")
@@ -134,7 +149,8 @@ class StockpileStatusView(BaseView):
         populate(self.fitting_status_table, fitting_rows)
 
         stockpile = result["stockpile_status"]
-        populate(self.stockpile_table, [_stockpile_row(r) for r in stockpile["aggregated_rows"]])
+        populate(self.stockpile_table, [_stockpile_row(r) for r in stockpile["aggregated_rows"]],
+                default_sort=_STOCKPILE_SORT)
         if not stockpile["assets_available"]:
             self.show_info("No Doctrine asset sync has ever run - stockpile figures are unavailable. "
                            "Click Sync ESI first.")

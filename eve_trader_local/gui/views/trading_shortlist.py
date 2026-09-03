@@ -22,11 +22,21 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
+
 from ... import actions, storage
 from .base import TableView
 
 _COLUMNS = ["Item", "Category", "Decision", "Margin", "Profit/Unit",
             "Listed Qty", "Own Orders", "Net Sell", "Landed Cost", "Active"]
+# Item/Category/Decision hold text, so they get more room than the numeric
+# ISK/percentage/quantity columns; the rest are left at Qt's default.
+_COLUMN_WIDTHS = [180, 120, 90, None, None, None, None, None, None, None]
+# No single canonical order comes out of evaluate_shortlist/storage itself
+# (see shortlist.py's own docstring) - Margin desc is the most decision-
+# relevant ranking to default to, same reasoning shortlist.py's own
+# top_imports_by_daily_profit uses for its own "what matters most" ordering.
+_DEFAULT_SORT = (3, Qt.SortOrder.DescendingOrder)
 
 
 def _fmt_pct(value):
@@ -52,7 +62,7 @@ class TradingShortlistView(TableView):
             ("Refresh", self._refresh),
             ("Refresh && Prune", self._refresh_and_prune),
         ])
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
         self._load_last_snapshot()
 

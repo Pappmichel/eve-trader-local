@@ -106,6 +106,60 @@ def test_settings_dialog_save_shows_error_on_invalid_value(qapp, db):
     assert dialog.status_label.text() != ""
 
 
+def test_settings_dialog_tuple_field_editor_round_trips(qapp, db):
+    """`excluded_path_prefixes` (a plain tuple of strings) gets a real
+    QPlainTextEdit editor now, not the old read-only repr box - one entry
+    per line, split/joined on save."""
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    from eve_trader_local.gui.dialogs.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog()
+    trading_form, _, _ = dialog._forms["Trading"]
+    widget = trading_form._widgets["excluded_path_prefixes"]
+    assert isinstance(widget, QPlainTextEdit)
+    assert not widget.isReadOnly()
+
+    widget.setPlainText("ships\nblueprints\n\nfoo")  # a blank line should be dropped
+    assert trading_form._getters["excluded_path_prefixes"]() == ("ships", "blueprints", "foo")
+
+
+def test_settings_dialog_dict_field_editor_round_trips(qapp, db):
+    """`ore_family_skill_levels` (a dict[str, int]) gets a real add/remove-row
+    table editor, not the old read-only repr box."""
+    from eve_trader_local.gui.dialogs.settings_dialog import SettingsDialog, _DictIntTableEditor
+
+    dialog = SettingsDialog()
+    refining_form, _, cfg = dialog._forms["Ore & Minerals"]
+    widget = refining_form._widgets["ore_family_skill_levels"]
+    assert isinstance(widget, _DictIntTableEditor)
+    assert widget.value() == cfg.ore_family_skill_levels
+
+    widget._append_row("Veldspar", "5")
+    widget._append_row("", "3")  # a blank key should be dropped, not saved as ""
+    assert refining_form._getters["ore_family_skill_levels"]() == {"Veldspar": 5}
+
+
+def test_settings_dialog_dict_field_editor_save_persists(qapp, db, monkeypatch):
+    """Exercises the real do_update_settings round trip for the dict editor,
+    same shape as test_settings_dialog_save_persists_a_changed_value."""
+    from eve_trader_local.gui.dialogs.settings_dialog import SettingsDialog
+
+    dialog = SettingsDialog()
+    refining_form, _, cfg = dialog._forms["Ore & Minerals"]
+    widget = refining_form._widgets["ore_family_skill_levels"]
+    widget._append_row("Veldspar", "5")
+
+    dialog._save_tab("Ore & Minerals")
+
+    deadline = time.monotonic() + 5
+    while dialog._threads and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert cfg.ore_family_skill_levels == {"Veldspar": 5}
+
+
 def test_characters_dialog_opens_with_no_characters_registered(qapp, db):
     from eve_trader_local.gui.dialogs.characters_dialog import CharactersDialog
 

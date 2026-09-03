@@ -29,11 +29,21 @@ Field-to-widget mapping (`_classify_field`/`_ConfigForm._make_widget`):
   reject anyway) - unbounded fields get a wide but finite range, not Qt's
   default (which is too narrow for ISK-scale values).
 - a plain `str` -> QLineEdit.
-- anything else (a tuple/dict field - `excluded_path_prefixes`,
-  `ore_family_skill_levels`) -> a read-only QLineEdit showing its repr. A
-  real editor for a nested list/dict is genuine new UI scope, not a gap in
-  "show every field's current value" - these are shown, just not editable
-  here yet (edit config.yaml directly, or a future follow-up).
+- a bare `tuple` field (`excluded_path_prefixes`, a tuple of plain strings) ->
+  a multi-line QPlainTextEdit, one entry per line - split/joined on
+  read/save, blank lines dropped.
+- a `dict[str, int]` field (`ore_family_skill_levels`) -> a small two-column
+  (family name / skill level) QTableWidget with Add/Remove Row buttons - see
+  `_DictIntTableEditor` below. Free-text keys, not a fixed enum: an ore/ice
+  family name isn't cross-referenced against SDE/constants data anywhere
+  else in this dialog, and a typo here is harmless by the underlying field's
+  own design (`RefiningConfig.ore_family_skill_levels`'s own docstring: a
+  family missing from the dict defaults to skill level 5, not an error) -
+  so there is nothing to validate against beyond "is the level a whole
+  number".
+- anything else (there is currently nothing else this generic mapping
+  doesn't cover) -> a read-only QLineEdit showing its repr, same fallback
+  the tuple/dict cases used before their own editors existed.
 """
 from __future__ import annotations
 
@@ -43,8 +53,10 @@ import typing
 from typing import Any, Callable, Optional
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDoubleSpinBox,
-                               QFormLayout, QLineEdit, QPushButton, QScrollArea,
-                               QSpinBox, QTabWidget, QVBoxLayout, QWidget)
+                               QFormLayout, QHBoxLayout, QHeaderView, QLineEdit,
+                               QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
+                               QTableWidget, QTableWidgetItem, QTabWidget,
+                               QVBoxLayout, QWidget)
 
 from ... import actions
 from ... import config as trading_config
@@ -90,7 +102,71 @@ def _classify_field(hint: Any) -> tuple[str, bool]:
         return "float", optional
     if real is str:
         return "str", optional
+    if real is tuple or typing.get_origin(real) is tuple:
+        return "tuple", optional
+    if typing.get_origin(real) is dict:
+        return "dict", optional
     return "other", optional
+
+
+class _DictIntTableEditor(QWidget):
+    """Editor for a `dict[str, int]` config field (`ore_family_skill_levels`)
+    - a two-column (key/int value) QTableWidget plus Add/Remove Row buttons.
+    Keys are free text, not a fixed enum - see module docstring for why."""
+
+    def __init__(self, value: dict, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Family", "Skill Level"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.table.setMaximumHeight(160)
+        for key, level in value.items():
+            self._append_row(str(key), str(level))
+        layout.addWidget(self.table)
+
+        buttons = QHBoxLayout()
+        add_btn = QPushButton("Add Row")
+        add_btn.clicked.connect(lambda: self._append_row("", "5"))
+        buttons.addWidget(add_btn)
+        remove_btn = QPushButton("Remove Selected Row")
+        remove_btn.clicked.connect(self._remove_selected_row)
+        buttons.addWidget(remove_btn)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+
+    def _append_row(self, key: str, level: str) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        self.table.setItem(row, 0, QTableWidgetItem(key))
+        self.table.setItem(row, 1, QTableWidgetItem(level))
+
+    def _remove_selected_row(self) -> None:
+        rows = {index.row() for index in self.table.selectedIndexes()}
+        for row in sorted(rows, reverse=True):
+            self.table.removeRow(row)
+
+    def value(self) -> dict:
+        """Blank-key rows are dropped (an easy way to "remove" a row without
+        the button); a non-integer level falls back to 0 rather than raising
+        - a bad paste here shouldn't crash the dialog's save path, just save
+        something visibly wrong that's easy to notice and fix."""
+        result = {}
+        for row in range(self.table.rowCount()):
+            key_item = self.table.item(row, 0)
+            key = key_item.text().strip() if key_item is not None else ""
+            if not key:
+                continue
+            level_item = self.table.item(row, 1)
+            level_text = level_item.text().strip() if level_item is not None else "0"
+            try:
+                level = int(level_text)
+            except ValueError:
+                level = 0
+            result[key] = level
+        return result
 
 
 class _ConfigForm:
@@ -173,7 +249,21 @@ class _ConfigForm:
             edit = QLineEdit(value or "")
             return edit, edit.text
 
-        # tuple/dict/other composite fields - see module docstring.
+        if kind == "tuple":
+            text_edit = QPlainTextEdit("\n".join(str(v) for v in value))
+            text_edit.setMaximumHeight(100)
+            text_edit.setPlaceholderText("One entry per line.")
+
+            def _get_tuple(text_edit=text_edit):
+                return tuple(line.strip() for line in text_edit.toPlainText().splitlines() if line.strip())
+
+            return text_edit, _get_tuple
+
+        if kind == "dict":
+            table_editor = _DictIntTableEditor(dict(value))
+            return table_editor, table_editor.value
+
+        # Anything else - see module docstring's "anything else" case.
         edit = QLineEdit(repr(value))
         edit.setReadOnly(True)
         edit.setToolTip("Not editable from this dialog yet - edit config.yaml directly.")

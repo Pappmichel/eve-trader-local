@@ -23,6 +23,9 @@ from .production_common import build_table, fmt_isk, populate
 
 _COLUMNS = ["Item", "Qty", "Category", "Sell As-Is", "Refined Value", "Mineral Value",
             "Refining Tax", "Decision"]
+_COLUMN_WIDTHS = [180, None, 120, None, None, None, None, 90]
+# Rows mirror the pasted inventory's own line order - no default_sort, so a
+# quote reads back in the same order it was pasted.
 
 
 def _row_to_cells(row) -> list:
@@ -49,7 +52,7 @@ class ReprocessingQuoteView(BaseView):
         quote_btn.clicked.connect(self._quote)
         self.root_layout.addWidget(quote_btn)
 
-        self.table = build_table(_COLUMNS)
+        self.table = build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS)
         self.root_layout.addWidget(self.table)
 
         self._finish_status_row()

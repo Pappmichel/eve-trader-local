@@ -28,12 +28,19 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
+
 from ...refining import actions as refining_actions
 from .base import TableView
 from .production_common import fmt_isk, fmt_pct
 
 _COLUMNS = ["Item", "Family", "Ice?", "Volume/m3", "Landed Cost", "Yield %", "Mineral Value",
             "Refining Tax", "Net Sell", "Profit/Unit", "Margin", "Profit/m3", "Decision", "Active"]
+_COLUMN_WIDTHS = [170, 120, None, None, None, None, None, None, None, None, None, None, 90, None]
+# storage.load_ore_shortlist/latest_ore_shortlist_snapshot have no ORDER BY
+# of their own (same as trading_shortlist.py) - Margin desc is the most
+# decision-relevant default for this same "unordered decision table" shape.
+_DEFAULT_SORT = (10, Qt.SortOrder.DescendingOrder)
 
 
 def _row_to_cells(row) -> list:
@@ -52,7 +59,7 @@ class OreShortlistView(TableView):
             ("Add New Candidates", self._add_candidates),
             ("Refresh", self._refresh),
         ])
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
         self._load_last_snapshot()
 

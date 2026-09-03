@@ -219,10 +219,12 @@ belongs to just one tool):
   `config._FIELD_RANGES`, the same bounds the backend itself enforces),
   bools a checkbox, the enum-style Production/Ore & Minerals structure/rig/
   implant fields a `QComboBox` over their real valid options, and
-  `Optional[...]` fields a text box (blank = `None`). The handful of tuple/
-  dict-typed fields (`excluded_path_prefixes`, `ore_family_skill_levels`)
-  are shown read-only rather than with a real nested editor — genuine
-  future scope, not a gap in "show every field."
+  `Optional[...]` fields a text box (blank = `None`). The tuple-typed
+  `excluded_path_prefixes` field gets a multi-line text box (one entry per
+  line); the dict-typed `ore_family_skill_levels` gets a small add/remove-row
+  table (free-text family name, integer skill level — there's no fixed
+  enum to validate the key against, matching the underlying field's own
+  "unrecognized family defaults to skill level 5" tolerance).
 - **Characters** (`dialogs/characters_dialog.py`) — lists every currently
   authorized character (`auth.TokenManager.list_records`, same data
   `eve-trader-local whoami` prints), starts a new SSO login for any of the
@@ -239,12 +241,26 @@ displayed the resolved config, read-only). Both mix in `gui/workers.py`'s
 subclassing `BaseView` directly, since a `QDialog` can't also inherit a
 `QWidget`-based common base in PySide6.
 
+General polish (2026-09-03): every table-based view now has per-column
+default widths (long-text columns like Item/Category/Decision get more room
+than a numeric ISK/percentage/quantity one) and a sensible default sort
+applied right after populating — matching whatever order the underlying
+`do_*`/storage call already documents as its own designed order (e.g. Build
+Candidates by potential daily profit desc, the Planner's Buy/Build/Invention
+lists by their own engine-documented sort keys) where one genuinely exists,
+or a reasonable decision-relevant default (Margin desc) for the handful of
+tables with no inherent backend order at all (Trading/Ore Shortlist,
+Station Trading Shortlist) — see each view module's own comment for its
+specific reasoning. `views/base.py`'s `_SortableTableWidgetItem` makes this
+(and any later manual header-click sort) compare formatted numeric text
+("1,234", "12.5%") by actual value rather than lexicographically. Window
+geometry and which tabs were open (plus which was active) now persist
+across restarts via `QSettings` (`main_window.py`'s `closeEvent`/
+`restore_state`) — a saved tab whose view class no longer exists is skipped
+with a logged warning, not a crash.
+
 Explicitly **not** done yet:
 
-- General polish: column widths/sorting defaults, remembering window/tab
-  state between launches.
-- A real editor for the Settings dialog's read-only tuple/dict fields (see
-  above).
 - Packaging/installer.
 - Schema migrations. Tables are created with `CREATE TABLE IF NOT EXISTS`;
   adding a column to an existing table later will need real migration handling.

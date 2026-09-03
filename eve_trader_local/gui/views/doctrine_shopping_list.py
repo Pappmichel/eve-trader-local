@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit
 
 from ...doctrine import actions as doctrine_actions
@@ -19,6 +20,10 @@ from .base import TableView
 from .production_common import fmt_isk
 
 _COLUMNS = ["Item", "Shortfall", "Build Cost", "C-J Price", "Jita Landed", "Recommended", "Total Cost"]
+_COLUMN_WIDTHS = [200, None, None, None, None, 130, None]
+# doctrine/engine.py's aggregate_stockpile_rows: "aggregated.sort(key=lambda
+# r: r.shortfall, reverse=True)" - the biggest shortfall first.
+_DEFAULT_SORT = (1, Qt.SortOrder.DescendingOrder)
 
 
 def _row_to_cells(row: dict) -> list:
@@ -40,7 +45,7 @@ class ShoppingListView(TableView):
         self.root_layout.addLayout(filter_row)
 
         self._build_toolbar([("Refresh", self._refresh)])
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
 
     def _refresh(self) -> None:

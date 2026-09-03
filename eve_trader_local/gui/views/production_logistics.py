@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
@@ -23,9 +24,21 @@ from .base import BaseView
 from .production_common import build_table, populate
 
 _CATEGORY_LOCATION_COLUMNS = ["Category", "Active Location", "Options"]
+_CATEGORY_LOCATION_WIDTHS = [140, 120, 220]
+
 _LOGISTICS_COLUMNS = ["Category", "Location", "Item", "Needed", "Available", "Missing",
                       "Pull From", "Pull Avail."]
+_LOGISTICS_WIDTHS = [110, 100, 180, None, None, None, 100, 100]
+# logistics_status's own docstring: rows sorted by (category, -missing).
+# There's no single numeric column for that compound key, so this defaults
+# to the "Missing" column (index 5) desc - the more decision-relevant half
+# of the compound sort, category grouping is still visible in the column.
+_LOGISTICS_SORT = (5, Qt.SortOrder.DescendingOrder)
+
 _DISTRIBUTION_COLUMNS = ["Item", "From Location", "To Category", "To Location", "Quantity"]
+_DISTRIBUTION_WIDTHS = [200, 120, 120, 120, None]
+# distribution_recommendations's own docstring: sorted by quantity desc.
+_DISTRIBUTION_SORT = (4, Qt.SortOrder.DescendingOrder)
 
 
 def _category_location_row(category: str, assigned: dict, options: dict) -> list:
@@ -64,8 +77,8 @@ class LogisticsView(BaseView):
         self.root_layout.addLayout(toolbar)
 
         self.tabs = QTabWidget()
-        self.logistics_table = build_table(_LOGISTICS_COLUMNS)
-        self.distribution_table = build_table(_DISTRIBUTION_COLUMNS)
+        self.logistics_table = build_table(_LOGISTICS_COLUMNS, column_widths=_LOGISTICS_WIDTHS)
+        self.distribution_table = build_table(_DISTRIBUTION_COLUMNS, column_widths=_DISTRIBUTION_WIDTHS)
         self.tabs.addTab(self.logistics_table, "Logistics Status")
         self.tabs.addTab(self.distribution_table, "Distribution Recommendations")
         self.root_layout.addWidget(self.tabs)
@@ -104,7 +117,8 @@ class LogisticsView(BaseView):
         form.addStretch(1)
         outer.addLayout(form)
 
-        self.category_location_table = build_table(_CATEGORY_LOCATION_COLUMNS)
+        self.category_location_table = build_table(_CATEGORY_LOCATION_COLUMNS,
+                                                    column_widths=_CATEGORY_LOCATION_WIDTHS)
         self.category_location_table.setMaximumHeight(220)
         outer.addWidget(self.category_location_table)
         return box
@@ -166,7 +180,7 @@ class LogisticsView(BaseView):
 
     def _on_logistics(self, result: dict) -> None:
         rows = result["rows"]
-        populate(self.logistics_table, [_logistics_row(r) for r in rows])
+        populate(self.logistics_table, [_logistics_row(r) for r in rows], default_sort=_LOGISTICS_SORT)
         self.show_info(f"{len(rows)} logistics row(s)." if rows else
                        "No category has both an assigned location and planned jobs right now.")
 
@@ -177,7 +191,7 @@ class LogisticsView(BaseView):
 
     def _on_distribution(self, result: dict) -> None:
         rows = result["rows"]
-        populate(self.distribution_table, [_distribution_row(r) for r in rows])
+        populate(self.distribution_table, [_distribution_row(r) for r in rows], default_sort=_DISTRIBUTION_SORT)
         self.show_info(f"{len(rows)} recommendation(s)." if rows else
                        "Nothing to move - either every category is covered, or no distribution "
                        "source is configured.")

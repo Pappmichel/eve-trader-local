@@ -21,8 +21,18 @@ from .base import BaseView
 from .production_common import build_table, populate
 
 _DOCTRINE_COLUMNS = ["Doctrine ID", "Name", "Description", "Active"]
+_DOCTRINE_WIDTHS = [280, 160, 240, None]
+# storage.list_doctrines is "ORDER BY created_at DESC" (newest first), but
+# created_at itself isn't a displayed column here - there's nothing to
+# `sortByColumn` against without forcing a *different* (Doctrine ID
+# alphabetical) order than the one the backend actually produced, so this
+# is left without a default_sort; the table already opens in the correct
+# (newest-first) order straight from `populate`.
 _FITTING_COLUMNS = ["Fitting ID", "Doctrine ID", "Name", "Hull Type ID",
                     "Contract Target", "Stockpile Target", "Active"]
+_FITTING_WIDTHS = [280, 280, 200, None, None, None, None]
+# Same reasoning as doctrines above: list_fittings_for_doctrine is "ORDER BY
+# created_at" (oldest first), not a displayed column - no default_sort.
 
 
 def _doctrine_row(row: dict) -> list:
@@ -57,7 +67,7 @@ class FittingsView(BaseView):
         toolbar.addStretch(1)
         self.root_layout.addLayout(toolbar)
 
-        self.fittings_table = build_table(_FITTING_COLUMNS)
+        self.fittings_table = build_table(_FITTING_COLUMNS, column_widths=_FITTING_WIDTHS)
         self.fittings_table.itemSelectionChanged.connect(self._on_fitting_selected)
         self.root_layout.addWidget(self.fittings_table)
 
@@ -82,7 +92,7 @@ class FittingsView(BaseView):
         refresh_btn.clicked.connect(self._load_doctrines)
         form.addWidget(refresh_btn)
         outer.addLayout(form)
-        self.doctrine_table = build_table(_DOCTRINE_COLUMNS)
+        self.doctrine_table = build_table(_DOCTRINE_COLUMNS, column_widths=_DOCTRINE_WIDTHS)
         self.doctrine_table.setMaximumHeight(160)
         outer.addWidget(self.doctrine_table)
         return box

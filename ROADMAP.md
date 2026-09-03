@@ -123,12 +123,10 @@ coverage).
   section), plus a Settings dialog and an in-app Characters (OAuth/login)
   dialog, both reachable from a new top-level "App" menu (`gui/dialogs/`,
   `gui/main_window.py`) — Settings changes and character login/removal no
-  longer require dropping to the CLI. What's left is general polish only:
-  column widths/sorting defaults, remembering window/tab state between
-  launches, and a real editor for the handful of tuple/dict-typed config
-  fields the Settings dialog currently shows read-only (e.g.
-  `excluded_path_prefixes`, `ore_family_skill_levels` — edit `config.yaml`
-  directly for those until then).
+  longer require dropping to the CLI. General polish (column widths/sorting
+  defaults, remembered window/tab state, real tuple/dict Settings editors)
+  is done too, as of 2026-09-03 — see README.md's "Native GUI" section for
+  what each of those actually covers.
 - Packaging/installer once the above is far enough along to be worth
   packaging (feeds directly into Stage 2 of the update mechanism above).
 

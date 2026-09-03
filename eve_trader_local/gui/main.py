@@ -17,8 +17,14 @@ def main() -> int:
     configure_logging()
     storage.init_db()
     app = QApplication(sys.argv)
+    # Organization name feeds QSettings' storage location (see
+    # main_window.py's own module docstring for what's persisted there) -
+    # application name was already set here before this, kept as-is so an
+    # existing install's saved settings aren't orphaned under a new name.
+    app.setOrganizationName("eve-trader-local")
     app.setApplicationName("eve-trader-local")
     window = MainWindow()
+    window.restore_state()
     window.show()
     return app.exec()
 

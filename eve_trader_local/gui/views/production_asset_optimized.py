@@ -14,12 +14,18 @@ from __future__ import annotations
 
 import functools
 
+from PySide6.QtCore import Qt
+
 from ...production import actions as production_actions
 from .base import TableView
 from .production_common import fmt_isk, fmt_pct
 
 _COLUMNS = ["Item", "Activity", "Runs", "Ready Now", "Cost/Unit", "Margin",
             "Stock Coverage", "Category", "Decryptor"]
+_COLUMN_WIDTHS = [200, 120, None, None, None, None, None, 110, 110]
+# plan_asset_optimized's own docstring: "Returns {'jobs': [...]} sorted by
+# job_runs desc" - default-apply that same order.
+_DEFAULT_SORT = (2, Qt.SortOrder.DescendingOrder)
 
 
 def _row_to_cells(row) -> list:
@@ -36,7 +42,7 @@ class AssetOptimizedPlannerView(TableView):
         self._build_toolbar([
             ("Run Planner", self._run_planner),
         ])
-        self._build_table(_COLUMNS)
+        self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()
         self.show_info("Click Run Planner to see which jobs are startable right now.")
 
