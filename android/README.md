@@ -39,8 +39,10 @@ current scope.
   `data/trading/ShortlistRepository.kt`, `ui/screens/ShortlistScreen.kt`):
   the second real tool screen. Manual shortlist membership (add/remove/
   edit/toggle-active - tapping a row opens the same dialog Add uses,
-  pre-filled, so fixing a typo no longer means delete-and-re-add;
-  persisted the same JSON-blob-per-scope way as `TradingConfig`) plus a
+  pre-filled, so fixing a typo no longer means delete-and-re-add; that
+  dialog also rejects a type ID already used by a different entry rather
+  than silently creating a duplicate row; persisted the same
+  JSON-blob-per-scope way as `TradingConfig`) plus a
   "Refresh" action running `evaluateShortlist` - a straight Kotlin port of
   `shortlist.py`'s margin/decision formula -
   against live Jita region order stats and (when a Seller character is

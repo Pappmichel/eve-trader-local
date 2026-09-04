@@ -215,6 +215,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     if (showAddDialog) {
         ShortlistItemDialog(
             existing = null,
+            isDuplicateTypeId = { typeId -> items.any { it.itemId == typeId } },
             onDismiss = { showAddDialog = false },
             onSave = { newItem ->
                 persist(items + newItem)
@@ -225,6 +226,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     editingItem?.let { existing ->
         ShortlistItemDialog(
             existing = existing,
+            isDuplicateTypeId = { typeId -> typeId != existing.itemId && items.any { it.itemId == typeId } },
             onDismiss = { editingItem = null },
             onSave = { edited ->
                 persist(items.map { if (it == existing) edited else it })
@@ -239,13 +241,21 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
  * preserves - that item's `active` flag while editing its other fields.
  * Tapping a row in the list (as opposed to its checkbox/delete button)
  * opens this in edit mode - the only way to fix a typo used to be delete
- * and re-add. */
+ * and re-add. `isDuplicateTypeId` blocks saving a type ID already used by
+ * a *different* shortlist entry - unlike Candidate Discovery's Add button
+ * (which silently no-ops via `ShortlistRepository.addIfAbsent`), this is
+ * a manual form, so a rejected duplicate needs to say why rather than
+ * just doing nothing. */
 @Composable
-private fun ShortlistItemDialog(existing: ShortlistItem?, onDismiss: () -> Unit, onSave: (ShortlistItem) -> Unit) {
+private fun ShortlistItemDialog(
+    existing: ShortlistItem?, isDuplicateTypeId: (Int) -> Boolean,
+    onDismiss: () -> Unit, onSave: (ShortlistItem) -> Unit,
+) {
     var name by remember { mutableStateOf(existing?.item ?: "") }
     var typeId by remember { mutableStateOf(existing?.itemId?.takeIf { it != 0 }?.toString() ?: "") }
     var category by remember { mutableStateOf(existing?.category ?: "") }
     var volume by remember { mutableStateOf(existing?.volumeM3?.toString() ?: "") }
+    var duplicateError by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -253,7 +263,11 @@ private fun ShortlistItemDialog(existing: ShortlistItem?, onDismiss: () -> Unit,
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Item name") })
-                OutlinedTextField(value = typeId, onValueChange = { typeId = it }, label = { Text("Type ID") })
+                OutlinedTextField(
+                    value = typeId, onValueChange = { typeId = it; duplicateError = false },
+                    label = { Text("Type ID") }, isError = duplicateError,
+                    supportingText = { if (duplicateError) Text("Already on the shortlist") },
+                )
                 OutlinedTextField(value = category, onValueChange = { category = it }, label = { Text("Category") })
                 OutlinedTextField(value = volume, onValueChange = { volume = it }, label = { Text("Volume (m3)") })
             }
@@ -262,9 +276,14 @@ private fun ShortlistItemDialog(existing: ShortlistItem?, onDismiss: () -> Unit,
             TextButton(
                 enabled = name.isNotBlank() && typeId.toIntOrNull() != null && volume.toDoubleOrNull() != null,
                 onClick = {
+                    val newTypeId = typeId.toIntOrNull() ?: 0
+                    if (isDuplicateTypeId(newTypeId)) {
+                        duplicateError = true
+                        return@TextButton
+                    }
                     onSave(
                         ShortlistItem(
-                            item = name, itemId = typeId.toIntOrNull() ?: 0, category = category,
+                            item = name, itemId = newTypeId, category = category,
                             volumeM3 = volume.toDoubleOrNull() ?: 0.0, active = existing?.active ?: true,
                         )
                     )
