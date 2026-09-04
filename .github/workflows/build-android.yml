@@ -1,0 +1,55 @@
+name: Build Android debug APK
+
+# Runs whenever anything under android/ changes (push or PR) plus
+# workflow_dispatch for an on-demand sanity build. Counterpart of
+# build-windows.yml for the Android side of this repo (see
+# android/README.md's own "Honest limitations" section, which used to say
+# "no CI ... only builds the Windows desktop .exe" - this workflow is what
+# closes that gap). Debug-only, no signing/release/store upload: this is a
+# "does it still compile" gate, not a release pipeline (there is no Play
+# Store listing yet - see ROADMAP.md's Android section).
+on:
+  push:
+    paths:
+      - "android/**"
+      - ".github/workflows/build-android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/build-android.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the Android SDK platform/build-tools this project targets
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      # android/ deliberately ships without a Gradle wrapper jar (see
+      # android/README.md - it's a binary this repo's own tooling can't
+      # generate), so CI installs Gradle itself and invokes it directly
+      # instead of ./gradlew, pinned to the same version
+      # gradle/wrapper/gradle-wrapper.properties specifies for local
+      # Android Studio setups.
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Assemble debug APK
+        working-directory: android
+        run: gradle :app:assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eve-trader-local-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

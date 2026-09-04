@@ -238,13 +238,19 @@ this was built in):
   fields, since Kotlin has no equivalent of the desktop `SettingsDialog`'s
   reflection-driven generic form and Trading is the only tool with a config
   on this platform yet.
+- CI (`.github/workflows/build-android.yml`), the Android counterpart of
+  `build-windows.yml` - assembles the debug APK on every push/PR touching
+  `android/` as a compile gate. No wrapper jar is committed (see
+  `android/README.md`), so it installs Gradle itself and invokes it
+  directly rather than `./gradlew`. No lint/test step (no Android-side
+  tests exist yet), no release signing, no Play Store upload.
 
 Not started: the rest of Trading (realized-trade reconciliation, price
 history, unlisted-stock/undercut checks, auto-add/prune from Candidate
 Discovery, own-orders/buyer-covered tracking, Profit / Day, the Goonmetrics
 fallback), all four other tools' business logic and their own Settings tabs,
-the SDE cache itself, CI for the Android build, an app icon, encryption at
-rest for stored tokens, a Play Store listing.
+the SDE cache itself, Android-side tests, an app icon, encryption at rest
+for stored tokens, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

@@ -103,4 +103,6 @@ current scope.
   file, matching the desktop build's own plain SQLite `tokens` table) -
   fine for a single-user local app in the same sense it already is on
   desktop, but worth revisiting before this ever ships to a store.
-- No CI (`.github/workflows/` only builds the Windows desktop `.exe`).
+- CI (`.github/workflows/build-android.yml`) only assembles the debug APK
+  as a compile gate - no lint/test step (there are no Android-side tests
+  yet), no release signing, no Play Store upload.
