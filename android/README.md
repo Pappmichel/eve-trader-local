@@ -46,7 +46,17 @@ current scope.
   ordered" is unreachable here - every Import candidate shows as
   "Import"), and auto-add/prune from Candidate Discovery
   (`refresh-and-prune` on desktop) - this screen is refresh-only,
-  membership is manual.
+  membership is manual (though Candidate Discovery's own screen can now
+  add a candidate here directly - see below; there's just no automatic
+  hit-rate/movement-threshold filtering behind that button the way
+  `refresh-and-prune` has).
+- **Candidate Discovery -> Shortlist** (`ui/screens/
+  CandidateDiscoveryScreen.kt`'s per-row Add button): a manual stand-in for
+  `refresh-and-prune`'s auto-add - adds one candidate to the Shortlist
+  membership list directly, so it doesn't have to be retyped by hand into
+  Shortlist's own Add dialog. No hit-rate/avg-movement filtering (desktop's
+  `min_hit_rate`/`min_avg_movement` thresholds) happens here - every click
+  adds unconditionally, same as manually typing it into Shortlist would.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters (not per-tool, since Trading is the only tool with a
   config on this platform yet): a hand-written form over `TradingConfig`'s
