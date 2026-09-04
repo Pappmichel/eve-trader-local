@@ -150,6 +150,11 @@ current scope.
   and this hasn't been exercised on a real device yet - Keystore behavior
   (especially key invalidation on lock-screen/biometric changes, which
   this doesn't opt into) is worth re-checking once it has been.
-- CI (`.github/workflows/build-android.yml`) only assembles the debug APK
-  as a compile gate - no lint/test step (there are no Android-side tests
-  yet), no release signing, no Play Store upload.
+- CI (`.github/workflows/build-android.yml`) runs JVM unit tests
+  (`app/src/test/`, JUnit 4) then assembles the debug APK. Test coverage is
+  currently just `ShortlistTest.kt` - a Kotlin port of the desktop build's
+  `tests/test_shortlist.py` formula/decision-precedence cases (the
+  Profit/Day and Goonmetrics-history cases aren't ported, since that half
+  of `shortlist.py` isn't ported to Kotlin yet). No lint step, no
+  instrumented/UI tests (would need an emulator), no release signing, no
+  Play Store upload.

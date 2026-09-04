@@ -262,24 +262,30 @@ which "careful reading" alone had caught):
   reflection-driven generic form and Trading is the only tool with a config
   on this platform yet.
 - CI (`.github/workflows/build-android.yml`), the Android counterpart of
-  `build-windows.yml` - assembles the debug APK on every push/PR touching
-  `android/` as a compile gate. No wrapper jar is committed (see
+  `build-windows.yml` - runs JVM unit tests then assembles the debug APK on
+  every push/PR touching `android/`. No wrapper jar is committed (see
   `android/README.md`), so it installs Gradle itself and invokes it
-  directly rather than `./gradlew`. No lint/test step (no Android-side
-  tests exist yet), no release signing, no Play Store upload.
+  directly rather than `./gradlew`. No lint step, no instrumented/UI tests
+  (would need an emulator), no release signing, no Play Store upload.
 - Encryption at rest for stored tokens (`data/auth/TokenCrypto.kt`,
   AES-256-GCM with an Android-Keystore-held key) - a real departure from
   the desktop build's plain SQLite `tokens` table, since an EVE SSO
   refresh token is a genuine bearer credential. See `android/README.md`'s
   own entry for what's still unexercised (a real device/Keystore
   invalidation behavior).
+- A JVM unit test suite (`app/src/test/`, JUnit 4) - so far just
+  `ShortlistTest.kt`, a Kotlin port of `tests/test_shortlist.py`'s
+  formula/decision-precedence cases (Profit/Day and Goonmetrics-history
+  cases aren't ported, matching `Shortlist.kt` itself not covering that
+  half yet). Runs in CI as a `testDebugUnitTest` step before the APK
+  assembles.
 
 Not started: the rest of Trading (realized-trade reconciliation, price
 history, unlisted-stock/undercut checks, hit-rate/avg-movement-filtered
 auto-prune from Candidate Discovery, Profit / Day, the Goonmetrics
-fallback), all four other tools' business logic and their
-own Settings tabs, the SDE cache itself, Android-side tests, an app icon,
-a Play Store listing.
+fallback), all four other tools' business logic and their own Settings
+tabs, the SDE cache itself, tests for anything beyond Shortlist's pure
+formula, an app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

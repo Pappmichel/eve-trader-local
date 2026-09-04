@@ -87,4 +87,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    // JVM unit tests only (src/test/, run via testDebugUnitTest) - for the
+    // pure business logic (Shortlist.kt etc.) that, like the desktop
+    // build's own equivalents, makes no network call and opens no
+    // database, so it needs no Android instrumentation/emulator to test.
+    testImplementation("junit:junit:4.13.2")
 }

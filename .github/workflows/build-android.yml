@@ -6,7 +6,7 @@ name: Build Android debug APK
 # android/README.md's own "Honest limitations" section, which used to say
 # "no CI ... only builds the Windows desktop .exe" - this workflow is what
 # closes that gap). Debug-only, no signing/release/store upload: this is a
-# "does it still compile" gate, not a release pipeline (there is no Play
+# compile-and-unit-test gate, not a release pipeline (there is no Play
 # Store listing yet - see ROADMAP.md's Android section).
 on:
   push:
@@ -44,6 +44,14 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
+
+      - name: Run JVM unit tests
+        # Only the pure-business-logic tests under src/test/ (Shortlist.kt
+        # etc.) - no Android instrumentation/emulator needed, since that
+        # code makes no network call and opens no database, same as the
+        # desktop build's own equivalent tests.
+        working-directory: android
+        run: gradle :app:testDebugUnitTest --stacktrace
 
       - name: Assemble debug APK
         working-directory: android
