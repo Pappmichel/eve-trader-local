@@ -9,12 +9,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.xmlpull.v1.XmlPullParser
 
 const val GOONMETRICS_HISTORY_BASE = "https://goonmetrics.apps.gnf.lt/api/price_history/"
+const val GOONMETRICS_APPRAISE_BASE = "https://appraise.gnf.lt"
 private const val USER_AGENT = "eve-trader-local-android (contact: set EVE_CONTACT_EMAIL)"
 
 // Same default as the desktop build's config.py `TradingConfig.chunk_size`
@@ -46,17 +50,44 @@ data class HistoryPoint(
     val numOrders: Int,
 )
 
-/** Client for gnf.lt's rehosting of the "Goonmetrics" community price-history
- * API - the price_history half of the desktop build's
- * goonmetrics_client.py, and only that half.
+/** Current best buy/sell for one type in a market, as served by
+ * appraise.gnf.lt - the direct counterpart of goonmetrics_client.py's
+ * `CurrentPrice` dataclass. */
+data class CurrentPrice(
+    val typeId: Int,
+    val updated: String,
+    val buy: Double,
+    val sell: Double,
+)
+
+@Serializable
+private data class CurrentPriceQuote(val max: Double = 0.0, val min: Double = 0.0)
+
+@Serializable
+private data class CurrentPricePrices(
+    val updated: String = "",
+    val buy: CurrentPriceQuote = CurrentPriceQuote(),
+    val sell: CurrentPriceQuote = CurrentPriceQuote(),
+)
+
+@Serializable
+private data class CurrentPriceItem(
+    @SerialName("typeID") val typeId: Int,
+    val prices: CurrentPricePrices,
+)
+
+/** Client for gnf.lt's rehosting of the "Goonmetrics" community price API -
+ * both halves of the desktop build's goonmetrics_client.py: `price_history`/
+ * `price_history_chunked` (daily region history, XML, used by Trading's
+ * Price History screen) and `current_prices` (a live best-bid/best-ask
+ * snapshot per market, JSON, used by Station Trading's candidate
+ * discovery).
  *
  * Kept as its own client rather than folded into EsiClient.kt for the same
- * reason the desktop build keeps the two files apart: a different host, a
- * different (XML, not JSON) response format, and a third-party no-SLA
- * server whose failure modes have nothing to do with ESI's. The
- * `current_prices` half of the desktop client is deliberately *not* ported -
- * that one is the failsafe behind a structure order-book lookup, a
- * different feature nothing on Android reads yet.
+ * reason the desktop build keeps the two files apart: a different host
+ * (gnf.lt, not ESI) and a third-party no-SLA server whose failure modes
+ * have nothing to do with ESI's - even though `current_prices` itself talks
+ * JSON like EsiClient does, unlike the XML history endpoint below it.
  *
  * Response shape (parsed with Android's built-in XmlPullParser - no new
  * Gradle dependency needed for XML, and the whole document is a flat
@@ -86,7 +117,50 @@ data class HistoryPoint(
 class GoonmetricsClient(
     private val http: OkHttpClient = OkHttpClient(),
     private val historyBase: String = GOONMETRICS_HISTORY_BASE,
+    private val appraiseBase: String = GOONMETRICS_APPRAISE_BASE,
 ) {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** Current best buy(max)/sell(min) for every type in `market` (e.g.
+     * "jita") - the counterpart of `current_prices`, ported now that
+     * Station Trading's candidate discovery needs it (Trading's own Price
+     * History screen only ever needed the history half above). No retry
+     * cache here unlike the desktop version's module-level TTL cache -
+     * every caller on this platform is a single user-pressed button, not a
+     * background loop making repeated calls worth caching against. */
+    suspend fun currentPrices(market: String): List<CurrentPrice> {
+        val url = "$appraiseBase/market/$market/prices.json"
+        val body = withContext(Dispatchers.IO) {
+            val request = Request.Builder().url(url).header("User-Agent", USER_AGENT).build()
+            var lastError: String? = null
+            for (attempt in 1..3) {
+                val response = http.newCall(request).execute()
+                response.use {
+                    if (it.isSuccessful) return@withContext it.body!!.string()
+                    lastError = "HTTP ${it.code} for $url"
+                    if (it.code == 429 || it.code in 500..504) {
+                        if (attempt < 3) {
+                            delay((attempt * 1500).toLong())
+                            return@use
+                        }
+                    }
+                    throw GoonmetricsError(lastError!!)
+                }
+            }
+            throw GoonmetricsError(lastError ?: "Exhausted retries for current prices")
+        }
+        return json.decodeFromString<List<CurrentPriceItem>>(body)
+            .map { item ->
+                CurrentPrice(
+                    typeId = item.typeId,
+                    updated = item.prices.updated,
+                    buy = item.prices.buy.max,
+                    sell = item.prices.sell.min,
+                )
+            }
+            .sortedBy { it.typeId }
+    }
+
     /** Daily history for a batch of type_ids in one region, in one request -
      * the endpoint takes a comma-separated type_id list, which is why
      * chunking (below) is about request size, not about one call per id. */

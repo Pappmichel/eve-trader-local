@@ -170,6 +170,65 @@ current scope.
   Discovery's live-ESI walk (and Realized Trades' Jita-station filter) onto
   it needs a populated cache and a real device to verify the results match,
   and is tracked as a follow-up.
+- **Station Trading -> Shortlist and Undercut & Skills** (`data/trading/
+  StationTradingConfig.kt`, `StationTradingCandidateDiscovery.kt`,
+  `StationTradingUndercut.kt`, `StationTradingShortlistRepository.kt`,
+  `StationTradingConstants.kt`; `ui/screens/StationTradingShortlistScreen.kt`,
+  `StationTradingUndercutScreen.kt`): the first tool other than Trading to
+  get real business logic, not just a placeholder. Kotlin ports of the
+  desktop build's `station_trading/candidate_discovery.py` and
+  `station_trading/undercut.py`:
+  - *Shortlist*'s "Discover" is a two-stage scan, same shape as Trading's
+    own history_backtest.py -> shortlist.py split: one Goonmetrics
+    `current_prices` call for the *whole* Jita market (never ESI) ranks
+    every item by bid-ask spread and real average daily traded volume
+    (Goonmetrics region history, not order-book depth - depth is the wrong
+    signal for "is this actually liquid"), then persists the result.
+    Every row shown is live-confirmed against ESI's real order book
+    (`confirmLive`/`EsiClient.regionOrderStatsBulk`), bounded to just the
+    persisted shortlist - never a per-item ESI call across the whole
+    market, since no bulk-region endpoint exists. `GoonmetricsClient.kt`
+    grows `currentPrices` for this - the JSON best-bid/best-ask endpoint
+    that Trading's own Price History screen never needed (that one only
+    ever used the history/XML half of the same third-party API).
+  - *Undercut & Skills* combines two independent checks into the one
+    screen the drawer entry names: a bidirectional (sell *and* buy side)
+    own-order-vs-order-id check at Jita's trade hub station, pooled across
+    every registered "trader" character (`EsiClient.regionOrdersRaw`, a new
+    method returning the *raw*, unsummarized region order book
+    `checkUndercutPooled`/`checkBuyUndercutPooled` cross-reference by
+    order_id - a structure/region order book carries no owning-character
+    field, so price/type_id matching alone would false-positive on a
+    coincidentally identical own price); and a live skill-level pull
+    (`EsiClient.characterSkills`, a new method) turned into an order-slot
+    count via `orderSlotsFromSkills` (`StationTradingConstants.kt` - the
+    real skill type_ids and the 5-base + 4/8/16/32-per-level formula,
+    checked against the SDE directly on desktop rather than trusted from
+    memory, since "Margin Trading" - a skill some research names - does
+    not actually exist in the game). Fee/tax discount skills (Accounting,
+    Broker Relations, Advanced Broker Relations) are shown as raw levels
+    only, never turned into a numeric discount, since those also depend on
+    NPC corp standings this app has no way to read.
+  - Station Trading is its own tool with its own config
+    (`StationTradingConfig`/`StationTradingConfigRepository`, scope
+    `"station_trading"` - separate from `TradingConfig`, the same way the
+    desktop build keeps the two dataclasses apart) and its own shortlist
+    persistence (`StationTradingShortlistRepository`, scope
+    `"station_trading_shortlist_items"` - a different shape and a different
+    type_id universe from Trading's own `ShortlistRepository`, so
+    conflating the two would mean one type_id could only ever mean one
+    thing across two unrelated tools). A new "Trader (Station Trading)"
+    login role (`CharactersScreen.kt`) requests
+    `esi-markets.read_character_orders.v1` + `esi-skills.read_skills.v1` -
+    the same scope pair the desktop build's own
+    `station_trading/esi_sync.py` requests, and pooled across every
+    registered trader character rather than simplified to one, since
+    Station Trading's single role has no reason not to pool the way
+    Trading's buyer/seller split does.
+  - Simplified vs. desktop: item names/categories aren't resolved from the
+    local SDE cache yet (rows show a bare type_id) - the same gap
+    Candidate Discovery's own docstring already documents, and the same
+    follow-up work would close both at once.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters (not per-tool, since Trading is the only tool with a
   config on this platform yet): a hand-written form over `TradingConfig`'s
@@ -296,9 +355,15 @@ current scope.
   where it still applies - FIFO matching, the buy-after-sell `break` rule,
   location filters, the journal-vs-modeled sell price, and the
   cost-basis-weighted summary; its SDE/storage-backed cases have no
-  counterpart here), and `SdeCsvTest.kt` (the hand-rolled CSV reader
+  counterpart here), `SdeCsvTest.kt` (the hand-rolled CSV reader
   against hand-written documents matching the real Fuzzwork shapes -
   quoted commas, embedded newlines, doubled quotes, a BOM on the header -
-  since this parser has no desktop equivalent to port tests from at all).
-  No lint step, no instrumented/UI tests (would need an emulator), no
-  release signing, no Play Store upload.
+  since this parser has no desktop equivalent to port tests from at all),
+  `StationTradingCandidateDiscoveryTest.kt` and `StationTradingUndercutTest.kt`
+  (ported case-for-case from `tests/test_station_trading_candidate_
+  discovery.py` and `tests/test_station_trading_undercut.py`'s pure-logic
+  cases against `rankCandidates`/`computeUndercuts`), and
+  `StationTradingConstantsTest.kt` (a port of
+  `tests/test_station_trading_constants.py`'s `order_slots_from_skills`
+  cases). No lint step, no instrumented/UI tests (would need an emulator),
+  no release signing, no Play Store upload.

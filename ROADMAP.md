@@ -349,15 +349,41 @@ which "careful reading" alone had caught):
   Discovery (and Realized Trades' buy-side filter) onto it is tracked
   as a follow-up, needing a populated cache and a real device to verify
   against.
+- Station Trading -> Shortlist and Undercut & Skills (`data/trading/
+  StationTradingConfig.kt`, `StationTradingCandidateDiscovery.kt`,
+  `StationTradingUndercut.kt`, `StationTradingShortlistRepository.kt`,
+  `StationTradingConstants.kt`; `ui/screens/StationTradingShortlistScreen.kt`,
+  `StationTradingUndercutScreen.kt`) - the first tool other than Trading to
+  get real business logic. A Kotlin port of
+  station_trading/candidate_discovery.py (one Goonmetrics `current_prices`
+  scan of the whole Jita market, ranked by spread * real daily volume, with
+  live ESI confirmation bounded to whatever that scan already narrowed
+  things down to - never a per-item ESI call across the whole market) and
+  station_trading/undercut.py (bidirectional own-order monitoring at Jita's
+  trade hub, pooled across every registered "trader" character - unlike
+  Trading's own buyer/seller split, Station Trading's single role has no
+  reason not to pool). `GoonmetricsClient.kt` grows `currentPrices` (the
+  JSON best-bid/best-ask endpoint, the half of that client Price History
+  never needed). Its own shortlist is a separate persisted list from
+  Trading's Shortlist (different tool, different type_id universe - a new
+  `station_trading` login role with its own scopes, since Station Trading
+  needs `esi-skills.read_skills.v1` for the Skills half and neither of
+  Trading's roles request it). Simplified vs. desktop: item names/
+  categories aren't resolved from the SDE cache yet (rows show a bare
+  type_id) - same status Candidate Discovery's own gap already has, and the
+  same follow-up work would close both. Skill-derived fee/tax discounts
+  are shown as raw levels only, never turned into a numeric discount - those
+  depend on NPC corp standings this app has no way to read (an omission the
+  desktop build's own constants.py documents too).
 
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
-Discovery onto the shortlist, Profit / Day, the Goonmetrics `current_prices`
-fallback, pooling either Realized Trades or Unlisted-Stock-&-Undercut check
-across multiple characters, rewiring Candidate Discovery and Realized
-Trades onto the new SDE cache, `average_daily_sold_by_type`, all four other
-tools' business logic (Production, Doctrine, Ore & Minerals/Refining,
-Station Trading) and their own Settings tabs, tests for anything beyond the
-pure logic already covered, an app icon, a Play Store listing.
+Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
+or Unlisted-Stock-&-Undercut check across multiple characters, rewiring
+Candidate Discovery, Realized Trades, and Station Trading onto the new SDE
+cache, `average_daily_sold_by_type`, the other three tools' business logic
+(Production, Doctrine, Ore & Minerals/Refining) and every tool's own
+Settings tab, tests for anything beyond the pure logic already covered, an
+app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

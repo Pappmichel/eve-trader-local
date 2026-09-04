@@ -54,9 +54,18 @@ private val TRADING_SCOPES = listOf(
     "esi-wallet.read_character_wallet.v1", "esi-assets.read_assets.v1",
 )
 
+// Same scope pair as the desktop build's own station_trading/esi_sync.py
+// STATION_TRADING_SCOPES: own-orders (the undercut check) plus skill levels
+// (the order-slot count) - no wallet or structure-markets scope, since
+// Station Trading only ever reads Jita's own public NPC station book.
+private val STATION_TRADING_SCOPES = listOf(
+    "esi-markets.read_character_orders.v1", "esi-skills.read_skills.v1",
+)
+
 private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
     Triple("Buyer (Trading)", "buyer", TRADING_SCOPES),
     Triple("Seller (Trading / Ore & Minerals)", "seller", TRADING_SCOPES),
+    Triple("Trader (Station Trading)", "trader", STATION_TRADING_SCOPES),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

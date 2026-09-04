@@ -55,6 +55,11 @@ data class MarketOrder(
     val price: Double = 0.0,
     @SerialName("is_buy_order") val isBuyOrder: Boolean = false,
     @SerialName("volume_remain") val volumeRemain: Double = 0.0,
+    /** Absent from every current caller of this type until Station
+     * Trading's undercut check, which needs to narrow a region's full
+     * order book down to one specific (Jita trade hub) station - see
+     * StationTradingUndercut.kt. */
+    @SerialName("location_id") val locationId: Long = 0,
 )
 
 @Serializable
@@ -66,6 +71,17 @@ data class CharacterOrder(
     @SerialName("volume_remain") val volumeRemain: Double = 0.0,
     @SerialName("location_id") val locationId: Long = 0,
     @SerialName("region_id") val regionId: Int = 0,
+)
+
+@Serializable
+data class CharacterSkill(
+    @SerialName("skill_id") val skillId: Int = 0,
+    @SerialName("active_skill_level") val activeSkillLevel: Int = 0,
+)
+
+@Serializable
+data class CharacterSkillsResponse(
+    val skills: List<CharacterSkill> = emptyList(),
 )
 
 @Serializable
@@ -184,6 +200,32 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
             page++
         }
         return summarizeOrders(out)
+    }
+
+    /** The region's full, unsummarized order book for one type_id - the
+     * counterpart of esi_client.py's `region_orders_raw`. Public endpoint,
+     * no token needed. Station Trading's undercut check needs the raw
+     * per-order list (to cross-reference by order_id against the trader's
+     * own orders), not the summarized percentile/volume `regionOrderStats`
+     * above returns. */
+    suspend fun regionOrdersRaw(regionId: Int, typeId: Int): List<MarketOrder> {
+        val out = mutableListOf<MarketOrder>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/markets/$regionId/orders/",
+                mapOf(
+                    "datasource" to "tranquility", "order_type" to "all",
+                    "type_id" to typeId.toString(), "page" to page.toString(),
+                ),
+            )
+            val chunk: List<MarketOrder> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
     }
 
     /** Same as regionOrderStats, but for many type_ids at once - one ESI
@@ -316,6 +358,15 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
         }
         return out
     }
+
+    /** This character's trained skill levels (active, not just trained -
+     * matches esi_client.py's own `active_skill_level` read). Requires
+     * esi-skills.read_skills.v1. Used by Station Trading to derive its
+     * order-slot count (constants.py's `order_slots_from_skills`). */
+    suspend fun characterSkills(characterId: Long, accessToken: String): List<CharacterSkill> =
+        json.decodeFromString<CharacterSkillsResponse>(
+            getBody("/characters/$characterId/skills/", mapOf("datasource" to "tranquility"), accessToken)
+        ).skills
 
     /** The NPC station ids in one solar system - a public endpoint, so this
      * needs no token. Used to find "is this in Jita" the way the desktop

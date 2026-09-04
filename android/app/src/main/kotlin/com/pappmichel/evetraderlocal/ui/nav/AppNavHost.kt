@@ -36,6 +36,8 @@ import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
 import com.pappmichel.evetraderlocal.ui.screens.SdeDataScreen
 import com.pappmichel.evetraderlocal.ui.screens.SettingsScreen
 import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
+import com.pappmichel.evetraderlocal.ui.screens.StationTradingShortlistScreen
+import com.pappmichel.evetraderlocal.ui.screens.StationTradingUndercutScreen
 import com.pappmichel.evetraderlocal.ui.screens.UnlistedUndercutScreen
 import kotlinx.coroutines.launch
 
@@ -45,14 +47,17 @@ private const val UNLISTED_UNDERCUT_ROUTE = "trading/unlisted-undercut"
 private const val PRICE_HISTORY_ROUTE = "trading/price-history"
 private const val REALIZED_TRADES_ROUTE = "trading/realized-trades"
 private const val SDE_DATA_ROUTE = "sde-data"
+private const val STATION_TRADING_SHORTLIST_ROUTE = "station-trading/shortlist"
+private const val STATION_TRADING_UNDERCUT_ROUTE = "station-trading/undercut-skills"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
  * for - currently Trading/Candidate Discovery, Trading/Shortlist,
- * Trading/Unlisted Stock & Undercut Check, Trading/Price History, and
- * Trading/Realized Trades & Transactions (see ROADMAP.md's Android section
- * for what's ported so far). Add a route here as each new screen replaces
- * its placeholder. */
+ * Trading/Unlisted Stock & Undercut Check, Trading/Price History,
+ * Trading/Realized Trades & Transactions, and Station Trading's own
+ * Shortlist/Undercut & Skills (see ROADMAP.md's Android section for what's
+ * ported so far). Add a route here as each new screen replaces its
+ * placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -64,6 +69,10 @@ private fun routeFor(tool: String, view: String): String =
         PRICE_HISTORY_ROUTE
     } else if (tool == "Trading" && view == "Realized Trades & Transactions") {
         REALIZED_TRADES_ROUTE
+    } else if (tool == "Station Trading" && view == "Shortlist") {
+        STATION_TRADING_SHORTLIST_ROUTE
+    } else if (tool == "Station Trading" && view == "Undercut & Skills") {
+        STATION_TRADING_UNDERCUT_ROUTE
     } else {
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
@@ -181,6 +190,8 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(UNLISTED_UNDERCUT_ROUTE) { UnlistedUndercutScreen(database, tokenManager) }
                 composable(PRICE_HISTORY_ROUTE) { PriceHistoryScreen(database) }
                 composable(REALIZED_TRADES_ROUTE) { RealizedTradesScreen(database, tokenManager) }
+                composable(STATION_TRADING_SHORTLIST_ROUTE) { StationTradingShortlistScreen(database) }
+                composable(STATION_TRADING_UNDERCUT_ROUTE) { StationTradingUndercutScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""
