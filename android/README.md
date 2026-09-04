@@ -315,16 +315,19 @@ current scope.
   candidate-discovery pipeline, the latter an LP solver - both real,
   separate scope.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
-  next to Characters (not per-tool, since Trading is the only tool with a
-  config on this platform yet): a hand-written form over `TradingConfig`'s
-  fields. The desktop build's own `SettingsDialog` builds its form
-  generically off each config dataclass via Python reflection - Kotlin has
-  no equivalent, so this is a plain fixed form instead, over the same field
-  set `TradingConfig.kt` already scopes itself to. Save validates every
-  numeric field before writing anything - an earlier version silently
+  next to Characters: a `TabRow` with one tab per tool that has a config on
+  this platform - Trading, Station Trading, Production, Ore & Minerals
+  (Doctrine has none yet; the EFT parser reads nothing configurable) - each
+  a hand-written form over just that tool's config fields. The desktop
+  build's own `SettingsDialog` builds its form generically off each config
+  dataclass via Python reflection - Kotlin has no equivalent, so these are
+  plain fixed forms instead, over the same field sets each `*Config.kt`
+  already scopes itself to. Every tab validates every numeric field before
+  writing anything - an earlier version of the Trading tab silently
   discarded an unparseable value (a typo) per field and saved (then
   displayed back) `TradingConfig()`'s default for it instead, with no
-  indication anything had gone wrong.
+  indication anything had gone wrong; every tab added since follows the
+  same "reject the whole save, name every bad field" rule from the start.
 - **Local database** (`data/db/`): Room, mirroring the desktop build's
   `tokens`/`settings` SQLite tables (`storage.py`) - same JSON-blob-per-row
   shape, same table names' worth of meaning. App-private storage is this

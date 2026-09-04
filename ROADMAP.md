@@ -262,10 +262,10 @@ which "careful reading" alone had caught):
   same flat scope set `config.py` does on desktop, rather than a
   role-trimmed subset.
 - A Settings screen (`ui/screens/SettingsScreen.kt`), reachable from the
-  drawer next to Characters - a hand-written form over `TradingConfig`'s
-  fields, since Kotlin has no equivalent of the desktop `SettingsDialog`'s
-  reflection-driven generic form and Trading is the only tool with a config
-  on this platform yet.
+  drawer next to Characters - a `TabRow` with one hand-written form per
+  tool that has a config so far (Trading, Station Trading, Production, Ore
+  & Minerals), since Kotlin has no equivalent of the desktop
+  `SettingsDialog`'s reflection-driven generic form.
 - CI (`.github/workflows/build-android.yml`), the Android counterpart of
   `build-windows.yml` - runs JVM unit tests then assembles the debug APK on
   every push/PR touching `android/`. No wrapper jar is committed (see

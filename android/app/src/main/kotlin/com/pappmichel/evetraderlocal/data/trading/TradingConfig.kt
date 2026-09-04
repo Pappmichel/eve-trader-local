@@ -29,9 +29,7 @@ data class TradingConfig(
     val minAvgMovement: Double = 0.0,
     /** How far back "recent" reaches, in days - config.py's own default.
      * Read by realized-trade reconciliation (see TradeReconciliation.kt);
-     * there is no Settings screen field for it yet, so changing it
-     * currently means changing this default, the same as every other field
-     * here. */
+     * editable from the Trading tab of Settings (`SettingsScreen.kt`). */
     val lookbackDays: Int = 30,
     val excludedPathPrefixes: List<String> = listOf(
         "ships", "blueprints", "apparel", "personalization", "pilot's services", "structures",
