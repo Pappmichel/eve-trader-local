@@ -248,6 +248,45 @@ current scope.
     local SDE cache yet (rows show a bare type_id) - the same gap
     Candidate Discovery's own docstring already documents, and the same
     follow-up work would close both at once.
+- **Production -> Item Lookup** (`data/production/ProductionPricing.kt`,
+  `ProductionConfig.kt`; `ui/screens/ItemLookupScreen.kt`): the first
+  Production view, a Kotlin port of `production/pricing.py` scoped to just
+  its buy-side comparison - "what does it cost to buy one unit of this
+  item right now, home structure or Jita?" Every *other* Production view
+  (Build Candidates, Planner, Ship Margins, Item Margin) needs a real
+  build cost, which means walking a blueprint's bill of materials via
+  `industryActivityMaterials`/`industryActivityProducts` SDE tables the
+  Android SDE cache doesn't have (confirmed out of scope when that cache
+  itself was built, see `data/sde/SdeRepository.kt`'s own docstring) -
+  `pricing.py`'s buy-side half is the one piece of desktop Production
+  needing zero blueprint data, so it's the one vertical slice portable
+  without first adding a chunk of new SDE schema. `ProductionConfig`
+  carries only the three fields this slice reads (broker fee, haul
+  cost/m3, an optional home structure id) rather than the desktop
+  dataclass's full field set - more get added alongside whichever feature
+  first needs them, the same incremental approach `StationTradingConfig`
+  followed. Simplified vs. desktop: no Goonmetrics fallback (ESI-only for
+  both sides - a failed/absent lookup just shows no quote for that side);
+  lookup is by type_id only, since the SDE cache has no name-search index
+  yet.
+- **Doctrine -> Fittings** (`data/doctrine/EftFittingParser.kt`,
+  `DoctrineSdeResolver.kt`; `ui/screens/DoctrineFittingsScreen.kt`): a
+  Kotlin port of `doctrine/parser.py`'s EFT fitting-text parser (paste a
+  fit exported from the in-game client, see the parsed
+  items/quantities/issues - unresolved names, ambiguous splits, malformed
+  lines). Item names are resolved via two new lookup queries added to the
+  existing SDE cache (`SdeRepository.resolveTypeByName`/`hullTypeNames`) -
+  no new table and no Room-version bump, since both are plain queries over
+  `sde_types`, already fully populated. Preview-only: nothing is
+  persisted, since Stockpile Status/Shopping List/Contract History (the
+  other three Doctrine views, still `PlaceholderScreen`) all need a real
+  Doctrine/Fitting persistence layer this platform doesn't have yet, and
+  building one just to unblock the parser was judged out of scope for one
+  pass. One honest gap, surfaced in the screen itself: the SDE cache has
+  no `dgmTypeEffects` table, so slot classification always returns null
+  and most fitted modules parse into a generic "cargo" slot rather than
+  their real low/med/high/rig section - item names, quantities, and parse
+  issues are unaffected by this gap.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters (not per-tool, since Trading is the only tool with a
   config on this platform yet): a hand-written form over `TradingConfig`'s
@@ -381,8 +420,13 @@ current scope.
   `StationTradingCandidateDiscoveryTest.kt` and `StationTradingUndercutTest.kt`
   (ported case-for-case from `tests/test_station_trading_candidate_
   discovery.py` and `tests/test_station_trading_undercut.py`'s pure-logic
-  cases against `rankCandidates`/`computeUndercuts`), and
+  cases against `rankCandidates`/`computeUndercuts`),
   `StationTradingConstantsTest.kt` (a port of
   `tests/test_station_trading_constants.py`'s `order_slots_from_skills`
-  cases). No lint step, no instrumented/UI tests (would need an emulator),
-  no release signing, no Play Store upload.
+  cases), `ProductionPricingTest.kt` (a port of
+  `tests/test_production_pricing.py`'s pure `buy_price`/`buy_source`
+  cases), and `EftFittingParserTest.kt` (26 cases ported from
+  `tests/test_doctrine_parser.py`'s fake-resolver layer - item/quantity
+  parsing, unresolved-name and ambiguous-split issues, malformed lines).
+  No lint step, no instrumented/UI tests (would need an emulator), no
+  release signing, no Play Store upload.

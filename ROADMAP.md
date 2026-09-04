@@ -390,16 +390,44 @@ which "careful reading" alone had caught):
   are shown as raw levels only, never turned into a numeric discount - those
   depend on NPC corp standings this app has no way to read (an omission the
   desktop build's own constants.py documents too).
+- Production -> Item Lookup (`data/production/ProductionPricing.kt`,
+  `ProductionConfig.kt`; `ui/screens/ItemLookupScreen.kt`) - the first
+  Production view, deliberately scoped to `production/pricing.py`'s
+  buy-side comparison (home structure order book vs. Jita landed price)
+  rather than any feature needing a real build cost. Every other Production
+  view (Build Candidates, Planner, Ship Margins, Item Margin) needs a
+  blueprint's bill of materials - `industryActivityMaterials`/
+  `industryActivityProducts` SDE tables the Android SDE cache doesn't have
+  (confirmed out of scope when that cache was built) - so this is the one
+  vertical slice portable without first adding a chunk of new SDE schema.
+  Simplified vs. desktop: no Goonmetrics fallback (ESI-only for both
+  sides); lookup is by type_id only, since the SDE cache has no name-search
+  index.
+- Doctrine -> Fittings (`data/doctrine/EftFittingParser.kt`,
+  `DoctrineSdeResolver.kt`; `ui/screens/DoctrineFittingsScreen.kt`) - a
+  Kotlin port of `doctrine/parser.py`'s EFT fitting-text parser, wired onto
+  the local SDE cache for item-name resolution (`SdeRepository.
+  resolveTypeByName`/`hullTypeNames`, two new lookup queries - no schema or
+  Room-version change). Preview-only: paste EFT text, see the parsed
+  items/quantities/issues - nothing is persisted, since Stockpile
+  Status/Shopping List/Contract History all need a Doctrine/Fitting
+  persistence layer this platform doesn't have yet, and building one just
+  to unblock this pass was out of scope. Honest gap: the SDE cache has no
+  `dgmTypeEffects` table, so slot classification always returns null and
+  most fitted modules parse into "cargo" instead of their real low/med/
+  high/rig section - item names, quantities, and parse issues themselves
+  are unaffected, and the screen says so.
 
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
 or Unlisted-Stock-&-Undercut check across multiple characters, rewiring
 Station Trading's own candidate discovery onto the new SDE cache
 (Candidate Discovery and Realized Trades are both done, see above),
-`average_daily_sold_by_type`, the other three tools' business logic
-(Production, Doctrine, Ore & Minerals/Refining) and every tool's own
-Settings tab, tests for anything beyond the pure logic already covered, an
-app icon, a Play Store listing.
+`average_daily_sold_by_type`, the rest of Production/Doctrine (everything
+needing a blueprint BOM or a persisted stockpile/shopping-list/contract
+layer) and all of Ore & Minerals/Refining, every tool's own Settings tab,
+tests for anything beyond the pure logic already covered, an app icon, a
+Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
