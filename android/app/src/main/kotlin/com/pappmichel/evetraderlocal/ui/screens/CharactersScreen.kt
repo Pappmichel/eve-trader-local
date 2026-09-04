@@ -45,7 +45,10 @@ private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
     ),
     Triple(
         "Seller (Trading / Ore & Minerals)", "seller",
-        listOf("esi-markets.structure_markets.v1", "esi-wallet.read_character_wallet.v1"),
+        listOf(
+            "esi-markets.structure_markets.v1", "esi-wallet.read_character_wallet.v1",
+            "esi-markets.read_character_orders.v1",
+        ),
     ),
 )
 

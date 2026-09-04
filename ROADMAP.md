@@ -234,10 +234,22 @@ which "careful reading" alone had caught):
   (when a Seller character is logged in) live structure order-book stats.
   Membership (which items are tracked) is manual add/remove/toggle-active
   here, not auto-populated/pruned from Candidate Discovery the way
-  desktop's `refresh-and-prune` does it — and Profit / Day, the Goonmetrics
-  current-price fallback, and own-orders/buyer-covered tracking (so
-  "Already ordered" is currently unreachable) aren't ported either. See
-  `android/README.md`'s own Shortlist entry for the full list.
+  desktop's `refresh-and-prune` does it (though a Candidate Discovery row
+  can now add itself here directly — see below) — and Profit / Day, the
+  Goonmetrics current-price fallback, and buyer-covered tracking aren't
+  ported either. See `android/README.md`'s own Shortlist entry for the
+  full list.
+- Candidate Discovery's own screen can add a candidate straight to the
+  Shortlist (`ui/screens/CandidateDiscoveryScreen.kt`'s per-row button) — a
+  manual stand-in for `refresh-and-prune`'s auto-add, with no
+  hit-rate/avg-movement filtering behind it.
+- Shortlist now reads the seller's own open sell orders at the structure
+  (`EsiClient.characterOrders`, mirroring `esi_client.py`'s
+  `character_orders`/`own_orders.py`'s `fetch_own_sell_orders`), so
+  "Already ordered" is reachable — best-effort, falling back to "none
+  known" for a Seller character authorized before this scope existed.
+  Buyer-covered tracking (already in inventory/on a buy order) is a
+  separate, still-unported signal.
 - A Settings screen (`ui/screens/SettingsScreen.kt`), reachable from the
   drawer next to Characters - a hand-written form over `TradingConfig`'s
   fields, since Kotlin has no equivalent of the desktop `SettingsDialog`'s
@@ -251,11 +263,11 @@ which "careful reading" alone had caught):
   tests exist yet), no release signing, no Play Store upload.
 
 Not started: the rest of Trading (realized-trade reconciliation, price
-history, unlisted-stock/undercut checks, auto-add/prune from Candidate
-Discovery, own-orders/buyer-covered tracking, Profit / Day, the Goonmetrics
-fallback), all four other tools' business logic and their own Settings tabs,
-the SDE cache itself, Android-side tests, an app icon, encryption at rest
-for stored tokens, a Play Store listing.
+history, unlisted-stock/undercut checks, hit-rate/avg-movement-filtered
+auto-prune from Candidate Discovery, buyer-covered tracking, Profit / Day,
+the Goonmetrics fallback), all four other tools' business logic and their
+own Settings tabs, the SDE cache itself, Android-side tests, an app icon,
+encryption at rest for stored tokens, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

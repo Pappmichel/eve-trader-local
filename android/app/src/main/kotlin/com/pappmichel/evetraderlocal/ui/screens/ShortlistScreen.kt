@@ -36,6 +36,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.trading.ShortlistItem
 import com.pappmichel.evetraderlocal.data.trading.ShortlistRepository
 import com.pappmichel.evetraderlocal.data.trading.ShortlistRow
@@ -50,10 +51,11 @@ private fun fmtIsk(value: Double?): String = if (value != null) "%,.2f".format(v
 /** Trading -> Shortlist: the live import/sell decision table, mirroring the
  * desktop build's trading_shortlist.py view - manual membership management
  * (add/remove/toggle-active) plus a "Refresh" action running
- * `evaluateShortlist` against live Jita + structure order-book prices (see
- * `Shortlist.kt`'s own docstring for what's simplified vs. the desktop
- * version: no own-orders/buyer-covered tracking, no Goonmetrics fallback or
- * Profit/Day, no auto-add/prune from Candidate Discovery). */
+ * `evaluateShortlist` against live Jita + structure order-book prices plus
+ * the seller's own open sell orders there (see `Shortlist.kt`'s own
+ * docstring for what's still simplified vs. the desktop version: no
+ * buyer-covered tracking, no Goonmetrics fallback or Profit/Day, no
+ * auto-add/prune from Candidate Discovery). */
 @Composable
 fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
@@ -84,23 +86,43 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
             try {
                 val cfg = configRepo.load()
                 val activeIds = items.filter { it.itemId != 0 }.map { it.itemId }
-                val esi = com.pappmichel.evetraderlocal.data.esi.EsiClient()
+                val esi = EsiClient()
                 val jitaStats = esi.regionOrderStatsBulk(cfg.jitaRegionId, activeIds)
-                val structureStats = if (cfg.structureId != null) {
-                    val sellerToken = tokenManager.listRecords("seller").firstOrNull()
-                    if (sellerToken != null) {
-                        val fresh = tokenManager.getToken(sellerToken.role)
-                        esi.structureOrderStatsBulk(cfg.structureId, activeIds, fresh.accessToken)
-                    } else emptyMap()
+                val sellerToken = tokenManager.listRecords("seller").firstOrNull()?.let { tokenManager.getToken(it.role) }
+                val structureStats = if (cfg.structureId != null && sellerToken != null) {
+                    esi.structureOrderStatsBulk(cfg.structureId, activeIds, sellerToken.accessToken)
+                } else emptyMap()
+                // How much of each item the seller already has listed for
+                // sale at the structure right now - see own_orders.py's
+                // fetch_own_sell_orders. Gates the Import/"Already ordered"
+                // decision in evaluateShortlistItem; buyer-covered (already
+                // in inventory/on a buy order) isn't tracked yet. Best-effort:
+                // a seller character authorized before this scope existed
+                // won't have esi-markets.read_character_orders.v1 yet, so a
+                // 403 here falls back to "none known" rather than failing
+                // the whole refresh - re-logging in as Seller picks up the
+                // scope.
+                var ownOrdersUnavailable = false
+                val ownOrdersByItem = if (cfg.structureId != null && sellerToken != null) {
+                    try {
+                        esi.characterOrders(sellerToken.characterId, sellerToken.accessToken)
+                            .filter { !it.isBuyOrder && it.locationId == cfg.structureId }
+                            .groupBy { it.typeId }
+                            .mapValues { (_, orders) -> orders.sumOf { it.volumeRemain } }
+                    } catch (e: Exception) {
+                        ownOrdersUnavailable = true
+                        emptyMap()
+                    }
                 } else emptyMap()
 
-                val evaluated = evaluateShortlist(items, jitaStats, structureStats, cfg)
+                val evaluated = evaluateShortlist(items, jitaStats, structureStats, cfg, ownOrdersByItem)
                 rows = evaluated.sortedByDescending { it.margin ?: Double.NEGATIVE_INFINITY }
                 val summary = summaryCounts(evaluated)
                 status = "Import: ${summary.importCandidates} · Already ordered: ${summary.alreadyOrdered} · " +
                     "Skipped: ${summary.skipped} · Avg margin: ${fmtPct(summary.avgMargin)}"
                 if (cfg.structureId == null) status += " (no structure configured - Net Sell left blank)"
                 else if (structureStats.isEmpty() && activeIds.isNotEmpty()) status += " (no seller character logged in - Net Sell left blank)"
+                if (ownOrdersUnavailable) status += " (couldn't read own orders - re-log in as Seller for the read_character_orders scope)"
             } catch (e: Exception) {
                 status = e.message ?: "Refresh failed."
             } finally {

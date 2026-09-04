@@ -51,6 +51,14 @@ data class MarketOrder(
     @SerialName("volume_remain") val volumeRemain: Double = 0.0,
 )
 
+@Serializable
+data class CharacterOrder(
+    @SerialName("type_id") val typeId: Int = 0,
+    @SerialName("is_buy_order") val isBuyOrder: Boolean = false,
+    @SerialName("volume_remain") val volumeRemain: Double = 0.0,
+    @SerialName("location_id") val locationId: Long = 0,
+)
+
 /** Summary stats for one side (buy/sell) of an order book - a robust price
  * percentile plus total listed volume, see esi_client.py's own `OrderStats`
  * and `_summarize_orders`. */
@@ -175,6 +183,18 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
         val byType = orders.groupBy { it.typeId }
         return typeIds.associateWith { tid -> summarizeOrders(byType[tid] ?: emptyList()) }
     }
+
+    /** This character's open market orders (buy and sell) - the counterpart
+     * of esi_client.py's `character_orders`. Requires a token with
+     * esi-markets.read_character_orders.v1. Not paginated: ESI's own
+     * endpoint isn't (a character's order count is small and bounded),
+     * same as the desktop build's own single-`_get` implementation. */
+    suspend fun characterOrders(characterId: Long, accessToken: String): List<CharacterOrder> =
+        json.decodeFromString(
+            getBodyWithPages(
+                "/characters/$characterId/orders/", mapOf("datasource" to "tranquility"), accessToken,
+            ).first
+        )
 
     private suspend fun getBodyWithPages(
         path: String, params: Map<String, String>, accessToken: String? = null, retries: Int = 3,

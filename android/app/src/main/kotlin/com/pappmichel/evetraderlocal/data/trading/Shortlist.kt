@@ -20,9 +20,13 @@ import com.pappmichel.evetraderlocal.data.esi.OrderStats
  * same "not sell_volume/order-book depth, not this trader's own realized
  * sales" caveats as shortlist.py's `average_market_daily_volume`), the
  * Goonmetrics current-price fallback when no seller token is available,
- * own-orders/buyer-covered tracking (both always 0/false here, so
- * "Already ordered" is currently unreachable - every Import candidate
- * shows as "Import"), and auto-add/prune from Candidate Discovery.
+ * buyer-covered tracking (always false here - a buyer already having the
+ * item in inventory or on a standing buy order isn't checked; the
+ * seller's own open sell orders ARE, via `ownOrdersByItem` -
+ * ShortlistScreen.kt's `EsiClient.characterOrders` call, mirroring
+ * `own_orders.py`'s `fetch_own_sell_orders` - so "Already ordered" is
+ * reachable through that path), and auto-add/prune from Candidate
+ * Discovery.
  */
 
 const val NO_MARKET_DATA_DECISION = "No market data"
@@ -79,9 +83,11 @@ fun evaluateShortlistItem(
 
 fun evaluateShortlist(
     items: List<ShortlistItem>, jitaStatsByItem: Map<Int, OrderStats>, structureStatsByItem: Map<Int, OrderStats>,
-    cfg: TradingConfig,
+    cfg: TradingConfig, ownOrdersByItem: Map<Int, Double> = emptyMap(),
 ): List<ShortlistRow> = items.map { item ->
-    evaluateShortlistItem(item, 0.0, jitaStatsByItem[item.itemId], structureStatsByItem[item.itemId], cfg)
+    evaluateShortlistItem(
+        item, ownOrdersByItem[item.itemId] ?: 0.0, jitaStatsByItem[item.itemId], structureStatsByItem[item.itemId], cfg,
+    )
 }
 
 /** Headline counts for one evaluation run - `avgMargin` averages only
