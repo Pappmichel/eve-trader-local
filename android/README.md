@@ -133,7 +133,13 @@ current scope.
   row calls `TokenManager.removeToken` - that method existed from the
   first commit, but nothing in the UI ever called it, so there was
   previously no way to log a character out again short of clearing app
-  data.
+  data. Backing out of the Custom Tab without finishing login (rather than
+  completing or explicitly cancelling it) used to leave `login()`
+  suspended forever - `MainActivity.onResume()` now calls
+  `TokenManager.cancelPendingLogin()`, which unblocks it with a clear
+  "Login cancelled" error whenever the app resumes to a still-pending
+  login (the redirect case is a no-op there, since `onNewIntent` already
+  completed it moments earlier).
 
 ## Setup
 

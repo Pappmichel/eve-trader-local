@@ -33,6 +33,17 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The app only resumes here on its own once the Custom Tab closes -
+        // either the redirect already completed the pending login (Android
+        // calls onNewIntent before onResume for a redirected relaunch, so
+        // this is a no-op then) or the user backed out of it without
+        // finishing, which this unblocks - see TokenManager.
+        // cancelPendingLogin's own docstring for why that matters.
+        app.tokenManager.cancelPendingLogin()
+    }
+
     private fun handleIntent(intent: Intent?) {
         val uri: Uri = intent?.data ?: return
         if (uri.scheme == "eveauth-eve-trader-local") {

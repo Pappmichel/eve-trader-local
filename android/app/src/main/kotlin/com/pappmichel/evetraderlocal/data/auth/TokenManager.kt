@@ -26,6 +26,8 @@ import okhttp3.Request
  * build's .env EVE_SSO_CALLBACK_* / http://localhost:8000/callback). */
 const val REDIRECT_URI = "eveauth-eve-trader-local://callback"
 
+class LoginCancelledException : RuntimeException("Login cancelled - the browser was closed before finishing.")
+
 private const val AUTHORIZE_URL = "https://login.eveonline.com/v2/oauth/authorize"
 private const val TOKEN_URL = "https://login.eveonline.com/v2/oauth/token"
 private const val VERIFY_URL = "https://login.eveonline.com/oauth/verify"
@@ -62,6 +64,20 @@ class TokenManager(private val context: Context, private val db: AppDatabase) {
 
     fun onRedirect(uri: Uri) {
         pendingRedirect?.complete(uri)
+    }
+
+    /** Called from `MainActivity.onResume()` - the app only resumes to the
+     * foreground on its own once the Custom Tab closes, whether that's
+     * because the redirect fired (`onRedirect`, which already completed
+     * `pendingRedirect` before this runs - Android calls `onNewIntent`
+     * before `onResume` for a redirected relaunch) or because the user hit
+     * back/closed it without finishing login. Completing a
+     * still-incomplete deferred here unblocks `login()`'s `await()` in
+     * that second case - without this, canceling out of the browser left
+     * `login()` suspended forever, with no way to log in again short of
+     * restarting the app. */
+    fun cancelPendingLogin() {
+        pendingRedirect?.let { if (!it.isCompleted) it.completeExceptionally(LoginCancelledException()) }
     }
 
     suspend fun login(rolePrefix: String, scopes: List<String>): TokenRecord {
