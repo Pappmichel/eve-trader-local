@@ -29,18 +29,22 @@ import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
+import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
 import kotlinx.coroutines.launch
 
 private const val CANDIDATE_DISCOVERY_ROUTE = "trading/candidate-discovery"
+private const val SHORTLIST_ROUTE = "trading/shortlist"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
- * for - currently just Trading/Candidate Discovery (see ROADMAP.md's
- * Android section for what's ported so far). Add a route here as each new
- * screen replaces its placeholder. */
+ * for - currently Trading/Candidate Discovery and Trading/Shortlist (see
+ * ROADMAP.md's Android section for what's ported so far). Add a route here
+ * as each new screen replaces its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
+    } else if (tool == "Trading" && view == "Shortlist") {
+        SHORTLIST_ROUTE
     } else {
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
@@ -117,6 +121,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
             ) {
                 composable("characters") { CharactersScreen(tokenManager) }
                 composable(CANDIDATE_DISCOVERY_ROUTE) { CandidateDiscoveryScreen(database) }
+                composable(SHORTLIST_ROUTE) { ShortlistScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""

@@ -15,10 +15,10 @@ current scope.
 - **Navigation** (`ui/nav/`): a nav drawer listing every tool/view from
   `ToolMenus.kt`'s `TOOL_MENUS`, mirroring `gui/main_window.py`'s
   `_TOOL_MENUS` structure. Every entry still opens `PlaceholderScreen`
-  except Trading/Candidate Discovery (see below) - production planning,
-  doctrine stockpiles, refining, station trading, and the rest of Trading
-  itself are real, substantial work still ahead (see ROADMAP.md's Android
-  section for the current per-tool state).
+  except Trading/Candidate Discovery and Trading/Shortlist (see below) -
+  production planning, doctrine stockpiles, refining, station trading, and
+  the rest of Trading itself are real, substantial work still ahead (see
+  ROADMAP.md's Android section for the current per-tool state).
 - **Trading -> Candidate Discovery** (`data/esi/EsiClient.kt`,
   `data/trading/`, `ui/screens/CandidateDiscoveryScreen.kt`): the first
   real (non-placeholder) tool screen. Walks EVE's market-group tree live
@@ -30,6 +30,23 @@ current scope.
   (`data/trading/TradingConfig.kt`) mirrors the desktop build's
   `config.py` dataclass fields this screen actually reads, persisted the
   same way (`settings` table, one JSON blob per scope).
+- **Trading -> Shortlist** (`data/trading/Shortlist.kt`,
+  `data/trading/ShortlistRepository.kt`, `ui/screens/ShortlistScreen.kt`):
+  the second real tool screen. Manual shortlist membership (add/remove/
+  toggle-active, persisted the same JSON-blob-per-scope way as
+  `TradingConfig`) plus a "Refresh" action running `evaluateShortlist` - a
+  straight Kotlin port of `shortlist.py`'s margin/decision formula -
+  against live Jita region order stats and (when a Seller character is
+  logged in and a structure id is configured) live structure order-book
+  stats, both new `EsiClient` methods mirroring `esi_client.py`'s
+  `region_order_stats(_bulk)` and `structure_order_stats_bulk`. Not ported
+  yet: Profit / Day (needs Goonmetrics region history for real average
+  daily volume), the Goonmetrics current-price fallback when no seller
+  token is available, own-orders/buyer-covered tracking (so "Already
+  ordered" is unreachable here - every Import candidate shows as
+  "Import"), and auto-add/prune from Candidate Discovery
+  (`refresh-and-prune` on desktop) - this screen is refresh-only,
+  membership is manual.
 - **Local database** (`data/db/`): Room, mirroring the desktop build's
   `tokens`/`settings` SQLite tables (`storage.py`) - same JSON-blob-per-row
   shape, same table names' worth of meaning. App-private storage is this

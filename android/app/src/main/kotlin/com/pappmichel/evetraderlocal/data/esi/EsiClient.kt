@@ -1,6 +1,8 @@
 package com.pappmichel.evetraderlocal.data.esi
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -41,6 +43,45 @@ data class TypeInfoResponse(
 fun TypeInfoResponse.metaLevel(): Int? =
     dogmaAttributes.firstOrNull { it.attributeId == METALEVEL_ATTRIBUTE_ID }?.value?.toInt()
 
+@Serializable
+data class MarketOrder(
+    @SerialName("type_id") val typeId: Int = 0,
+    val price: Double = 0.0,
+    @SerialName("is_buy_order") val isBuyOrder: Boolean = false,
+    @SerialName("volume_remain") val volumeRemain: Double = 0.0,
+)
+
+/** Summary stats for one side (buy/sell) of an order book - a robust price
+ * percentile plus total listed volume, see esi_client.py's own `OrderStats`
+ * and `_summarize_orders`. */
+data class OrderStats(
+    val sellPercentile: Double?,
+    val sellVolume: Double,
+    val buyPercentile: Double?,
+    val buyVolume: Double,
+)
+
+/** Nearest-rank percentile, matching esi_client.py's `_percentile`:
+ * `sorted` must already be sorted ascending for the caller's own side
+ * (sells ascending for a low percentile, buys descending so the same `pct`
+ * picks from the top) - not re-sorted here. */
+private fun percentile(sorted: List<Double>, pct: Double): Double? {
+    if (sorted.isEmpty()) return null
+    val idx = minOf((sorted.size * pct).toInt(), sorted.size - 1)
+    return sorted[idx]
+}
+
+private fun summarizeOrders(orders: List<MarketOrder>): OrderStats {
+    val sells = orders.filter { !it.isBuyOrder }.map { it.price }.sorted()
+    val buys = orders.filter { it.isBuyOrder }.map { it.price }.sortedDescending()
+    return OrderStats(
+        sellPercentile = percentile(sells, 0.05),
+        sellVolume = orders.filter { !it.isBuyOrder }.sumOf { it.volumeRemain },
+        buyPercentile = percentile(buys, 0.05),
+        buyVolume = orders.filter { it.isBuyOrder }.sumOf { it.volumeRemain },
+    )
+}
+
 /** Thin wrapper around EVE Online's public ESI endpoints needed by
  * candidate discovery - the direct counterpart of the desktop build's
  * esi_client.py, ported only as far as Trading's first vertical slice
@@ -63,33 +104,112 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
             getBody("/universe/types/$typeId/", mapOf("datasource" to "tranquility", "language" to "en"))
         )
 
-    private suspend fun getBody(path: String, params: Map<String, String>, retries: Int = 3): String =
-        withContext(Dispatchers.IO) {
-            val urlBuilder = "$ESI_BASE$path".toHttpUrl().newBuilder()
-            params.forEach { (key, value) -> urlBuilder.addQueryParameter(key, value) }
-            val request = Request.Builder().url(urlBuilder.build()).header("User-Agent", USER_AGENT).build()
-
-            var lastError: String? = null
-            for (attempt in 1..retries) {
-                val response: Response = http.newCall(request).execute()
-                response.use {
-                    if (it.isSuccessful) {
-                        return@withContext it.body!!.string()
-                    }
-                    lastError = "HTTP ${it.code} for ${request.url}"
-                    if (it.code == 420 || it.code == 429) {
-                        delay(retryAfterMillis(it, attempt))
-                        return@use
-                    }
-                    if (it.code in 500..504 && attempt < retries) {
-                        delay((attempt * 1500).toLong())
-                        return@use
-                    }
-                    throw EsiError(lastError!!)
-                }
-            }
-            throw EsiError(lastError ?: "Exhausted retries for $path")
+    /** Regional order-book stats for one type_id - the counterpart of
+     * esi_client.py's `region_order_stats` (public endpoint, no token
+     * needed). Paginated defensively like the desktop build's
+     * `region_orders_raw`: a single type_id in a normal region is very
+     * unlikely to exceed one page, but nothing in the ESI spec guarantees
+     * that. */
+    suspend fun regionOrderStats(regionId: Int, typeId: Int): OrderStats {
+        val out = mutableListOf<MarketOrder>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/markets/$regionId/orders/",
+                mapOf(
+                    "datasource" to "tranquility", "order_type" to "all",
+                    "type_id" to typeId.toString(), "page" to page.toString(),
+                ),
+            )
+            val chunk: List<MarketOrder> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
         }
+        return summarizeOrders(out)
+    }
+
+    /** Same as regionOrderStats, but for many type_ids at once - one ESI
+     * call per type_id (no regional batch endpoint), run concurrently the
+     * same way esi_client.py's `region_order_stats_bulk` uses a thread
+     * pool. A failed lookup for one type_id doesn't affect the others. */
+    suspend fun regionOrderStatsBulk(regionId: Int, typeIds: List<Int>): Map<Int, OrderStats> =
+        withContext(Dispatchers.IO) {
+            typeIds.map { tid -> async { tid to runCatching { regionOrderStats(regionId, tid) }.getOrNull() } }
+                .awaitAll()
+                .mapNotNull { (tid, stats) -> stats?.let { tid to it } }
+                .toMap()
+        }
+
+    /** The structure's full, unsummarized order book - requires a token with
+     * esi-markets.structure_markets.v1 for a character docked at / with
+     * access to that structure. Counterpart of esi_client.py's
+     * `structure_orders_raw`; ESI has no type_id filter on this endpoint, so
+     * every call downloads the whole book. */
+    suspend fun structureOrdersRaw(structureId: Long, accessToken: String): List<MarketOrder> {
+        val out = mutableListOf<MarketOrder>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/markets/structures/$structureId/",
+                mapOf("datasource" to "tranquility", "page" to page.toString()),
+                accessToken,
+            )
+            val chunk: List<MarketOrder> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
+    }
+
+    /** Groups one full structure order-book download by type_id, the same
+     * "download once, group locally" shape as esi_client.py's
+     * `structure_order_stats_bulk` (that endpoint has no type_id filter). */
+    suspend fun structureOrderStatsBulk(
+        structureId: Long, typeIds: List<Int>, accessToken: String,
+    ): Map<Int, OrderStats> {
+        val orders = structureOrdersRaw(structureId, accessToken)
+        val byType = orders.groupBy { it.typeId }
+        return typeIds.associateWith { tid -> summarizeOrders(byType[tid] ?: emptyList()) }
+    }
+
+    private suspend fun getBodyWithPages(
+        path: String, params: Map<String, String>, accessToken: String? = null, retries: Int = 3,
+    ): Pair<String, Int> = withContext(Dispatchers.IO) {
+        val urlBuilder = "$ESI_BASE$path".toHttpUrl().newBuilder()
+        params.forEach { (key, value) -> urlBuilder.addQueryParameter(key, value) }
+        val requestBuilder = Request.Builder().url(urlBuilder.build()).header("User-Agent", USER_AGENT)
+        if (accessToken != null) requestBuilder.header("Authorization", "Bearer $accessToken")
+        val request = requestBuilder.build()
+
+        var lastError: String? = null
+        for (attempt in 1..retries) {
+            val response: Response = http.newCall(request).execute()
+            response.use {
+                if (it.isSuccessful) {
+                    val pages = it.header("X-Pages")?.toIntOrNull() ?: 1
+                    return@withContext it.body!!.string() to pages
+                }
+                lastError = "HTTP ${it.code} for ${request.url}"
+                if (it.code == 420 || it.code == 429) {
+                    delay(retryAfterMillis(it, attempt))
+                    return@use
+                }
+                if (it.code in 500..504 && attempt < retries) {
+                    delay((attempt * 1500).toLong())
+                    return@use
+                }
+                throw EsiError(lastError!!)
+            }
+        }
+        throw EsiError(lastError ?: "Exhausted retries for $path")
+    }
+
+    private suspend fun getBody(path: String, params: Map<String, String>, retries: Int = 3): String =
+        getBodyWithPages(path, params, null, retries).first
 
     private fun retryAfterMillis(response: Response, attempt: Int): Long {
         val header = response.header("Retry-After")?.toDoubleOrNull()
