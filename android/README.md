@@ -144,14 +144,17 @@ current scope.
   `SdeDownloader.kt`, `SdeRepository.kt`; `ui/screens/SdeDataScreen.kt`,
   reachable from the drawer as its own "SDE Data" entry next to Characters
   and Settings): a Kotlin port of `sde.py`'s Fuzzwork CSV download/parse
-  pipeline and the `sde_*` half of `storage.py`'s schema, scoped to six of
-  the desktop build's twelve tables - `invTypes`/`invGroups`/
+  pipeline and the `sde_*` half of `storage.py`'s schema, originally scoped
+  to six of the desktop build's twelve tables - `invTypes`/`invGroups`/
   `invCategories`/`invMarketGroups` (the candidate universe and its real
   category names) and `staStations`/`mapSolarSystems` (station-in-region
   lookups, via a join since `staStations.csv` carries no region id of its
-  own). The other six tables back Production/Doctrine/refining, none of
-  which exist on this platform yet, so fetching them would be pure waste.
-  Faithful to `sde.py`: per-file retry/backoff, the UTF-8 BOM strip, the
+  own) - and now seven: `invTypeMaterials` joined once Ore & Minerals'
+  Reprocessing Quote needed reprocessing yields (see below). The remaining
+  five tables back Production/Doctrine-only features (full blueprint BOMs,
+  `dgmTypeEffects`, Tech II/Faction detection), none of which exist on this
+  platform yet, so fetching them would be pure waste. Faithful to `sde.py`:
+  per-file retry/backoff, the UTF-8 BOM strip, the
   HEAD-request ETag staleness check (`checkForNewerSde`), the refresh-state
   row, row counts, and the atomicity guarantee (every file downloaded and
   parsed before the database is touched, the replace done in one Room
@@ -163,8 +166,9 @@ current scope.
   `description` column, which a line-at-a-time parser would desynchronise
   on. Rows stream through a callback rather than materializing as
   `Map<String, String>` per row, so ~14MB of mostly-description text never
-  sits on a phone's heap. Room moves to version 2 for the six new tables,
-  via `fallbackToDestructiveMigration()` - honest only while this app has
+  sits on a phone's heap. Room moved to version 2 for the original six
+  tables, then version 3 for `invTypeMaterials`/`portionSize`, both via
+  `fallbackToDestructiveMigration()` - honest only while this app has
   never shipped or been installed anywhere real (see `AppDatabase.kt`'s own
   comment on when that must become a real `Migration`). The lookup API
   (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
@@ -287,6 +291,27 @@ current scope.
   and most fitted modules parse into a generic "cargo" slot rather than
   their real low/med/high/rig section - item names, quantities, and parse
   issues are unaffected by this gap.
+- **Ore & Minerals -> Reprocessing Quote** (`data/refining/PasteParser.kt`,
+  `ReprocessingYield.kt`, `ReprocessingQuote.kt`, `RefiningConfig.kt`;
+  `ui/screens/ReprocessingQuoteScreen.kt`): a Kotlin port of
+  `refining/quote.py` + `paste_parser.py` + `reprocessing.py` - paste an
+  ore/item list (the same format the in-game inventory copies as text),
+  see the reprocessed mineral yield and its priced value. Scrapmetal-path
+  yield math only (`ReprocessingYield.kt`'s own docstring explains why: the
+  real ore/ice formula needs structure/rig/security/implant/per-ore-family
+  skill inputs, and `quote.py`'s Reprocessing tab always uses scrapmetal
+  math regardless of what was pasted, so that fuller formula has no caller
+  here yet). Skill levels are entered manually rather than pulled via ESI
+  (no producer-role skill scope wired up for this yet) and clamped to
+  EVE's real 0-5 range so a typo can't inflate a yield past what's
+  achievable in-game. Grows the SDE cache to version 3
+  (`invTypeMaterials.csv` -> `sde_type_materials`, plus `invTypes.csv`'s
+  `portionSize` column) - exactly the addition `SdeRepository.kt`'s own
+  docstring predicted once a reprocessing feature needed real yield data.
+  Ore Shortlist and Mineral Shopping List stay `PlaceholderScreen`: the
+  former needs that fuller ore/ice yield formula plus a whole
+  candidate-discovery pipeline, the latter an LP solver - both real,
+  separate scope.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters (not per-tool, since Trading is the only tool with a
   config on this platform yet): a hand-written form over `TradingConfig`'s
@@ -425,8 +450,13 @@ current scope.
   `tests/test_station_trading_constants.py`'s `order_slots_from_skills`
   cases), `ProductionPricingTest.kt` (a port of
   `tests/test_production_pricing.py`'s pure `buy_price`/`buy_source`
-  cases), and `EftFittingParserTest.kt` (26 cases ported from
+  cases), `EftFittingParserTest.kt` (26 cases ported from
   `tests/test_doctrine_parser.py`'s fake-resolver layer - item/quantity
-  parsing, unresolved-name and ambiguous-split issues, malformed lines).
-  No lint step, no instrumented/UI tests (would need an emulator), no
-  release signing, no Play Store upload.
+  parsing, unresolved-name and ambiguous-split issues, malformed lines),
+  and `PasteParserTest.kt`/`ReprocessingYieldTest.kt`/
+  `ReprocessingQuoteTest.kt` (ported from
+  `tests/test_refining_{paste_parser,reprocessing,quote}.py` - paste-line
+  parsing, the scrapmetal yield formula including its 1%-vs-2%-per-level
+  regression guard, and the priced-quote assembly). No lint step, no
+  instrumented/UI tests (would need an emulator), no release signing, no
+  Play Store upload.

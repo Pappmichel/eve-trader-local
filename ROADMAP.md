@@ -338,14 +338,17 @@ which "careful reading" alone had caught):
   `SdeDownloader.kt`, `SdeRepository.kt`; reachable from the drawer as its
   own "SDE Data" screen, `ui/screens/SdeDataScreen.kt`) - a Kotlin port of
   `sde.py`'s Fuzzwork CSV download/parse pipeline and the `sde_*` half of
-  `storage.py`, scoped to six of the desktop build's twelve tables
-  (invTypes, invGroups, invCategories, invMarketGroups, staStations,
-  mapSolarSystems - not the Production/Doctrine/refining-only ones). Room
-  moved to version 2 (`fallbackToDestructiveMigration()`, honest only while
+  `storage.py`, originally scoped to six of the desktop build's twelve
+  tables (invTypes, invGroups, invCategories, invMarketGroups, staStations,
+  mapSolarSystems) and now seven (`invTypeMaterials` joined once Ore &
+  Minerals' Reprocessing Quote needed it, see below - the remaining five
+  are Production/Doctrine-only and still out of scope). Room moved to
+  version 2 then 3 (`fallbackToDestructiveMigration()`, honest only while
   nothing is installed anywhere real - see `AppDatabase.kt`'s own comment).
   A hand-rolled, unit-tested CSV reader stands in for `csv.DictReader`
   (Kotlin has no equivalent, and one state machine handling embedded
-  newlines/quoted commas beats a new dependency for six fixed-shape files).
+  newlines/quoted commas beats a new dependency for a handful of
+  fixed-shape files).
   The lookup API (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
   `stationIdsInSystem`) now backs both Candidate Discovery (see below) and
   Realized Trades' buy-side filter (see above) - Station Trading's own
@@ -417,6 +420,23 @@ which "careful reading" alone had caught):
   most fitted modules parse into "cargo" instead of their real low/med/
   high/rig section - item names, quantities, and parse issues themselves
   are unaffected, and the screen says so.
+- Ore & Minerals -> Reprocessing Quote (`data/refining/{PasteParser,
+  ReprocessingYield,ReprocessingQuote,RefiningConfig}.kt`; `ui/screens/
+  ReprocessingQuoteScreen.kt`) - a Kotlin port of `refining/quote.py` +
+  `paste_parser.py` + `reprocessing.py`'s scrapmetal reprocessing path
+  (paste an ore/item list, see the mineral yield and its priced value).
+  Scrapmetal only, not the real ore/ice yield formula (structure/rig/
+  security/implant/per-ore-family skills) - `quote.py`'s own Reprocessing
+  tab always reprocesses via scrapmetal math regardless of what was pasted,
+  so the ore/ice formula has no caller on this platform yet and isn't
+  ported speculatively. Extends the SDE cache (Room version 2 -> 3) with
+  `invTypeMaterials.csv` (`sde_type_materials` table) and `invTypes.csv`'s
+  `portionSize` column - exactly the addition `SdeRepository`'s own
+  docstring predicted ("a CSV, an entity, and a Room version bump") once a
+  reprocessing feature needed it. Ore Shortlist and Mineral Shopping List
+  remain `PlaceholderScreen`: the former needs the ore/ice yield path plus
+  a whole candidate-discovery pipeline, the latter an LP solver - both
+  real, separate scope.
 
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
@@ -425,9 +445,10 @@ Station Trading's own candidate discovery onto the new SDE cache
 (Candidate Discovery and Realized Trades are both done, see above),
 `average_daily_sold_by_type`, the rest of Production/Doctrine (everything
 needing a blueprint BOM or a persisted stockpile/shopping-list/contract
-layer) and all of Ore & Minerals/Refining, every tool's own Settings tab,
-tests for anything beyond the pure logic already covered, an app icon, a
-Play Store listing.
+layer), Ore & Minerals' own Ore Shortlist/Mineral Shopping List (the real
+ore/ice yield formula and an LP solver, respectively), every tool's own
+Settings tab, tests for anything beyond the pure logic already covered, an
+app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
