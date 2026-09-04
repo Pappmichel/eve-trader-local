@@ -62,10 +62,23 @@ private val STATION_TRADING_SCOPES = listOf(
     "esi-markets.read_character_orders.v1", "esi-skills.read_skills.v1",
 )
 
+// Doctrine's own two authenticated needs on this platform: Stockpile
+// Status' asset-quantity read (StockpileStatus.fetchAvailableQuantities)
+// and Contract History's new contracts surface (ContractHistory.fetch) -
+// see those files' own docstrings. Kept as its own role/scope pair rather
+// than folded into "seller" (which already carries esi-assets.read_assets.v1
+// for Ore & Minerals/Unlisted Stock) since desktop's own doctrine_esi_sync.py
+// registers Doctrine characters under their own role prefix
+// (`DOCTRINE_ROLE_PREFIX = "doctrine"`), not reused from Trading's.
+private val DOCTRINE_SCOPES = listOf(
+    "esi-assets.read_assets.v1", "esi-contracts.read_character_contracts.v1",
+)
+
 private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
     Triple("Buyer (Trading)", "buyer", TRADING_SCOPES),
     Triple("Seller (Trading / Ore & Minerals)", "seller", TRADING_SCOPES),
     Triple("Trader (Station Trading)", "trader", STATION_TRADING_SCOPES),
+    Triple("Doctrine", "doctrine", DOCTRINE_SCOPES),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

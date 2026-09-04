@@ -30,7 +30,10 @@ import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
+import com.pappmichel.evetraderlocal.ui.screens.DoctrineContractHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineFittingsScreen
+import com.pappmichel.evetraderlocal.ui.screens.DoctrineShoppingListScreen
+import com.pappmichel.evetraderlocal.ui.screens.DoctrineStockpileStatusScreen
 import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
 import com.pappmichel.evetraderlocal.ui.screens.MineralShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.OreShortlistScreen
@@ -57,6 +60,9 @@ private const val STATION_TRADING_SHORTLIST_ROUTE = "station-trading/shortlist"
 private const val STATION_TRADING_UNDERCUT_ROUTE = "station-trading/undercut-skills"
 private const val PRODUCTION_ITEM_LOOKUP_ROUTE = "production/item-lookup"
 private const val DOCTRINE_FITTINGS_ROUTE = "doctrine/fittings"
+private const val DOCTRINE_STOCKPILE_STATUS_ROUTE = "doctrine/stockpile-status"
+private const val DOCTRINE_SHOPPING_LIST_ROUTE = "doctrine/shopping-list"
+private const val DOCTRINE_CONTRACT_HISTORY_ROUTE = "doctrine/contract-history"
 private const val REPROCESSING_QUOTE_ROUTE = "ore-minerals/reprocessing-quote"
 private const val MINERAL_SHOPPING_LIST_ROUTE = "ore-minerals/mineral-shopping-list"
 private const val ORE_SHORTLIST_ROUTE = "ore-minerals/ore-shortlist"
@@ -93,6 +99,12 @@ private fun routeFor(tool: String, view: String): String =
         SHIP_MARGIN_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
+    } else if (tool == "Doctrine" && view == "Stockpile Status") {
+        DOCTRINE_STOCKPILE_STATUS_ROUTE
+    } else if (tool == "Doctrine" && view == "Shopping List") {
+        DOCTRINE_SHOPPING_LIST_ROUTE
+    } else if (tool == "Doctrine" && view == "Contract History") {
+        DOCTRINE_CONTRACT_HISTORY_ROUTE
     } else if (tool == "Ore & Minerals" && view == "Reprocessing Quote") {
         REPROCESSING_QUOTE_ROUTE
     } else if (tool == "Ore & Minerals" && view == "Mineral Shopping List") {
@@ -221,6 +233,9 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(PRODUCTION_ITEM_LOOKUP_ROUTE) { ItemLookupScreen(database, tokenManager) }
                 composable(SHIP_MARGIN_ROUTE) { ShipMarginScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
+                composable(DOCTRINE_STOCKPILE_STATUS_ROUTE) { DoctrineStockpileStatusScreen(database, tokenManager) }
+                composable(DOCTRINE_SHOPPING_LIST_ROUTE) { DoctrineShoppingListScreen(database) }
+                composable(DOCTRINE_CONTRACT_HISTORY_ROUTE) { DoctrineContractHistoryScreen(database, tokenManager) }
                 composable(REPROCESSING_QUOTE_ROUTE) { ReprocessingQuoteScreen(database, tokenManager) }
                 composable(MINERAL_SHOPPING_LIST_ROUTE) { MineralShoppingListScreen(database, tokenManager) }
                 composable(ORE_SHORTLIST_ROUTE) { OreShortlistScreen(database, tokenManager) }

@@ -97,6 +97,42 @@ data class SolarSystemResponse(
     val stations: List<Long> = emptyList(),
 )
 
+/** One ESI contract, exactly the fields Doctrine's Contract History screen
+ * needs - the counterpart of esi_client.py's `character_contracts` raw dict
+ * (that Python method returns ESI's JSON verbatim; this is the same schema
+ * as a typed data class). `type`/`status` are ESI's own string vocabularies
+ * ("item_exchange"/"auction"/"courier"/...; "outstanding"/"in_progress"/
+ * "finished_issuer"/"finished_contractor"/"finished"/"cancelled"/"rejected"/
+ * "failed"/"deleted"/"reversed") - kept as raw strings here, not a Kotlin
+ * enum, since this screen only ever filters/displays them, never branches
+ * exhaustively on every case the way a `when` would want to. */
+@Serializable
+data class EsiContract(
+    @SerialName("contract_id") val contractId: Long = 0,
+    val type: String = "",
+    val status: String = "",
+    @SerialName("title") val title: String? = null,
+    @SerialName("for_corporation") val forCorporation: Boolean = false,
+    @SerialName("issuer_id") val issuerId: Long = 0,
+    @SerialName("acceptor_id") val acceptorId: Long? = null,
+    @SerialName("start_location_id") val startLocationId: Long? = null,
+    val price: Double? = null,
+    @SerialName("date_issued") val dateIssued: String = "",
+    @SerialName("date_expired") val dateExpired: String? = null,
+    @SerialName("date_completed") val dateCompleted: String? = null,
+)
+
+/** One line of a contract's item list - the counterpart of esi_client.py's
+ * `character_contract_items` raw dict. */
+@Serializable
+data class EsiContractItem(
+    @SerialName("record_id") val recordId: Long = 0,
+    @SerialName("type_id") val typeId: Int = 0,
+    val quantity: Long = 0,
+    @SerialName("is_included") val isIncluded: Boolean = true,
+    @SerialName("is_singleton") val isSingleton: Boolean = false,
+)
+
 @Serializable
 data class CharacterWalletTransaction(
     @SerialName("transaction_id") val transactionId: Long,
@@ -379,6 +415,44 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
         json.decodeFromString<SolarSystemResponse>(
             getBody("/universe/systems/$solarSystemId/", mapOf("datasource" to "tranquility", "language" to "en"))
         ).stations
+
+    /** This character's contracts (issuer, acceptor, or assignee of) - the
+     * counterpart of esi_client.py's `character_contracts`. Requires a token
+     * with esi-contracts.read_character_contracts.v1. Paginated like
+     * characterAssets; ESI itself only retains up to 30 days of finished
+     * contracts (or any that are still outstanding/in_progress) - not
+     * filtered further here, same as the desktop method's own docstring. */
+    suspend fun characterContracts(characterId: Long, accessToken: String): List<EsiContract> {
+        val out = mutableListOf<EsiContract>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/characters/$characterId/contracts/",
+                mapOf("datasource" to "tranquility", "page" to page.toString()),
+                accessToken,
+            )
+            val chunk: List<EsiContract> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
+    }
+
+    /** One contract's item list - the counterpart of esi_client.py's
+     * `character_contract_items`. Same esi-contracts.read_character_
+     * contracts.v1 scope as [characterContracts], not a separate grant. Not
+     * paginated: ESI's own endpoint for this isn't (a single contract's item
+     * count is small and bounded), same as the desktop method's own
+     * single-`_get` call. */
+    suspend fun characterContractItems(characterId: Long, contractId: Long, accessToken: String): List<EsiContractItem> =
+        json.decodeFromString(
+            getBody(
+                "/characters/$characterId/contracts/$contractId/items/",
+                mapOf("datasource" to "tranquility"), accessToken,
+            )
+        )
 
     private suspend fun getBodyWithPages(
         path: String, params: Map<String, String>, accessToken: String? = null, retries: Int = 3,
