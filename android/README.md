@@ -97,11 +97,23 @@ current scope.
 
 ## Honest limitations of this increment
 
-- Built and reviewed by hand, **not compiled or run** - there is no
-  Android SDK, Gradle, or JDK 17 in the environment this was written in
-  (only a bare JDK 8, per `java -version`), so nothing here has been
-  verified beyond careful reading. Expect a first-sync round of small
-  fixes once this actually opens in Android Studio.
+- Most of this was originally built and reviewed by hand with no Android
+  SDK, Gradle, or JDK 17 in the environment it was written in (only a bare
+  JDK 8, per `java -version`) - never actually compiled until CI
+  (`build-android.yml`) started building it for real, which is what
+  caught five bugs "careful reading" alone had missed: a missing Compose
+  Compiler Gradle plugin (Kotlin 2.0+ needs it whenever Compose is
+  enabled), a missing `com.google.android.material:material` dependency
+  (`themes.xml`'s `Theme.Material3.DayNight.NoActionBar` parent comes from
+  it, not from Compose Material3), two missing
+  `import kotlinx.serialization.encodeToString` lines, and two bad
+  Compose scope-member imports in `CharactersScreen.kt`
+  (`androidx.compose.foundation.layout.weight`,
+  `androidx.compose.material3.ExposedDropdownMenu` - neither is a
+  top-level symbol, so importing them by name shadowed the real
+  implicit-receiver ones). CI is green as of this writing, but this still
+  hasn't run on a device/emulator - expect a first-run round of smaller
+  fixes once it actually opens in Android Studio or installs on a phone.
 - No app icon (`android:icon` is deliberately omitted from
   `AndroidManifest.xml` rather than pointing at a nonexistent resource) -
   add one via Android Studio's Image Asset tool.

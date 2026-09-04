@@ -190,9 +190,14 @@ desktop GUI itself was built view by view. Revisit Chaquopy specifically if
 that porting cost turns out to dominate.
 
 What exists in `android/` so far (see that folder's own README.md for
-full detail and honest limitations — notably: written and reviewed by hand,
-never compiled, no Android SDK/Gradle/JDK 17 available in the environment
-this was built in):
+full detail and honest limitations — notably: most of it was originally
+written and reviewed by hand with no Android SDK/Gradle/JDK 17 available
+in the environment it was built in, and stayed uncompiled until CI
+(`build-android.yml`) started actually building it, which surfaced and
+fixed five real bugs — a missing Compose Compiler Gradle plugin, a missing
+Material Components dependency, two missing `encodeToString` imports, and
+two bad Compose scope-member imports in `CharactersScreen.kt` — none of
+which "careful reading" alone had caught):
 - The same New Eden-inspired dark theme as `gui/theme.py`, ported to
   Compose's `ColorScheme` (`ui/theme/`) — kept in sync by eye, no shared
   source of truth between Compose and Qt QSS.
