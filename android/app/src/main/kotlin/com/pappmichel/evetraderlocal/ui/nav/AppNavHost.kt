@@ -32,6 +32,7 @@ import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineFittingsScreen
 import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
+import com.pappmichel.evetraderlocal.ui.screens.MineralShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
 import com.pappmichel.evetraderlocal.ui.screens.PriceHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
@@ -55,6 +56,7 @@ private const val STATION_TRADING_UNDERCUT_ROUTE = "station-trading/undercut-ski
 private const val PRODUCTION_ITEM_LOOKUP_ROUTE = "production/item-lookup"
 private const val DOCTRINE_FITTINGS_ROUTE = "doctrine/fittings"
 private const val REPROCESSING_QUOTE_ROUTE = "ore-minerals/reprocessing-quote"
+private const val MINERAL_SHOPPING_LIST_ROUTE = "ore-minerals/mineral-shopping-list"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
@@ -62,8 +64,8 @@ private const val REPROCESSING_QUOTE_ROUTE = "ore-minerals/reprocessing-quote"
  * Trading/Unlisted Stock & Undercut Check, Trading/Price History,
  * Trading/Realized Trades & Transactions, Station Trading's own
  * Shortlist/Undercut & Skills, Production/Item Lookup, Doctrine/Fittings,
- * and Ore & Minerals' own Reprocessing Quote (see ROADMAP.md's Android
- * section for what's ported so far). Add a route here as each new screen
+ * and Ore & Minerals' own Reprocessing Quote and Mineral Shopping List (see
+ * ROADMAP.md's Android section for what's ported so far). Add a route here as each new screen
  * replaces its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
@@ -86,6 +88,8 @@ private fun routeFor(tool: String, view: String): String =
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Ore & Minerals" && view == "Reprocessing Quote") {
         REPROCESSING_QUOTE_ROUTE
+    } else if (tool == "Ore & Minerals" && view == "Mineral Shopping List") {
+        MINERAL_SHOPPING_LIST_ROUTE
     } else {
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
@@ -208,6 +212,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(PRODUCTION_ITEM_LOOKUP_ROUTE) { ItemLookupScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(REPROCESSING_QUOTE_ROUTE) { ReprocessingQuoteScreen(database, tokenManager) }
+                composable(MINERAL_SHOPPING_LIST_ROUTE) { MineralShoppingListScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""
