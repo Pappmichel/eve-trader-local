@@ -69,6 +69,12 @@ dependencies {
     implementation("androidx.navigation:navigation-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.core:core-ktx:1.13.1")
+    // Pulls in the Theme.Material3.* platform styles themes.xml's
+    // Theme.EveTraderLocal inherits from - Compose Material3 (the
+    // compose.material3 dependency above) only supplies the Compose-side
+    // ColorScheme/Typography APIs, not these XML theme resources AAPT
+    // resolves at resource-linking time.
+    implementation("com.google.android.material:material:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("androidx.browser:browser:1.8.0")
     implementation("androidx.datastore:datastore-preferences:1.1.1")
