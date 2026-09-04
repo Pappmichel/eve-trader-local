@@ -274,6 +274,27 @@ interface SdeDao {
     @Query("SELECT materialTypeId, quantity FROM sde_type_materials WHERE typeId = :typeId")
     suspend fun typeMaterials(typeId: Int): List<TypeMaterialRow>
 
+    /** Every published compressed ore/ice type - the Ore Shortlist's fixed,
+     * SDE-derived candidate universe (Ore & Minerals / Ore Shortlist, see
+     * `data/refining/OreShortlist.kt`'s `buildOreCandidateUniverse`), the
+     * Android counterpart of storage.py's `load_ore_ice_candidate_types`.
+     * Category id 25 is Ore (mirrors `refining.constants.
+     * ORE_ICE_CATEGORY_ID` as a bare literal here, same "this file doesn't
+     * import a submodule's own constants" reasoning as `resolveTypeByName`'s
+     * own category filter). Filters on `typeName LIKE 'Compressed%'`, not
+     * group name - confirmed against a real Fuzzwork-fetched SDE that a
+     * compressed ore/ice type shares its *raw* ore's own group ("Compressed
+     * Veldspar" lives in group "Veldspar" alongside raw "Veldspar" itself) -
+     * there is no dedicated "Compressed <Family>" group in the real data, so
+     * filtering on group name instead would silently produce an empty
+     * candidate universe. */
+    @Query(
+        "SELECT t.typeId AS typeId, t.typeName AS typeName, t.volume AS volume, g.groupName AS groupName " +
+            "FROM sde_types t JOIN sde_groups g ON g.groupId = t.groupId " +
+            "WHERE g.categoryId = 25 AND t.typeName LIKE 'Compressed%' AND t.published = 1"
+    )
+    suspend fun oreIceCandidateTypes(): List<OreIceCandidateTypeRow>
+
     // ------------------------------------------------------- row counts
     // The counterpart of storage.py's `sde_row_counts`: what the UI prints
     // after a refresh, and the cheapest way to tell an empty cache from a
@@ -292,3 +313,14 @@ interface SdeDao {
  * and Room maps a `@Query` result positionally/by-name onto whatever type is
  * asked for, entity or not. */
 data class TypeMaterialRow(val materialTypeId: Int, val quantity: Double)
+
+/** Room's projection shape for `SdeDao.oreIceCandidateTypes` - see that
+ * query's own docstring. `groupName` is nullable because Room maps a
+ * possibly-null joined column that way even though the query's own WHERE
+ * clause never actually lets one through with a null group. */
+data class OreIceCandidateTypeRow(
+    val typeId: Int,
+    val typeName: String?,
+    val volume: Double?,
+    val groupName: String?,
+)

@@ -350,6 +350,12 @@ class SdeRepository(
         dao.typeMaterials(typeId).map { it.materialTypeId to it.quantity }
     }
 
+    /** Every published compressed ore/ice type in the cache - the Ore
+     * Shortlist's fixed candidate universe, see `SdeDao.oreIceCandidateTypes`
+     * and `data/refining/OreShortlist.kt`'s `buildOreCandidateUniverse`. */
+    suspend fun oreIceCandidateTypes(): List<OreIceCandidateTypeRow> =
+        withContext(Dispatchers.IO) { dao.oreIceCandidateTypes() }
+
     // -------------------------------------------------------- bulk reads
     // Whole-table reads for CandidateDiscovery.buildCandidateUniverseFromSde
     // - see SdeDao's own comment on why these differ from the single-row

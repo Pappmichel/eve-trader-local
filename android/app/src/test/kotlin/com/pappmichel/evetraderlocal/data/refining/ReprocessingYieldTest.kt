@@ -1,15 +1,16 @@
 package com.pappmichel.evetraderlocal.data.refining
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Ported case-for-case from the desktop build's
- * `tests/test_refining_reprocessing.py` - scrapmetal-path cases only (see
- * `ReprocessingYield.kt`'s own docstring for why the ore/ice path isn't
- * ported). `applyYield` here takes an already-fetched `portionSize`/
- * `materials` pair directly rather than reading a real SQLite SDE cache the
- * way the desktop test's `_seed_sde`/`db` fixture does - same fixture data,
- * hand-built instead of seeded into a database. */
+ * `tests/test_refining_reprocessing.py`, both the scrapmetal path and the
+ * ore/ice path (`oreIceYield`/`oreIceBaseYield`/`securityYieldModifier`).
+ * `applyYield` here takes an already-fetched `portionSize`/`materials` pair
+ * directly rather than reading a real SQLite SDE cache the way the desktop
+ * test's `_seed_sde`/`db` fixture does - same fixture data, hand-built
+ * instead of seeded into a database. */
 class ReprocessingYieldTest {
     private val TRITANIUM = 34
     private val PYERITE = 35
@@ -62,5 +63,54 @@ class ReprocessingYieldTest {
         // No SDE portion_size/material rows at all (not yet SDE-refreshed, or
         // genuinely not reprocessable - a ship/skillbook/BPO/BPC) -> {}.
         assertEquals(emptyMap<Int, Int>(), applyYield(null, emptyList(), 100, 0.5))
+    }
+
+    // ------------------------------------------------------- Ore/ice path
+
+    @Test
+    fun `ore ice yield confirmed maximum`() {
+        // Tatara, T2-Rig, null-sec, max skills, RX-804 -> confirmed 90.63%
+        // ceiling (ReprocessingYield.kt's own module docstring - a real
+        // historical-bug-fix figure, not an arbitrary test value).
+        val cfg = RefiningConfig(
+            structureType = "Tatara (L Refinery)", rigTier = "T2-Rig", securityStatus = -0.5,
+            implant = "RX-804", reprocessingSkillLevel = 5, reprocessingEfficiencySkillLevel = 5,
+            oreFamilySkillLevels = mapOf("Veldspar" to 5),
+        )
+        val pct = oreIceYield(cfg, oreFamily = "Veldspar")
+        assertEquals(90.63, Math.round(pct * 10000) / 100.0, 1e-9)
+    }
+
+    @Test
+    fun `ore ice base yield citadel no bonuses highsec`() {
+        // Base case: Citadel, no rig, highsec (sec modifier 0), no bonuses at
+        // all -> exactly 50%.
+        val cfg = RefiningConfig(securityStatus = 1.0)
+        assertEquals(0.5, oreIceBaseYield(cfg), 1e-9)
+    }
+
+    @Test
+    fun `security yield modifier lowsec and nullsec`() {
+        val cfgLow = RefiningConfig(securityStatus = 0.4) // rounds to 0.4 -> lowsec bucket
+        val cfgNull = RefiningConfig(securityStatus = -0.5) // nullsec/wormhole bucket
+        assertTrue(oreIceBaseYield(cfgLow) > oreIceBaseYield(RefiningConfig(securityStatus = 1.0)))
+        assertTrue(oreIceBaseYield(cfgNull) > oreIceBaseYield(cfgLow))
+    }
+
+    @Test
+    fun `unknown ore family missing from map assumes maxed`() {
+        // A family simply absent from oreFamilySkillLevels is assumed level 5
+        // (maxed), not unskilled - see oreIceYield's own docstring for why.
+        val cfgMissing = RefiningConfig() // empty map
+        val cfgExplicitMax = RefiningConfig(oreFamilySkillLevels = mapOf("Veldspar" to 5))
+        assertEquals(oreIceYield(cfgExplicitMax, "Veldspar"), oreIceYield(cfgMissing, "Veldspar"), 1e-9)
+    }
+
+    @Test
+    fun `ore ice yield no family gets no family bonus`() {
+        val cfg = RefiningConfig(oreFamilySkillLevels = mapOf("Veldspar" to 5))
+        val withFamily = oreIceYield(cfg, "Veldspar")
+        val withoutFamily = oreIceYield(cfg, null)
+        assertTrue(withoutFamily < withFamily)
     }
 }
