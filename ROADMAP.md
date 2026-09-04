@@ -217,7 +217,9 @@ which "careful reading" alone had caught):
   flow, which is the property that actually matters. Only the Trading
   roles are wired into the UI so far. Each authorized character shows its
   live ISK wallet balance (`EsiClient.characterWalletBalance`) -
-  best-effort per character.
+  best-effort per character - and can be logged out again via a per-row
+  button calling `TokenManager.removeToken` (present since the first
+  commit, but never wired to any UI control until now).
 - Trading → Candidate Discovery, the first real (non-placeholder) tool
   screen (`data/esi/EsiClient.kt`, `data/trading/`, `ui/screens/
   CandidateDiscoveryScreen.kt`) — a Kotlin port of `candidate_discovery.py`'s

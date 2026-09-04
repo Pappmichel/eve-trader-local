@@ -112,7 +112,11 @@ current scope.
   shows its live ISK wallet balance (`EsiClient.characterWalletBalance`,
   mirroring `esi_client.py`'s `character_wallet_balance`) - best-effort per
   character, so one with an expired/under-scoped token simply shows no
-  balance rather than blocking the rest of the list.
+  balance rather than blocking the rest of the list. A logout button per
+  row calls `TokenManager.removeToken` - that method existed from the
+  first commit, but nothing in the UI ever called it, so there was
+  previously no way to log a character out again short of clearing app
+  data.
 
 ## Setup
 

@@ -9,12 +9,16 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -95,7 +99,18 @@ fun CharactersScreen(tokenManager: TokenManager) {
                         Text("${record.role} - ${if (record.isExpired()) "expired" else "valid"}")
                     },
                     trailingContent = {
-                        walletBalances[record.role]?.let { Text(fmtIsk(it)) }
+                        Row {
+                            walletBalances[record.role]?.let { Text(fmtIsk(it)) }
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        tokenManager.removeToken(record.role)
+                                        status = "Logged out ${record.characterName} ('${record.role}')."
+                                        refresh()
+                                    }
+                                },
+                            ) { Icon(Icons.Filled.Logout, contentDescription = "Log out ${record.characterName}") }
+                        }
                     },
                 )
                 HorizontalDivider()
