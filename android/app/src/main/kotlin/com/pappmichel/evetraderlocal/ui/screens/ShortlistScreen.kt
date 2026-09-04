@@ -99,8 +99,15 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 // above, which needs no login at all) - now it just means
                 // no seller-specific data, same degrade-gracefully pattern
                 // the rest of this function already follows.
-                val sellerToken = tokenManager.listRecords("seller").firstOrNull()?.let {
-                    try { tokenManager.getToken(it.role) } catch (e: Exception) { null }
+                val sellerRecord = tokenManager.listRecords("seller").firstOrNull()
+                var sellerTokenInvalid = false
+                val sellerToken = sellerRecord?.let {
+                    try {
+                        tokenManager.getToken(it.role)
+                    } catch (e: Exception) {
+                        sellerTokenInvalid = true
+                        null
+                    }
                 }
                 val structureStats = if (cfg.structureId != null && sellerToken != null) {
                     esi.structureOrderStatsBulk(cfg.structureId, activeIds, sellerToken.accessToken)
@@ -160,6 +167,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 status = "Import: ${summary.importCandidates} · Already ordered: ${summary.alreadyOrdered} · " +
                     "Skipped: ${summary.skipped} · Avg margin: ${fmtPct(summary.avgMargin)}"
                 if (cfg.structureId == null) status += " (no structure configured - Net Sell left blank)"
+                else if (sellerTokenInvalid) status += " (seller token invalid - re-log in as Seller - Net Sell left blank)"
                 else if (structureStats.isEmpty() && activeIds.isNotEmpty()) status += " (no seller character logged in - Net Sell left blank)"
                 if (ownOrdersUnavailable) status += " (couldn't read own orders - re-log in as Seller for the read_character_orders scope)"
                 if (buyerCoveredUnavailable) status += " (couldn't check buyer coverage - re-log in as Buyer for the orders/assets scopes)"
