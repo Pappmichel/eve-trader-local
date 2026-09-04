@@ -23,7 +23,7 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
         setContent {
             EveTraderTheme {
-                AppNavHost(tokenManager = app.tokenManager)
+                AppNavHost(tokenManager = app.tokenManager, database = app.database)
             }
         }
     }

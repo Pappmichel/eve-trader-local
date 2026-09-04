@@ -197,8 +197,8 @@ this was built in):
   Compose's `ColorScheme` (`ui/theme/`) — kept in sync by eye, no shared
   source of truth between Compose and Qt QSS.
 - A nav-drawer shell mirroring `main_window.py`'s `_TOOL_MENUS` structure
-  (`ui/nav/ToolMenus.kt`) — every tool/view listed, every one still opening
-  a `PlaceholderScreen` (no business logic ported yet).
+  (`ui/nav/ToolMenus.kt`) — every tool/view listed; all but one still open a
+  `PlaceholderScreen`.
 - A local Room database mirroring the desktop build's `tokens`/`settings`
   SQLite tables (`storage.py`) — app-private storage is this platform's own
   "local-first, no server" answer, same role a portable `.exe`'s data
@@ -211,9 +211,22 @@ this was built in):
   there's no port to bind on Android — still no server anywhere in the
   flow, which is the property that actually matters. Only the Trading
   roles are wired into the UI so far.
+- Trading → Candidate Discovery, the first real (non-placeholder) tool
+  screen (`data/esi/EsiClient.kt`, `data/trading/`, `ui/screens/
+  CandidateDiscoveryScreen.kt`) — a Kotlin port of `candidate_discovery.py`'s
+  live-ESI-walk path (`_build_candidate_universe_from_esi`) plus a
+  `TradingConfig` mirroring the `config.py` dataclass fields it needs, both
+  persisted through the same Room `settings` table. The SDE-accelerated
+  path (`_build_candidate_universe_from_sde`) is not ported — no local SDE
+  cache exists on this platform yet (`sde.py`'s Fuzzwork CSV pipeline is
+  its own, separate porting effort) — so this always takes the slower
+  ~2000-call live path, same as a fresh desktop install that hasn't run
+  `refresh-sde`.
 
-Not started: every tool's actual business logic, a Settings screen, CI for
-the Android build, an app icon, encryption at rest for stored tokens, a
+Not started: the rest of Trading (shortlist evaluation, realized-trade
+reconciliation, price history, unlisted-stock/undercut checks), all four
+other tools' business logic, the SDE cache itself, a Settings screen, CI
+for the Android build, an app icon, encryption at rest for stored tokens, a
 Play Store listing.
 
 Options considered before deciding above, kept for the record:

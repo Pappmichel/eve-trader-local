@@ -14,11 +14,22 @@ current scope.
   to generate both themes from a single source.
 - **Navigation** (`ui/nav/`): a nav drawer listing every tool/view from
   `ToolMenus.kt`'s `TOOL_MENUS`, mirroring `gui/main_window.py`'s
-  `_TOOL_MENUS` structure. Every entry opens `PlaceholderScreen` for now -
-  none of the five tools' actual business logic (trading candidate
-  discovery, production planning, doctrine stockpiles, refining, station
-  trading) is ported yet. That's real, substantial work still ahead - this
-  increment is the foundation it would build on, not a shortcut past it.
+  `_TOOL_MENUS` structure. Every entry still opens `PlaceholderScreen`
+  except Trading/Candidate Discovery (see below) - production planning,
+  doctrine stockpiles, refining, station trading, and the rest of Trading
+  itself are real, substantial work still ahead (see ROADMAP.md's Android
+  section for the current per-tool state).
+- **Trading -> Candidate Discovery** (`data/esi/EsiClient.kt`,
+  `data/trading/`, `ui/screens/CandidateDiscoveryScreen.kt`): the first
+  real (non-placeholder) tool screen. Walks EVE's market-group tree live
+  via ESI, mirroring `candidate_discovery.py`'s `_build_candidate_universe_
+  from_esi` path - the SDE-accelerated path (`_build_candidate_universe_
+  from_sde`) isn't ported (no local SDE cache on this platform yet, see
+  `sde.py`), so this always takes the slower ~2000-call live path, same as
+  a fresh desktop install that hasn't run `refresh-sde`. `TradingConfig`
+  (`data/trading/TradingConfig.kt`) mirrors the desktop build's
+  `config.py` dataclass fields this screen actually reads, persisted the
+  same way (`settings` table, one JSON blob per scope).
 - **Local database** (`data/db/`): Room, mirroring the desktop build's
   `tokens`/`settings` SQLite tables (`storage.py`) - same JSON-blob-per-row
   shape, same table names' worth of meaning. App-private storage is this

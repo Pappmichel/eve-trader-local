@@ -374,13 +374,16 @@ still the whole distribution story.
 `android/` is a from-scratch Kotlin + Jetpack Compose app - not a Python
 port via Chaquopy, see ROADMAP.md's "Android" section for that decision and
 its trade-off. What exists so far: the same dark theme as the desktop GUI,
-a nav drawer mirroring `main_window.py`'s tool/view menu structure (every
-entry still a placeholder), a local Room database mirroring the desktop
-build's `tokens`/`settings` tables, and a real EVE SSO OAuth2 PKCE login
-flow. None of the five tools' business logic is ported yet. See
-`android/README.md` for setup and this increment's honest limitations
-(notably: written and reviewed by hand, never compiled - no Android
-SDK/Gradle/JDK 17 was available in the environment it was built in).
+a nav drawer mirroring `main_window.py`'s tool/view menu structure, a local
+Room database mirroring the desktop build's `tokens`/`settings` tables, a
+real EVE SSO OAuth2 PKCE login flow, and one real (non-placeholder) tool
+screen - Trading's Candidate Discovery, a Kotlin port of
+`candidate_discovery.py`'s live-ESI-walk path. Everything else (the rest of
+Trading, and all four other tools' business logic) is still a
+`PlaceholderScreen`. See `android/README.md` for setup and this increment's
+honest limitations (notably: written and reviewed by hand, never compiled -
+no Android SDK/Gradle/JDK 17 was available in the environment it was built
+in).
 
 ## Why the OAuth flow needed no rearchitecting
 

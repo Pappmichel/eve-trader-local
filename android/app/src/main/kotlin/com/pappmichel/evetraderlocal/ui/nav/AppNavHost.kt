@@ -25,12 +25,25 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
+import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
 import kotlinx.coroutines.launch
 
-private fun placeholderRoute(tool: String, view: String) =
-    "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
+private const val CANDIDATE_DISCOVERY_ROUTE = "trading/candidate-discovery"
+
+/** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
+ * function's own docstring) except the ones a real screen has been built
+ * for - currently just Trading/Candidate Discovery (see ROADMAP.md's
+ * Android section for what's ported so far). Add a route here as each new
+ * screen replaces its placeholder. */
+private fun routeFor(tool: String, view: String): String =
+    if (tool == "Trading" && view == "Candidate Discovery") {
+        CANDIDATE_DISCOVERY_ROUTE
+    } else {
+        "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
+    }
 
 /** The mobile counterpart of main_window.py's menu-bar-plus-tab-workspace
  * shell: a nav drawer listing every tool/view from `TOOL_MENUS` (mirroring
@@ -40,7 +53,7 @@ private fun placeholderRoute(tool: String, view: String) =
  * everything, opening one navigates to it" model, not the same widget. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppNavHost(tokenManager: TokenManager) {
+fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -75,7 +88,7 @@ fun AppNavHost(tokenManager: TokenManager) {
                             label = { Text(view) },
                             selected = false,
                             onClick = {
-                                navController.navigate(placeholderRoute(tool, view))
+                                navController.navigate(routeFor(tool, view))
                                 scope.launch { drawerState.close() }
                             },
                             modifier = Modifier.padding(horizontal = 8.dp),
@@ -103,6 +116,7 @@ fun AppNavHost(tokenManager: TokenManager) {
                 modifier = Modifier.padding(padding),
             ) {
                 composable("characters") { CharactersScreen(tokenManager) }
+                composable(CANDIDATE_DISCOVERY_ROUTE) { CandidateDiscoveryScreen(database) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""
