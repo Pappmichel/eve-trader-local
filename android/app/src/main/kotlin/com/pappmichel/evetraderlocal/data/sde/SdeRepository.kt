@@ -297,6 +297,16 @@ class SdeRepository(
 
     suspend fun type(typeId: Int): SdeTypeEntity? = withContext(Dispatchers.IO) { dao.type(typeId) }
 
+    /** Exact, case-insensitive name -> type/group/category lookup - see
+     * `SdeDao.resolveTypeByName`'s own doc. Used by the Doctrine EFT parser
+     * to resolve a pasted fitting line's item name. */
+    suspend fun resolveTypeByName(name: String): SdeTypeNameResolution? =
+        withContext(Dispatchers.IO) { dao.resolveTypeByName(name) }
+
+    /** Every Ship/Structure type name in the cache - see
+     * `SdeDao.hullTypeNames`'s own doc. */
+    suspend fun hullTypeNames(): List<String> = withContext(Dispatchers.IO) { dao.hullTypeNames() }
+
     // -------------------------------------------------------- bulk reads
     // Whole-table reads for CandidateDiscovery.buildCandidateUniverseFromSde
     // - see SdeDao's own comment on why these differ from the single-row

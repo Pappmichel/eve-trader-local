@@ -99,6 +99,20 @@ data class SdeRefreshStateEntity(
     val dumpEtag: String?,
 )
 
+/** Room's projection for `SdeDao.resolveTypeByName` - not a table, just the
+ * shape of that one join query's result columns. Mirrors the tuple
+ * `storage.resolve_sde_type_by_name` returns on desktop (type_id, group_id,
+ * category_id, meta_group_id, meta_level, type_name), minus `metaGroupId`
+ * (no `invMetaTypes.csv` in this cache - see `DoctrineSdeResolver`'s
+ * docstring). */
+data class SdeTypeNameResolution(
+    val typeId: Int,
+    val groupId: Int?,
+    val categoryId: Int?,
+    val metaLevel: Int?,
+    val typeName: String?,
+)
+
 @Dao
 interface SdeDao {
     // ---------------------------------------------------------- refresh
@@ -172,6 +186,35 @@ interface SdeDao {
      * rather than "anywhere in The Forge". */
     @Query("SELECT stationId FROM sde_stations WHERE solarSystemId = :systemId")
     suspend fun stationIdsInSystem(systemId: Long): List<Long>
+
+    /** Exact, case-insensitive type-name lookup with its group's category
+     * joined in - the Android counterpart of `storage.
+     * resolve_sde_type_by_name`, used by the Doctrine EFT parser
+     * (`data/doctrine/DoctrineSdeResolver.kt`) to turn a pasted fitting
+     * line's item name into a type id. `COLLATE NOCASE` matches SQLite's
+     * default text comparison on the desktop build's own equivalent query
+     * (SQLite's `=` there is already case-insensitive for ASCII by default
+     * in that schema) - deliberately exact, never a substring/fuzzy match,
+     * per parser.py's own "no fuzzy matching in real resolution, ever"
+     * rule. `LIMIT 1` is a defensive no-op in practice (type names are
+     * unique in the SDE) but keeps this a single-row query by contract. */
+    @Query(
+        "SELECT t.typeId, t.groupId, g.categoryId, t.metaLevel, t.typeName FROM sde_types t " +
+            "LEFT JOIN sde_groups g ON g.groupId = t.groupId " +
+            "WHERE t.typeName = :name COLLATE NOCASE LIMIT 1"
+    )
+    suspend fun resolveTypeByName(name: String): SdeTypeNameResolution?
+
+    /** Every published Ship/Structure type name (SDE category ids 6 and 65 -
+     * matching `doctrine/constants.py`'s `VALID_HULL_CATEGORY_IDS`) - the
+     * Android counterpart of `storage.list_hull_type_names`, used only for
+     * the parser's "did you mean" hull-name suggestion (Phase 3 A.7). */
+    @Query(
+        "SELECT t.typeName FROM sde_types t " +
+            "JOIN sde_groups g ON g.groupId = t.groupId " +
+            "WHERE g.categoryId IN (6, 65) AND t.typeName IS NOT NULL"
+    )
+    suspend fun hullTypeNames(): List<String>
 
     // ------------------------------------------------------- row counts
     // The counterpart of storage.py's `sde_row_counts`: what the UI prints
