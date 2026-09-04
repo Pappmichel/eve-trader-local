@@ -65,6 +65,11 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    // material-icons-core only ships a small curated subset (Add, Delete,
+    // Check, Menu, ...) - CharactersScreen's logout icon (Icons.Filled.
+    // Logout) lives in the larger "extended" set instead, confirmed by CI's
+    // first attempt at that icon failing with "Unresolved reference".
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.navigation:navigation-compose:2.8.3")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
