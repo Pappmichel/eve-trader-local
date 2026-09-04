@@ -213,8 +213,11 @@ current scope.
   (a port of `tests/test_candidate_discovery.py`'s `is_wanted_market_path`/
   `_market_group_path` cases plus the string/volume fallback half of
   `guess_category` - the real-SDE-category-name half isn't ported, same
-  reason `CandidateDiscovery.kt` itself doesn't have it), and
+  reason `CandidateDiscovery.kt` itself doesn't have it),
   `EsiClientTest.kt` (a port of `tests/test_esi_client.py`'s
   `_percentile`/`_summarize_orders` cases - the order-book pricing math
-  behind every `OrderStats`). No lint step, no instrumented/UI tests
-  (would need an emulator), no release signing, no Play Store upload.
+  behind every `OrderStats`), and `TokenRecordTest.kt` (a port of
+  `tests/test_auth.py`'s `test_is_expired_respects_skew` -
+  `TokenRecord.isExpired` is the one pure, Android-independent piece of
+  `data/auth/`). No lint step, no instrumented/UI tests (would need an
+  emulator), no release signing, no Play Store upload.
