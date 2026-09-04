@@ -303,14 +303,61 @@ which "careful reading" alone had caught):
   item_ids against the seller's assets minus their own open sell-order
   volume. Item names come from the shortlist, since there's still no SDE
   cache on this platform.
+- Trading → Price History (`data/history/GoonmetricsClient.kt`,
+  `data/trading/HistoryBacktest.kt`, `ui/screens/PriceHistoryScreen.kt`) - a
+  Kotlin port of `goonmetrics_client.py`'s `price_history`/
+  `price_history_chunked` (region daily history over the Goonmetrics/gnf.lt
+  rehost) and `history_backtest.py`'s `compute_margin_trends` (recent-3-day
+  vs. rolling-30-day landed-cost margin, the same momentum signal desktop
+  computes). Deliberately fetches live on every Refresh instead of reading a
+  cache: desktop's view is a pure read over a history table that gets
+  populated incidentally by candidate searches, none of which exists here,
+  and building that whole caching pipeline isn't what unblocks this screen -
+  see the screen's own docstring for the full tradeoff. `current_prices`
+  (the other Goonmetrics endpoint, needed later for Station Trading) is out
+  of scope here.
+- Trading → Realized Trades & Transactions (`data/trading/
+  TradeReconciliation.kt`, `ui/screens/RealizedTradesScreen.kt`, new
+  `EsiClient` wallet-transactions/wallet-journal methods) - a Kotlin port of
+  `trade_reconciliation.py`'s FIFO matching of Jita buys against structure
+  sells, including the buy-must-predate-sell rule (a matched buy dated after
+  its sell is never used as that sale's cost basis - `break`, not `skip`,
+  the same correctness fix already landed on desktop) and the
+  wallet-journal tax refinement via `journal_ref_id`. Simplified vs.
+  desktop: one buyer and one seller character rather than pooled
+  multi-character matching; buys are filtered to Jita's own NPC stations
+  live via ESI rather than the whole Forge region (no SDE cache reads it
+  yet - see the SDE cache entry below); item names/volumes for any
+  non-shortlisted traded type fall back to a live `/universe/types/` call;
+  nothing is persisted, so `average_daily_sold_by_type` (which needs a
+  saved run) isn't ported; there's no raw wallet-transaction listing, the
+  other half of the desktop tab.
+- The SDE cache itself (`data/sde/` - `SdeCsv.kt`, `SdeEntities.kt`,
+  `SdeDownloader.kt`, `SdeRepository.kt`; reachable from the drawer as its
+  own "SDE Data" screen, `ui/screens/SdeDataScreen.kt`) - a Kotlin port of
+  `sde.py`'s Fuzzwork CSV download/parse pipeline and the `sde_*` half of
+  `storage.py`, scoped to six of the desktop build's twelve tables
+  (invTypes, invGroups, invCategories, invMarketGroups, staStations,
+  mapSolarSystems - not the Production/Doctrine/refining-only ones). Room
+  moved to version 2 (`fallbackToDestructiveMigration()`, honest only while
+  nothing is installed anywhere real - see `AppDatabase.kt`'s own comment).
+  A hand-rolled, unit-tested CSV reader stands in for `csv.DictReader`
+  (Kotlin has no equivalent, and one state machine handling embedded
+  newlines/quoted commas beats a new dependency for six fixed-shape files).
+  The lookup API (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
+  `stationIdsInSystem`) is deliberately unused so far - rewiring Candidate
+  Discovery (and Realized Trades' buy-side filter) onto it is tracked
+  as a follow-up, needing a populated cache and a real device to verify
+  against.
 
-Not started: the rest of Trading (realized-trade reconciliation, price
-history, hit-rate/avg-movement-filtered auto-prune from Candidate
-Discovery, Profit / Day, the Goonmetrics fallback, pooling either
-Unlisted-Stock-&-Undercut check across multiple seller characters), all
-four other tools' business logic and their own Settings tabs, the SDE
-cache itself, tests for anything beyond Shortlist's and Unlisted-Stock-&-
-Undercut's pure logic, an app icon, a Play Store listing.
+Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
+Discovery onto the shortlist, Profit / Day, the Goonmetrics `current_prices`
+fallback, pooling either Realized Trades or Unlisted-Stock-&-Undercut check
+across multiple characters, rewiring Candidate Discovery and Realized
+Trades onto the new SDE cache, `average_daily_sold_by_type`, all four other
+tools' business logic (Production, Doctrine, Ore & Minerals/Refining,
+Station Trading) and their own Settings tabs, tests for anything beyond the
+pure logic already covered, an app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

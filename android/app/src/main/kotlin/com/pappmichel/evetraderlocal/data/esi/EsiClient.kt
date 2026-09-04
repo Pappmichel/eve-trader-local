@@ -17,6 +17,11 @@ const val ESI_BASE = "https://esi.evetech.net/latest"
 private const val USER_AGENT = "eve-trader-local-android (contact: set EVE_CONTACT_EMAIL)"
 private const val METALEVEL_ATTRIBUTE_ID = 633 // EVE SDE dogma attribute "metaLevel" (0=Tech I, 5=Tech II, ...)
 
+/** Jita, the solar system every "buy in Jita, sell at the structure" figure
+ * in this app is written against. Lives here, next to the endpoints that
+ * take it, so there is exactly one definition of it for every caller. */
+const val JITA_SOLAR_SYSTEM_ID = 30_000_142
+
 class EsiError(message: String) : RuntimeException(message)
 
 @Serializable
@@ -74,6 +79,29 @@ data class CharacterAsset(
 @Serializable
 data class SolarSystemResponse(
     val stations: List<Long> = emptyList(),
+)
+
+@Serializable
+data class CharacterWalletTransaction(
+    @SerialName("transaction_id") val transactionId: Long,
+    @SerialName("type_id") val typeId: Int,
+    @SerialName("is_buy") val isBuy: Boolean = false,
+    val quantity: Long = 0,
+    @SerialName("unit_price") val unitPrice: Double = 0.0,
+    val date: String = "",
+    @SerialName("location_id") val locationId: Long = 0,
+    /** Links 1:1 to the wallet *journal* entry recording this same trade,
+     * whose `amount` is the real ISK moved after sales tax - see
+     * TradeReconciliation.kt's use of it. */
+    @SerialName("journal_ref_id") val journalRefId: Long? = null,
+)
+
+@Serializable
+data class CharacterWalletJournalEntry(
+    val id: Long,
+    val amount: Double = 0.0,
+    @SerialName("ref_type") val refType: String = "",
+    val date: String = "",
 )
 
 /** Summary stats for one side (buy/sell) of an order book - a robust price
@@ -237,6 +265,50 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
                 accessToken,
             )
             val chunk: List<CharacterAsset> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
+    }
+
+    /** This character's wallet transaction history. Returns up to
+     * WALLET_TRANSACTIONS_PAGE_SIZE (2500, ESI's fixed per-call cap for this
+     * endpoint) transactions, most recent first. Cursor pagination via
+     * `fromId` (pass the oldest transaction_id from a previous call to page
+     * further back in time), not the page/X-Pages scheme the other paged
+     * methods here use - a caller loops it until it has covered the
+     * lookback window it wants (see TradeReconciliation.fetchRecentTransactions).
+     * Requires esi-wallet.read_character_wallet.v1. */
+    suspend fun characterWalletTransactions(
+        characterId: Long,
+        accessToken: String,
+        fromId: Long? = null,
+    ): List<CharacterWalletTransaction> {
+        val params = mutableMapOf("datasource" to "tranquility")
+        if (fromId != null) params["from_id"] = fromId.toString()
+        return json.decodeFromString(getBody("/characters/$characterId/wallet/transactions/", params, accessToken))
+    }
+
+    /** This character's wallet journal (every ISK-moving event, not just
+     * market trades - contract payments, bounties, taxes, ...). Standard
+     * page/X-Pages pagination, same as characterOrders/characterAssets
+     * above. The point of it for trade reconciliation: a transaction's own
+     * `journal_ref_id` links 1:1 to the journal entry recording that same
+     * sale (`ref_type: "market_transaction"`), whose `amount` is the real
+     * ISK credited *after* sales tax. Same esi-wallet.read_character_
+     * wallet.v1 scope, no extra grant. */
+    suspend fun characterWalletJournal(characterId: Long, accessToken: String): List<CharacterWalletJournalEntry> {
+        val out = mutableListOf<CharacterWalletJournalEntry>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/characters/$characterId/wallet/journal/",
+                mapOf("datasource" to "tranquility", "page" to page.toString()),
+                accessToken,
+            )
+            val chunk: List<CharacterWalletJournalEntry> = json.decodeFromString(body)
             if (chunk.isEmpty()) break
             out.addAll(chunk)
             if (page >= totalPages) break

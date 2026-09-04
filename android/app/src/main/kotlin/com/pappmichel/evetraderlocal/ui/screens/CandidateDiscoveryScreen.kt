@@ -57,7 +57,7 @@ fun CandidateDiscoveryScreen(database: AppDatabase) {
     var candidates by remember { mutableStateOf<List<Candidate>>(emptyList()) }
     var shortlistedIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var status by remember { mutableStateOf("Not run yet - discovery walks EVE's market-group tree live " +
-        "(no local SDE cache on this platform yet) and can take a while.") }
+        "(it does not read the local SDE cache yet) and can take a while.") }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0f) }
 

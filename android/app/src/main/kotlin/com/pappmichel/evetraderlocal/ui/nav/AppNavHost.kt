@@ -31,6 +31,9 @@ import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
+import com.pappmichel.evetraderlocal.ui.screens.PriceHistoryScreen
+import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
+import com.pappmichel.evetraderlocal.ui.screens.SdeDataScreen
 import com.pappmichel.evetraderlocal.ui.screens.SettingsScreen
 import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
 import com.pappmichel.evetraderlocal.ui.screens.UnlistedUndercutScreen
@@ -39,13 +42,17 @@ import kotlinx.coroutines.launch
 private const val CANDIDATE_DISCOVERY_ROUTE = "trading/candidate-discovery"
 private const val SHORTLIST_ROUTE = "trading/shortlist"
 private const val UNLISTED_UNDERCUT_ROUTE = "trading/unlisted-undercut"
+private const val PRICE_HISTORY_ROUTE = "trading/price-history"
+private const val REALIZED_TRADES_ROUTE = "trading/realized-trades"
+private const val SDE_DATA_ROUTE = "sde-data"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
- * for - currently Trading/Candidate Discovery, Trading/Shortlist, and
- * Trading/Unlisted Stock & Undercut Check (see ROADMAP.md's Android
- * section for what's ported so far). Add a route here as each new screen
- * replaces its placeholder. */
+ * for - currently Trading/Candidate Discovery, Trading/Shortlist,
+ * Trading/Unlisted Stock & Undercut Check, Trading/Price History, and
+ * Trading/Realized Trades & Transactions (see ROADMAP.md's Android section
+ * for what's ported so far). Add a route here as each new screen replaces
+ * its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -53,6 +60,10 @@ private fun routeFor(tool: String, view: String): String =
         SHORTLIST_ROUTE
     } else if (tool == "Trading" && view == "Unlisted Stock & Undercut Check") {
         UNLISTED_UNDERCUT_ROUTE
+    } else if (tool == "Trading" && view == "Price History") {
+        PRICE_HISTORY_ROUTE
+    } else if (tool == "Trading" && view == "Realized Trades & Transactions") {
+        REALIZED_TRADES_ROUTE
     } else {
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
@@ -115,6 +126,15 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                     },
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
+                NavigationDrawerItem(
+                    label = { Text("SDE Data") },
+                    selected = false,
+                    onClick = {
+                        navController.navigateFromDrawer(SDE_DATA_ROUTE)
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
                 TOOL_MENUS.forEach { (tool, views) ->
                     Text(
                         tool,
@@ -155,9 +175,12 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
             ) {
                 composable("characters") { CharactersScreen(tokenManager) }
                 composable("settings") { SettingsScreen(database) }
+                composable(SDE_DATA_ROUTE) { SdeDataScreen(database) }
                 composable(CANDIDATE_DISCOVERY_ROUTE) { CandidateDiscoveryScreen(database) }
                 composable(SHORTLIST_ROUTE) { ShortlistScreen(database, tokenManager) }
                 composable(UNLISTED_UNDERCUT_ROUTE) { UnlistedUndercutScreen(database, tokenManager) }
+                composable(PRICE_HISTORY_ROUTE) { PriceHistoryScreen(database) }
+                composable(REALIZED_TRADES_ROUTE) { RealizedTradesScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""

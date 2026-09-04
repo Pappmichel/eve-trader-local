@@ -105,6 +105,71 @@ current scope.
   their own open sell-order volume there. Item names come from the
   shortlist (no SDE cache exists yet), so a flagged type_id not on the
   shortlist shows its bare number.
+- **Trading -> Price History** (`data/history/GoonmetricsClient.kt`,
+  `data/trading/HistoryBacktest.kt`, `ui/screens/PriceHistoryScreen.kt`): a
+  Kotlin port of `goonmetrics_client.py`'s `price_history`/
+  `price_history_chunked` (parses the Goonmetrics/gnf.lt region-history XML
+  rehost) and `history_backtest.py`'s `compute_margin_trends` (recent-3-day
+  vs. rolling-30-day landed-cost margin per shortlist item). Unlike desktop,
+  which reads a locally cached history table populated incidentally by past
+  candidate searches, this fetches both regions' history live on every
+  Refresh - there's no such cache on this platform and building one isn't a
+  prerequisite for the screen (see `PriceHistoryScreen.kt`'s own docstring
+  for the full tradeoff). Only the history endpoint is ported;
+  `current_prices` (Goonmetrics' other endpoint) is out of scope here.
+- **Trading -> Realized Trades & Transactions** (`data/trading/
+  TradeReconciliation.kt`, `ui/screens/RealizedTradesScreen.kt`): a Kotlin
+  port of `trade_reconciliation.py`'s FIFO matching of the buyer
+  character's Jita buys against the seller character's structure sells.
+  Ports the buy-must-predate-sell rule at the matcher's core (a buy dated
+  after its matched sell is never used as that sale's cost basis - `break`,
+  not `skip`, over the sorted buy queue) and the wallet-journal tax
+  refinement (a sale's real post-tax ISK, looked up via its
+  `journal_ref_id`, replaces the fully modeled `unit_price * haircut`
+  estimate whenever the journal has it). New `EsiClient` methods:
+  `characterWalletTransactions` (from_id cursor pagination over ESI's
+  2500-per-page cap) and `characterWalletJournal` (page/X-Pages, same
+  scheme as `characterAssets`). Simplified vs. desktop: one buyer and one
+  seller character rather than pooled multi-character matching; the buy-side
+  location filter is Jita's own NPC stations via a live `solarSystemStationIds`
+  call, not the whole Forge region (no SDE cache reads it yet); item
+  names/volumes for any traded type_id fall back to a live `/universe/types/`
+  call (no shortlist coverage guarantee, unlike Price History); nothing is
+  persisted between runs, so `average_daily_sold_by_type` (which needs a
+  saved run to read back) isn't ported at all; there's no raw
+  wallet-transaction listing, the other half of the desktop tab.
+- **The SDE cache** (`data/sde/`: `SdeCsv.kt`, `SdeEntities.kt`,
+  `SdeDownloader.kt`, `SdeRepository.kt`; `ui/screens/SdeDataScreen.kt`,
+  reachable from the drawer as its own "SDE Data" entry next to Characters
+  and Settings): a Kotlin port of `sde.py`'s Fuzzwork CSV download/parse
+  pipeline and the `sde_*` half of `storage.py`'s schema, scoped to six of
+  the desktop build's twelve tables - `invTypes`/`invGroups`/
+  `invCategories`/`invMarketGroups` (the candidate universe and its real
+  category names) and `staStations`/`mapSolarSystems` (station-in-region
+  lookups, via a join since `staStations.csv` carries no region id of its
+  own). The other six tables back Production/Doctrine/refining, none of
+  which exist on this platform yet, so fetching them would be pure waste.
+  Faithful to `sde.py`: per-file retry/backoff, the UTF-8 BOM strip, the
+  HEAD-request ETag staleness check (`checkForNewerSde`), the refresh-state
+  row, row counts, and the atomicity guarantee (every file downloaded and
+  parsed before the database is touched, the replace done in one Room
+  transaction - a phone losing connectivity mid-download is routine, so a
+  failed refresh must leave the previous cache exactly as it was). Kotlin
+  has no `csv.DictReader` equivalent, so `SdeCsv.kt` is a small hand-rolled,
+  unit-tested RFC4180 state machine instead of a new Gradle dependency -
+  it has to handle embedded newlines inside `invTypes.csv`'s quoted
+  `description` column, which a line-at-a-time parser would desynchronise
+  on. Rows stream through a callback rather than materializing as
+  `Map<String, String>` per row, so ~14MB of mostly-description text never
+  sits on a phone's heap. Room moves to version 2 for the six new tables,
+  via `fallbackToDestructiveMigration()` - honest only while this app has
+  never shipped or been installed anywhere real (see `AppDatabase.kt`'s own
+  comment on when that must become a real `Migration`). The lookup API
+  (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
+  `stationIdsInSystem`) is deliberately unused so far - rewiring Candidate
+  Discovery's live-ESI walk (and Realized Trades' Jita-station filter) onto
+  it needs a populated cache and a real device to verify the results match,
+  and is tracked as a follow-up.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters (not per-tool, since Trading is the only tool with a
   config on this platform yet): a hand-written form over `TradingConfig`'s
@@ -216,8 +281,24 @@ current scope.
   reason `CandidateDiscovery.kt` itself doesn't have it),
   `EsiClientTest.kt` (a port of `tests/test_esi_client.py`'s
   `_percentile`/`_summarize_orders` cases - the order-book pricing math
-  behind every `OrderStats`), and `TokenRecordTest.kt` (a port of
+  behind every `OrderStats`), `TokenRecordTest.kt` (a port of
   `tests/test_auth.py`'s `test_is_expired_respects_skew` -
   `TokenRecord.isExpired` is the one pure, Android-independent piece of
-  `data/auth/`). No lint step, no instrumented/UI tests (would need an
-  emulator), no release signing, no Play Store upload.
+  `data/auth/`), `GoonmetricsClientTest.kt` (parser-only tests against
+  hand-written Goonmetrics history XML, mirroring
+  `tests/test_goonmetrics_client.py`'s `_parse_history_xml` cases - a real
+  `kxml2` `XmlPullParser` stands in for `android.util.Xml`, which is a
+  throwing stub on the JVM unit-test classpath), `HistoryBacktestTest.kt`
+  (a port of `tests/test_history_backtest.py`'s `compute_margin_trends`
+  cases - the window math, the thin-history/near-zero-baseline exclusions,
+  and the inner-join-drops-unpaired-days behavior), `TradeReconciliation
+  Test.kt` (ported case-for-case from `tests/test_trade_reconciliation.py`
+  where it still applies - FIFO matching, the buy-after-sell `break` rule,
+  location filters, the journal-vs-modeled sell price, and the
+  cost-basis-weighted summary; its SDE/storage-backed cases have no
+  counterpart here), and `SdeCsvTest.kt` (the hand-rolled CSV reader
+  against hand-written documents matching the real Fuzzwork shapes -
+  quoted commas, embedded newlines, doubled quotes, a BOM on the header -
+  since this parser has no desktop equivalent to port tests from at all).
+  No lint step, no instrumented/UI tests (would need an emulator), no
+  release signing, no Play Store upload.

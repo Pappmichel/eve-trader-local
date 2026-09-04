@@ -98,4 +98,10 @@ dependencies {
     // build's own equivalents, makes no network call and opens no
     // database, so it needs no Android instrumentation/emulator to test.
     testImplementation("junit:junit:4.13.2")
+    // Real org.xmlpull.v1 implementation for GoonmetricsClientTest:
+    // android.util.Xml is a throwing framework stub on the unit-test
+    // classpath, so GoonmetricsClient's parser takes an XmlPullParser as a
+    // defaulted parameter and the test supplies this one (the same
+    // implementation the Android framework itself wraps on-device).
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
 }

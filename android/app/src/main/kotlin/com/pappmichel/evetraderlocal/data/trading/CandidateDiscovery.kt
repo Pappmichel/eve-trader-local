@@ -14,13 +14,17 @@ import kotlinx.coroutines.withContext
  * desktop build's candidate_discovery.py (`_build_candidate_universe_from_esi`)
  * only. The desktop version prefers a local Fuzzwork SDE cache
  * (`_build_candidate_universe_from_sde`) when populated, since walking
- * ESI's market-group tree live is ~2000+ separate calls; porting that SDE
- * cache (sde.py's Fuzzwork CSV download/parse pipeline, several SQLite
- * tables) is real, separate work not done yet (see ROADMAP.md's Android
- * section) - this always takes the slower live-ESI path, same as a fresh
- * desktop install that hasn't run `refresh-sde` yet. `guess_category`
- * likewise only has the string-heuristic fallback here, for the same
- * reason (no local SDE category names to look up).
+ * ESI's market-group tree live is ~2000+ separate calls. That SDE cache
+ * now exists on this platform too (data/sde/, see SdeRepository) - what is
+ * still missing is *this* file's half of the work: reading it here, with
+ * the "cache empty -> fall back to the live walk" branch the desktop
+ * version has, and verifying against a populated cache on a real device
+ * that the candidate set comes out the same. Until then this always takes
+ * the slower live-ESI path, same as a fresh desktop install that hasn't
+ * run `refresh-sde` yet (tracked as a follow-up in ROADMAP.md's Android
+ * section). `guess_category` likewise still has only the string-heuristic
+ * fallback here, for the same reason - `SdeRepository.categoryNameFor` is
+ * the lookup it would use.
  *
  * Concurrency: the desktop version's ESI-walk path is a plain sequential
  * loop; `resolve_effective_volume_bulk` elsewhere in that same file uses a
