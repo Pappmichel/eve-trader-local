@@ -18,6 +18,13 @@ enum class SdeFile(val filename: String, val table: String) {
     MARKET_GROUPS("invMarketGroups.csv", "sde_market_groups"),
     SOLAR_SYSTEMS("mapSolarSystems.csv", "sde_solar_systems"),
     STATIONS("staStations.csv", "sde_stations"),
+    // Reprocessing material yields (Ore & Minerals / Reprocessing Quote -
+    // see SdeTypeMaterialEntity's own docstring). Fetched last: every other
+    // table already exists without it, so a Reprocessing-Quote-only failure
+    // here should not make an otherwise-successful refresh look worse than
+    // it is - see this enum's own file-ordering note above for why TYPES is
+    // first for the opposite reason (it is the biggest, and the ETag file).
+    TYPE_MATERIALS("invTypeMaterials.csv", "sde_type_materials"),
 }
 
 /** What a completed refresh reports back: row counts per table (the
@@ -40,11 +47,10 @@ data class SdeStaleness(
 /** The Android port of sde.py: download Fuzzwork's SDE CSVs, parse them, and
  * replace the local cache wholesale.
  *
- * **Scope: six of the desktop build's twelve tables.** `refresh_sde()`
+ * **Scope: seven of the desktop build's twelve tables.** `refresh_sde()`
  * downloads twelve CSVs because the desktop build also backs Production
  * (blueprint materials/products/job time/invention probability), a future
- * Doctrine EFT parser (`dgmTypeEffects.csv`), refining
- * (`invTypeMaterials.csv`) and Tech II/Faction detection
+ * Doctrine EFT parser (`dgmTypeEffects.csv`), and Tech II/Faction detection
  * (`invMetaTypes.csv`). None of those tools exist on Android yet - not the
  * screens, not the business logic - so fetching their tables here would be
  * several extra megabytes of download and several extra tables of storage
@@ -57,14 +63,16 @@ data class SdeStaleness(
  *  - `staStations` + `mapSolarSystems` - "which stations are in region X",
  *    which the station table alone cannot answer: `staStations.csv` has a
  *    solar system id and no region id, so the region question is a join.
+ *  - `invTypeMaterials` (+ `invTypes.portionSize`) - reprocessing yields, for
+ *    the Ore & Minerals / Reprocessing Quote screen (see
+ *    `data/refining/ReprocessingYield.kt`). Added after the fact, exactly as
+ *    this docstring predicted: a CSV, an entity, and a Room version bump.
  * This mirrors how every other part of this Android build has been ported:
  * the shape now, the rest when the tool that needs it arrives. Adding a table
  * later is a CSV, an entity, and a Room version bump - not a redesign.
  *
- * `metaGroupID` and `portionSize` are skipped inside `invTypes` for the same
- * reason: `portionSize` only matters to reprocessing, and `metaGroupID` needs
- * the separate `invMetaTypes.csv` fetch that only Tech II/Faction detection
- * would read.
+ * `metaGroupID` is still skipped inside `invTypes` - it needs the separate
+ * `invMetaTypes.csv` fetch that only Tech II/Faction detection would read.
  *
  * **Atomicity.** Every file is downloaded and parsed *before* the database is
  * touched, and the replace is one transaction - the same two-part guarantee
@@ -130,6 +138,7 @@ class SdeRepository(
                         // drops the column degrades to null meta levels
                         // instead of an empty type table.
                         metaLevel = row.intOrNull("metaLevel"),
+                        portionSize = row.intOrNull("portionSize"),
                     )
                 )
             }
@@ -205,6 +214,18 @@ class SdeRepository(
             }
         }
 
+        onProgress(SdeFile.TYPE_MATERIALS, 7, total)
+        val typeMaterials = ArrayList<SdeTypeMaterialEntity>(200_000)
+        downloader.fetchCsv(SdeFile.TYPE_MATERIALS.filename) { reader ->
+            typeMaterials.clear()
+            SdeCsv.readRows(reader) { row ->
+                val typeId = row.intOrNull("typeID") ?: return@readRows
+                val materialTypeId = row.intOrNull("materialTypeID") ?: return@readRows
+                val quantity = row.doubleOrNull("quantity") ?: return@readRows
+                typeMaterials.add(SdeTypeMaterialEntity(typeId, materialTypeId, quantity))
+            }
+        }
+
         val refreshedAt = Instant.now().toString()
         // withTransaction is room-ktx's coroutine-aware counterpart of an
         // @Transaction DAO method: it pins every suspending call in the block
@@ -219,12 +240,14 @@ class SdeRepository(
             dao.clearMarketGroups()
             dao.clearSolarSystems()
             dao.clearStations()
+            dao.clearTypeMaterials()
             dao.insertTypes(types)
             dao.insertGroups(groups)
             dao.insertCategories(categories)
             dao.insertMarketGroups(marketGroups)
             dao.insertSolarSystems(solarSystems)
             dao.insertStations(stations)
+            dao.insertTypeMaterials(typeMaterials)
             dao.upsertRefreshState(SdeRefreshStateEntity(refreshedAt = refreshedAt, dumpEtag = dumpEtag))
         }
 
@@ -261,6 +284,7 @@ class SdeRepository(
             SdeFile.MARKET_GROUPS.table to dao.countMarketGroups(),
             SdeFile.SOLAR_SYSTEMS.table to dao.countSolarSystems(),
             SdeFile.STATIONS.table to dao.countStations(),
+            SdeFile.TYPE_MATERIALS.table to dao.countTypeMaterials(),
         )
     }
 
@@ -269,9 +293,10 @@ class SdeRepository(
     // against local storage in place of a live ESI round-trip; all of them
     // return null/empty on a cache that has never been refreshed, which is
     // the same "degrade to the slow path" behaviour the desktop build has
-    // before its first `refresh-sde`. Nothing on this platform reads them
-    // yet - rewiring the existing screens onto them is deliberately left as
-    // separate, verifiable work (see ROADMAP.md's Android section).
+    // before its first `refresh-sde`. Candidate Discovery, Realized Trades,
+    // the Doctrine EFT parser, and Reprocessing Quote all read some of
+    // these now; Station Trading's own candidate discovery is the one
+    // tracked follow-up left (see ROADMAP.md's Android section).
 
     /** The SDE name for a type id - what `/universe/types/{id}/` costs a
      * network round-trip to answer. */
@@ -306,6 +331,24 @@ class SdeRepository(
     /** Every Ship/Structure type name in the cache - see
      * `SdeDao.hullTypeNames`'s own doc. */
     suspend fun hullTypeNames(): List<String> = withContext(Dispatchers.IO) { dao.hullTypeNames() }
+
+    /** Exact, case-insensitive name -> type id - what a Reprocessing Quote
+     * paste line's own item name resolves through (see
+     * `data/refining/ReprocessingQuote.kt`). Null on no match, same
+     * "unknown, don't guess" contract as `typeName`'s reverse lookup. */
+    suspend fun resolveTypeIdByName(name: String): Int? =
+        withContext(Dispatchers.IO) { dao.resolveTypeIdByName(name) }
+
+    /** `SdeTypeEntity.portionSize` for one type - see that field's own
+     * docstring. */
+    suspend fun portionSize(typeId: Int): Int? = withContext(Dispatchers.IO) { dao.portionSize(typeId) }
+
+    /** `{material_type_id: quantity per whole portion}` for one type - the
+     * counterpart of storage.py's `get_type_materials`. Empty (not null) for
+     * a type with no material rows at all. */
+    suspend fun typeMaterials(typeId: Int): List<Pair<Int, Double>> = withContext(Dispatchers.IO) {
+        dao.typeMaterials(typeId).map { it.materialTypeId to it.quantity }
+    }
 
     // -------------------------------------------------------- bulk reads
     // Whole-table reads for CandidateDiscovery.buildCandidateUniverseFromSde

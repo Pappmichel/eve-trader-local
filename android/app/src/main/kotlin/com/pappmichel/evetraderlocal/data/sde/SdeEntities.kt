@@ -12,7 +12,7 @@ import androidx.room.Upsert
  * build's `sde_*` SQLite tables (storage.py's schema block), plus the DAO the
  * refresh and the lookups go through.
  *
- * Six of the desktop build's twelve SDE tables are modelled here, and that
+ * Seven of the desktop build's twelve SDE tables are modelled here, and that
  * gap is deliberate - see SdeRepository's docstring for the full "port only
  * what is used" reasoning and the list of what is intentionally absent.
  *
@@ -42,6 +42,36 @@ data class SdeTypeEntity(
     val published: Int,
     val marketGroupId: Int?,
     val metaLevel: Int?,
+    /** The whole-batch unit reprocessing rounds down to before applying
+     * yield% (e.g. Veldspar=100) - added alongside `sde_type_materials` for
+     * the Ore & Minerals / Reprocessing Quote port (see
+     * `data/refining/ReprocessingYield.kt`). Already present in
+     * `invTypes.csv` itself, same column sde.py's own `types_rows` reads -
+     * no separate fetch needed, unlike the materials table below. Null for
+     * every type that isn't reprocessable at all (ships, skillbooks, BPOs/
+     * BPCs), which `applyReprocessingYield` treats as "nothing to
+     * reprocess", not an error. */
+    val portionSize: Int? = null,
+)
+
+/** One `invTypeMaterials.csv` row: reprocessing `typeId` yields `quantity`
+ * units of `materialTypeId` per whole portion (`SdeTypeEntity.portionSize`),
+ * before any yield% is applied. Added for the Ore & Minerals / Reprocessing
+ * Quote port - the desktop build's `sde_type_materials` table
+ * (storage.py), out of scope until this feature needed it (see
+ * SdeRepository's own docstring on "port only what's used").
+ *
+ * A composite primary key over both columns (rather than a synthetic
+ * auto-increment id this table has no use for) reflects the real shape of
+ * the data - one type reprocesses into several materials - and happens to
+ * reject the one malformed input this table could ever see (two rows
+ * disagreeing about the same type/material pair) as a constraint violation
+ * instead of silently keeping one and dropping the other. */
+@Entity(tableName = "sde_type_materials", primaryKeys = ["typeId", "materialTypeId"], indices = [Index("typeId")])
+data class SdeTypeMaterialEntity(
+    val typeId: Int,
+    val materialTypeId: Int,
+    val quantity: Double,
 )
 
 @Entity(tableName = "sde_groups")
@@ -126,6 +156,7 @@ interface SdeDao {
     @Insert suspend fun insertMarketGroups(rows: List<SdeMarketGroupEntity>)
     @Insert suspend fun insertSolarSystems(rows: List<SdeSolarSystemEntity>)
     @Insert suspend fun insertStations(rows: List<SdeStationEntity>)
+    @Insert suspend fun insertTypeMaterials(rows: List<SdeTypeMaterialEntity>)
 
     @Query("DELETE FROM sde_types") suspend fun clearTypes()
     @Query("DELETE FROM sde_groups") suspend fun clearGroups()
@@ -133,6 +164,7 @@ interface SdeDao {
     @Query("DELETE FROM sde_market_groups") suspend fun clearMarketGroups()
     @Query("DELETE FROM sde_solar_systems") suspend fun clearSolarSystems()
     @Query("DELETE FROM sde_stations") suspend fun clearStations()
+    @Query("DELETE FROM sde_type_materials") suspend fun clearTypeMaterials()
 
     // ------------------------------------------------------ refresh state
     @Upsert suspend fun upsertRefreshState(state: SdeRefreshStateEntity)
@@ -216,6 +248,32 @@ interface SdeDao {
     )
     suspend fun hullTypeNames(): List<String>
 
+    /** Exact, case-insensitive name -> type id, the same match rule
+     * quote.py's `resolve_type_id` uses (a paste line's own name field
+     * should already be a real EVE item name, so a fuzzy/substring match
+     * risks silently resolving to the wrong item) - `COLLATE NOCASE` does
+     * the case folding in SQL rather than pulling candidates into Kotlin to
+     * compare, since (unlike desktop's `search_sde_types`, which also
+     * powers a type-ahead search box) nothing here needs the substring
+     * candidates for anything else. `LIMIT 1` is safe: real EVE item names
+     * are unique regardless of case, so more than one exact match would
+     * mean a corrupted cache, not a genuine ambiguity to disambiguate. */
+    @Query("SELECT typeId FROM sde_types WHERE typeName = :name COLLATE NOCASE LIMIT 1")
+    suspend fun resolveTypeIdByName(name: String): Int?
+
+    /** `SdeTypeEntity.portionSize` for one type - see that field's own
+     * docstring. Null for a type with no portion size at all (not yet
+     * SDE-refreshed, or genuinely not reprocessable). */
+    @Query("SELECT portionSize FROM sde_types WHERE typeId = :typeId")
+    suspend fun portionSize(typeId: Int): Int?
+
+    /** Every material `typeId` reprocesses into, one whole portion's worth
+     * each - the counterpart of storage.py's `get_type_materials`. Empty for
+     * a type with no material rows at all (same two reasons as
+     * `portionSize` above). */
+    @Query("SELECT materialTypeId, quantity FROM sde_type_materials WHERE typeId = :typeId")
+    suspend fun typeMaterials(typeId: Int): List<TypeMaterialRow>
+
     // ------------------------------------------------------- row counts
     // The counterpart of storage.py's `sde_row_counts`: what the UI prints
     // after a refresh, and the cheapest way to tell an empty cache from a
@@ -226,4 +284,11 @@ interface SdeDao {
     @Query("SELECT COUNT(*) FROM sde_market_groups") suspend fun countMarketGroups(): Int
     @Query("SELECT COUNT(*) FROM sde_solar_systems") suspend fun countSolarSystems(): Int
     @Query("SELECT COUNT(*) FROM sde_stations") suspend fun countStations(): Int
+    @Query("SELECT COUNT(*) FROM sde_type_materials") suspend fun countTypeMaterials(): Int
 }
+
+/** Room's projection shape for `SdeDao.typeMaterials` - a `data class` (not
+ * the entity itself) because the query selects two of its three columns,
+ * and Room maps a `@Query` result positionally/by-name onto whatever type is
+ * asked for, entity or not. */
+data class TypeMaterialRow(val materialTypeId: Int, val quantity: Double)

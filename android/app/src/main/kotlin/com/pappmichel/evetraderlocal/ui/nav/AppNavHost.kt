@@ -35,6 +35,7 @@ import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
 import com.pappmichel.evetraderlocal.ui.screens.PriceHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
+import com.pappmichel.evetraderlocal.ui.screens.ReprocessingQuoteScreen
 import com.pappmichel.evetraderlocal.ui.screens.SdeDataScreen
 import com.pappmichel.evetraderlocal.ui.screens.SettingsScreen
 import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
@@ -53,15 +54,17 @@ private const val STATION_TRADING_SHORTLIST_ROUTE = "station-trading/shortlist"
 private const val STATION_TRADING_UNDERCUT_ROUTE = "station-trading/undercut-skills"
 private const val PRODUCTION_ITEM_LOOKUP_ROUTE = "production/item-lookup"
 private const val DOCTRINE_FITTINGS_ROUTE = "doctrine/fittings"
+private const val REPROCESSING_QUOTE_ROUTE = "ore-minerals/reprocessing-quote"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
  * for - currently Trading/Candidate Discovery, Trading/Shortlist,
  * Trading/Unlisted Stock & Undercut Check, Trading/Price History,
  * Trading/Realized Trades & Transactions, Station Trading's own
- * Shortlist/Undercut & Skills, Production/Item Lookup, and
- * Doctrine/Fittings (see ROADMAP.md's Android section for what's ported
- * so far). Add a route here as each new screen replaces its placeholder. */
+ * Shortlist/Undercut & Skills, Production/Item Lookup, Doctrine/Fittings,
+ * and Ore & Minerals' own Reprocessing Quote (see ROADMAP.md's Android
+ * section for what's ported so far). Add a route here as each new screen
+ * replaces its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -81,6 +84,8 @@ private fun routeFor(tool: String, view: String): String =
         PRODUCTION_ITEM_LOOKUP_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
+    } else if (tool == "Ore & Minerals" && view == "Reprocessing Quote") {
+        REPROCESSING_QUOTE_ROUTE
     } else {
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
@@ -202,6 +207,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(STATION_TRADING_UNDERCUT_ROUTE) { StationTradingUndercutScreen(database, tokenManager) }
                 composable(PRODUCTION_ITEM_LOOKUP_ROUTE) { ItemLookupScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
+                composable(REPROCESSING_QUOTE_ROUTE) { ReprocessingQuoteScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""

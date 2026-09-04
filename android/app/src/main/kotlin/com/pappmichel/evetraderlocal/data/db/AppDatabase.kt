@@ -12,6 +12,7 @@ import com.pappmichel.evetraderlocal.data.sde.SdeRefreshStateEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeSolarSystemEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeStationEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeTypeEntity
+import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
 
 /** The local, single-user, on-device database - the direct Android
  * counterpart of the desktop build's own SQLite file (storage.py).
@@ -21,15 +22,17 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeEntity
  * extra "where do files live" decision needed here.
  *
  * Version 2 adds the SDE cache tables (data/sde/) alongside the original
- * tokens/settings pair. */
+ * tokens/settings pair. Version 3 adds `sde_type_materials` and
+ * `SdeTypeEntity.portionSize` for the Ore & Minerals / Reprocessing Quote
+ * port (see SdeRepository's own docstring). */
 @Database(
     entities = [
         TokenEntity::class, SettingsEntity::class,
         SdeTypeEntity::class, SdeGroupEntity::class, SdeCategoryEntity::class,
         SdeMarketGroupEntity::class, SdeSolarSystemEntity::class, SdeStationEntity::class,
-        SdeRefreshStateEntity::class,
+        SdeRefreshStateEntity::class, SdeTypeMaterialEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
