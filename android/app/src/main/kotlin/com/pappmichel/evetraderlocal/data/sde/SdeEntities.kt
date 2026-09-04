@@ -126,6 +126,18 @@ interface SdeDao {
     @Query("SELECT * FROM sde_refresh_state WHERE id = 1")
     suspend fun refreshState(): SdeRefreshStateEntity?
 
+    // ---------------------------------------------------- bulk reads
+    // Whole-table reads for CandidateDiscovery.buildCandidateUniverseFromSde
+    // - unlike the single-row lookups below, that caller needs the *entire*
+    // market-group tree and type table in memory at once to walk it, the
+    // same shape storage.py's own load_sde_market_groups/
+    // load_sde_types_with_market_group/load_sde_category_names give the
+    // desktop build's build_candidate_universe.
+    @Query("SELECT * FROM sde_market_groups") suspend fun allMarketGroups(): List<SdeMarketGroupEntity>
+    @Query("SELECT * FROM sde_types WHERE marketGroupId IS NOT NULL") suspend fun typesWithMarketGroup(): List<SdeTypeEntity>
+    @Query("SELECT * FROM sde_groups") suspend fun allGroups(): List<SdeGroupEntity>
+    @Query("SELECT * FROM sde_categories") suspend fun allCategories(): List<SdeCategoryEntity>
+
     // ----------------------------------------------------------- lookups
     @Query("SELECT typeName FROM sde_types WHERE typeId = :typeId")
     suspend fun typeName(typeId: Int): String?

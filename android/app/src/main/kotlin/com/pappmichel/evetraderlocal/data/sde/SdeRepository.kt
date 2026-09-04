@@ -296,4 +296,28 @@ class SdeRepository(
         withContext(Dispatchers.IO) { dao.stationIdsInSystem(systemId) }
 
     suspend fun type(typeId: Int): SdeTypeEntity? = withContext(Dispatchers.IO) { dao.type(typeId) }
+
+    // -------------------------------------------------------- bulk reads
+    // Whole-table reads for CandidateDiscovery.buildCandidateUniverseFromSde
+    // - see SdeDao's own comment on why these differ from the single-row
+    // lookups above.
+
+    suspend fun marketGroups(): List<SdeMarketGroupEntity> = withContext(Dispatchers.IO) { dao.allMarketGroups() }
+
+    suspend fun typesWithMarketGroup(): List<SdeTypeEntity> = withContext(Dispatchers.IO) { dao.typesWithMarketGroup() }
+
+    /** `{category_id: category_name}` - the counterpart of storage.py's
+     * `load_sde_category_names`. */
+    suspend fun categoryNames(): Map<Int, String> = withContext(Dispatchers.IO) {
+        dao.allCategories().associate { it.categoryId to (it.categoryName ?: "") }
+    }
+
+    /** `{group_id: category_id}` - joined with `SdeTypeEntity.groupId`
+     * (already present on every type row) by the caller to get a type's
+     * category_id without a second per-type_id query, the same
+     * whole-table-then-join-in-memory shape `buildCandidateUniverseFromSde`
+     * uses throughout. */
+    suspend fun groupCategoryIds(): Map<Int, Int> = withContext(Dispatchers.IO) {
+        dao.allGroups().mapNotNull { g -> g.categoryId?.let { g.groupId to it } }.toMap()
+    }
 }

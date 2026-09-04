@@ -6,12 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Ports the desktop build's `tests/test_candidate_discovery.py` coverage
- * of the pure helpers `CandidateDiscovery` still has an equivalent of -
- * `isWantedMarketPath`, `marketGroupPath`, and the string/volume fallback
- * half of `guessCategory` (the real-SDE-category-name half isn't ported,
- * since there's no SDE cache on this platform - see `CandidateDiscovery.kt`'s
- * own docstring). No network, no coroutines - these three don't touch
- * either. */
+ * of the pure helpers `isWantedMarketPath`, `marketGroupPath`, and
+ * `guessCategory` (both the real-SDE-category-name half and the
+ * string/volume fallback half - see `CandidateDiscovery.kt`'s own
+ * docstring for what `buildCandidateUniverseFromSde`/`buildCandidateUniverse`
+ * do with the network/database calls these three don't touch). */
 class CandidateDiscoveryTest {
     // ------------------------------------------------- isWantedMarketPath
     @Test
@@ -66,6 +65,63 @@ class CandidateDiscoveryTest {
     @Test
     fun `guessCategory - otherwise Material`() {
         assertEquals("Material", CandidateDiscovery.guessCategory("Manufacture > X", "Tritanium", 0.01))
+    }
+
+    private val categoryNames = mapOf(20 to "Implant", 18 to "Drone")
+
+    @Test
+    fun `guessCategory - a category_id prefers the real SDE category name`() {
+        assertEquals(
+            "Implant",
+            CandidateDiscovery.guessCategory(
+                "Implants & Boosters > X", "Ocular Filter", 1.0, categoryId = 20, categoryNames = categoryNames,
+            ),
+        )
+        assertEquals(
+            "Drone",
+            CandidateDiscovery.guessCategory(
+                "Drones > X", "Hobgoblin II", 5.0, categoryId = 18, categoryNames = categoryNames,
+            ),
+        )
+    }
+
+    @Test
+    fun `guessCategory - the booster group splits Drugs out of Implant`() {
+        assertEquals(
+            "Drugs",
+            CandidateDiscovery.guessCategory(
+                "Implants & Boosters > Booster", "Blue Pill", 1.0,
+                categoryId = 20, categoryNames = categoryNames, groupId = CandidateDiscovery.BOOSTER_GROUP_ID,
+            ),
+        )
+        assertEquals(
+            "Implant",
+            CandidateDiscovery.guessCategory(
+                "Implants & Boosters > X", "Ocular Filter", 1.0,
+                categoryId = 20, categoryNames = categoryNames, groupId = 999,
+            ),
+        )
+    }
+
+    @Test
+    fun `guessCategory - a category_id with no name falls back to Module-Rig or Material`() {
+        assertEquals(
+            "Module/Rig",
+            CandidateDiscovery.guessCategory("x", "y", 1.0, categoryId = CandidateDiscovery.MODULE_CATEGORY_ID, categoryNames = emptyMap()),
+        )
+        assertEquals("Material", CandidateDiscovery.guessCategory("x", "y", 1.0, categoryId = 1234, categoryNames = emptyMap()))
+    }
+
+    @Test
+    fun `guessCategory - the name heuristic only applies without a category_id`() {
+        // Volume alone (6.0) would say Module/Rig under the heuristic, but a
+        // real category_id always wins.
+        assertEquals(
+            "Implant",
+            CandidateDiscovery.guessCategory(
+                "Implants & Boosters > X", "Ocular Filter", 6.0, categoryId = 20, categoryNames = categoryNames,
+            ),
+        )
     }
 
     // --------------------------------------------------------- marketGroupPath

@@ -345,10 +345,23 @@ which "careful reading" alone had caught):
   (Kotlin has no equivalent, and one state machine handling embedded
   newlines/quoted commas beats a new dependency for six fixed-shape files).
   The lookup API (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
-  `stationIdsInSystem`) is deliberately unused so far - rewiring Candidate
-  Discovery (and Realized Trades' buy-side filter) onto it is tracked
-  as a follow-up, needing a populated cache and a real device to verify
-  against.
+  `stationIdsInSystem`) is used by Candidate Discovery now (see below) but
+  still unused elsewhere - Realized Trades' Jita-station buy-side filter and
+  Station Trading's own candidate discovery are tracked follow-ups, needing
+  a populated cache and a real device to verify against.
+- Candidate Discovery now reads the SDE cache when it's populated
+  (`CandidateDiscovery.buildCandidateUniverseFromSde`, via new `SdeDao`/
+  `SdeRepository` bulk-table reads) - the fast path desktop's own
+  `build_candidate_universe` prefers, skipping the ~2000-call live-ESI walk
+  entirely. `guessCategory` grows the real-SDE-category-name half
+  (`categoryId`/`categoryNames`/`groupId` params, with the Booster/Drugs
+  vs. Implant split `IMPLANT_CATEGORY_ID`/`BOOSTER_GROUP_ID` document) -
+  the string/volume heuristic remains the fallback for the live-ESI path,
+  which has no per-type category to give it. One documented simplification:
+  the SDE path skips desktop's capital-module packaged-volume ESI
+  correction (`resolve_effective_volume_bulk`), since applying it would
+  mean an ESI round-trip per capital module even on the cache-only fast
+  path - a capital module's volume here is the raw (larger) SDE figure.
 - Station Trading -> Shortlist and Undercut & Skills (`data/trading/
   StationTradingConfig.kt`, `StationTradingCandidateDiscovery.kt`,
   `StationTradingUndercut.kt`, `StationTradingShortlistRepository.kt`,
@@ -379,9 +392,10 @@ which "careful reading" alone had caught):
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
 or Unlisted-Stock-&-Undercut check across multiple characters, rewiring
-Candidate Discovery, Realized Trades, and Station Trading onto the new SDE
-cache, `average_daily_sold_by_type`, the other three tools' business logic
-(Production, Doctrine, Ore & Minerals/Refining) and every tool's own
+Realized Trades and Station Trading onto the new SDE cache (Candidate
+Discovery is done, see above), `average_daily_sold_by_type`, the other
+three tools' business logic (Production, Doctrine, Ore & Minerals/Refining)
+and every tool's own
 Settings tab, tests for anything beyond the pure logic already covered, an
 app icon, a Play Store listing.
 

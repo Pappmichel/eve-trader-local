@@ -35,29 +35,33 @@ import com.pappmichel.evetraderlocal.data.trading.CandidateDiscovery
 import com.pappmichel.evetraderlocal.data.trading.ShortlistItem
 import com.pappmichel.evetraderlocal.data.trading.ShortlistRepository
 import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
+import com.pappmichel.evetraderlocal.data.sde.SdeRepository
 import kotlinx.coroutines.launch
 
 /** Trading -> Candidate Discovery: the first real (non-placeholder) tool
  * screen, mirroring the desktop build's trading_candidate_discovery.py
- * view - "Discover" runs CandidateDiscovery.buildCandidateUniverse (see
- * that object's own docstring for what's simplified vs. the desktop
- * version: no local SDE cache yet, so this always takes the slower
- * live-ESI-walk path). Each row also has an "Add to Shortlist" button -
- * a manual stand-in for the desktop build's `refresh-and-prune`
- * auto-add (which additionally applies hit-rate/movement thresholds -
- * not ported here, see ROADMAP.md's Android section), so a candidate
- * found here doesn't have to be retyped by hand into the Shortlist
- * screen's Add dialog. */
+ * view - "Discover" runs CandidateDiscovery.buildCandidateUniverse, which
+ * prefers the local SDE cache (near-instant, no ESI calls) and only falls
+ * back to the slower live-ESI market-group walk when that cache hasn't
+ * been refreshed yet (see SdeDataScreen) - see CandidateDiscovery.kt's own
+ * docstring for what's simplified in the SDE-backed path vs. desktop (the
+ * capital-module packaged-volume correction isn't ported). Each row also
+ * has an "Add to Shortlist" button - a manual stand-in for the desktop
+ * build's `refresh-and-prune` auto-add (which additionally applies
+ * hit-rate/movement thresholds - not ported here, see ROADMAP.md's
+ * Android section), so a candidate found here doesn't have to be retyped
+ * by hand into the Shortlist screen's Add dialog. */
 @Composable
 fun CandidateDiscoveryScreen(database: AppDatabase) {
     val scope = rememberCoroutineScope()
     val configRepo = remember { TradingConfigRepository(database) }
     val shortlistRepo = remember { ShortlistRepository(database) }
+    val sdeRepo = remember { SdeRepository(database) }
 
     var candidates by remember { mutableStateOf<List<Candidate>>(emptyList()) }
     var shortlistedIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
-    var status by remember { mutableStateOf("Not run yet - discovery walks EVE's market-group tree live " +
-        "(it does not read the local SDE cache yet) and can take a while.") }
+    var status by remember { mutableStateOf("Not run yet - Discover reads the local SDE cache when it's " +
+        "populated (see SDE Data), or falls back to a slower live market-group walk otherwise.") }
     var busy by remember { mutableStateOf(false) }
     var progress by remember { mutableStateOf(0f) }
 
@@ -80,14 +84,17 @@ fun CandidateDiscoveryScreen(database: AppDatabase) {
     fun runDiscovery() {
         busy = true
         progress = 0f
-        status = "Loading market groups..."
+        status = "Checking the local SDE cache..."
         scope.launch {
             try {
                 val config = configRepo.load()
-                val result = CandidateDiscovery.buildCandidateUniverse(config) { done, total ->
+                val result = CandidateDiscovery.buildCandidateUniverse(config, sde = sdeRepo) { done, total ->
+                    // Only ever invoked on the live-ESI fallback path - the
+                    // SDE path returns in one shot, with nothing to report
+                    // progress through.
                     if (total > 0) {
                         progress = done.toFloat() / total.toFloat()
-                        status = "Resolving candidates... $done / $total"
+                        status = "Resolving candidates via live ESI... $done / $total"
                     }
                 }
                 candidates = result.sortedBy { it.item }

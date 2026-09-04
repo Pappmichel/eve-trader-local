@@ -166,10 +166,27 @@ current scope.
   never shipped or been installed anywhere real (see `AppDatabase.kt`'s own
   comment on when that must become a real `Migration`). The lookup API
   (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
-  `stationIdsInSystem`) is deliberately unused so far - rewiring Candidate
-  Discovery's live-ESI walk (and Realized Trades' Jita-station filter) onto
-  it needs a populated cache and a real device to verify the results match,
-  and is tracked as a follow-up.
+  `stationIdsInSystem`) plus new bulk-table reads (`marketGroups`,
+  `typesWithMarketGroup`, `categoryNames`, `groupCategoryIds`) now back
+  Candidate Discovery's SDE-backed fast path (see below). Realized Trades'
+  Jita-station buy-side filter and Station Trading's own candidate
+  discovery still don't read it - both need a populated cache and a real
+  device to verify the results match, tracked as a follow-up.
+- **Candidate Discovery reads the SDE cache** (`CandidateDiscovery.
+  buildCandidateUniverseFromSde`/`buildCandidateUniverse`): the same
+  "prefer the local cache, fall back to the live ESI walk only when it's
+  empty" branch desktop's own `build_candidate_universe` takes, now that
+  the SDE cache itself exists on this platform. `guessCategory` grows the
+  real-SDE-category-name half (optional `categoryId`/`categoryNames`/
+  `groupId` params) alongside the string/volume heuristic, which remains
+  the fallback for the live-ESI path (fetching a real category there would
+  mean an extra ESI call per type). One documented simplification vs.
+  desktop: the SDE path skips the capital-module packaged-volume
+  correction (`resolve_effective_volume_bulk` on desktop) - applying it
+  would mean an ESI round-trip per capital module even on the cache-only
+  fast path, so a capital module's volume here is the raw (larger) SDE
+  figure rather than its true packaged volume. Ships have the same quirk
+  but are already excluded by `excludedPathPrefixes`.
 - **Station Trading -> Shortlist and Undercut & Skills** (`data/trading/
   StationTradingConfig.kt`, `StationTradingCandidateDiscovery.kt`,
   `StationTradingUndercut.kt`, `StationTradingShortlistRepository.kt`,
@@ -335,9 +352,9 @@ current scope.
   `tests/test_own_orders.py`'s single-seller `check_undercut`/
   `fetch_seller_stock_without_order` cases), and `CandidateDiscoveryTest.kt`
   (a port of `tests/test_candidate_discovery.py`'s `is_wanted_market_path`/
-  `_market_group_path` cases plus the string/volume fallback half of
-  `guess_category` - the real-SDE-category-name half isn't ported, same
-  reason `CandidateDiscovery.kt` itself doesn't have it),
+  `_market_group_path` cases plus both halves of `guess_category` - the
+  real-SDE-category-name half, including the Booster/Drugs-vs-Implant
+  split, and the string/volume fallback),
   `EsiClientTest.kt` (a port of `tests/test_esi_client.py`'s
   `_percentile`/`_summarize_orders` cases - the order-book pricing math
   behind every `OrderStats`), `TokenRecordTest.kt` (a port of
