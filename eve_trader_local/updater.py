@@ -20,6 +20,7 @@ point anywhere, including into the working tree.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -29,15 +30,26 @@ from typing import Optional, Sequence
 
 import requests
 
+from . import _version
 from .errors import ActionError
-from .paths import PROJECT_ROOT, config_path, data_dir, db_path
+from .paths import PROJECT_ROOT, config_path, data_dir, db_path, is_frozen
 
 GITHUB_REPO = "pappmichel/eve-trader-local"
 COMMITS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+RELEASES_LATEST_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 UPDATE_BRANCH = "main"
 HTTP_TIMEOUT_SECONDS = 15
 GIT_TIMEOUT_SECONDS = 120
 PIP_TIMEOUT_SECONDS = 900
+DOWNLOAD_TIMEOUT_SECONDS = 300
+
+# Must exactly match the asset names build-windows.yml's release step
+# produces/attaches - see that workflow's "Compute checksum" step.
+_EXE_ASSET_NAME = "eve-trader-local.exe"
+_CHECKSUM_ASSET_NAME = "eve-trader-local.exe.sha256"
+_UPDATE_SUBDIR = "update"
+_NEW_EXE_NAME = "eve-trader-local.new.exe"
+_HELPER_SCRIPT_NAME = "apply_update.bat"
 
 # An origin pointing somewhere else entirely means this checkout is a fork or
 # an unrelated repo that happens to sit at the same path; hard-resetting it to
@@ -416,3 +428,227 @@ def _deps_failed_message(reason: str) -> str:
         f"{repo_root()}:\n"
         f"  {Path(sys.executable).name} -m pip install -e ."
     )
+
+
+# --------------------------------------------------------------------------
+# Stage 2: binary self-update for the packaged .exe (see ROADMAP.md's
+# "Self-update mechanism" section). Everything above this point is Stage 1
+# (git-checkout only, CLI-driven) and stays exactly as it is - a frozen
+# build has no .git to reset in the first place, so `is_git_checkout()`
+# already reports False for it on its own; the functions below are simply
+# the separate mechanism that actually applies to it.
+# --------------------------------------------------------------------------
+
+@dataclass
+class ReleaseInfo:
+    tag: str
+    exe_url: str
+    checksum_url: str
+
+
+@dataclass
+class BinaryUpdateStatus:
+    """Same "never fatal by itself" shape as `UpdateStatus` above - a
+    startup/menu check that can't reach GitHub must not stop the app."""
+
+    installed_version: Optional[str]
+    latest_tag: Optional[str] = None
+    error: Optional[str] = None
+
+    @property
+    def update_available(self) -> bool:
+        return bool(
+            self.installed_version
+            and self.latest_tag
+            and self.installed_version != self.latest_tag
+        )
+
+    def summary(self) -> str:
+        if self.error:
+            return f"Update check unavailable: {self.error}"
+        if not self.installed_version or not self.latest_tag:
+            return "Update check unavailable."
+        if self.update_available:
+            return f"Update available: {self.installed_version} -> {self.latest_tag}."
+        return f"Up to date ({self.installed_version})."
+
+
+def installed_version() -> Optional[str]:
+    """The tag this frozen build was built from (see `_version.py`), or
+    `None` outside a packaged build - there is nothing meaningful to compare
+    a source checkout's version against a release tag."""
+    return _version.VERSION if is_frozen() else None
+
+
+def latest_release() -> ReleaseInfo:
+    """GET .../releases/latest, no auth needed for a public read. Raises
+    ActionError on anything that went wrong - same contract as
+    `latest_remote_commit()` above."""
+    try:
+        resp = requests.get(
+            RELEASES_LATEST_API_URL,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "eve-trader-local-updater",
+            },
+            timeout=HTTP_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as e:
+        raise ActionError(f"could not reach GitHub ({e.__class__.__name__})") from e
+
+    if resp.status_code in (403, 429):
+        raise ActionError(
+            "GitHub rate-limited the update check (unauthenticated requests are "
+            "capped per IP). Try again later."
+        )
+    if resp.status_code != 200:
+        raise ActionError(f"GitHub returned HTTP {resp.status_code} for the update check")
+
+    try:
+        payload = resp.json()
+        tag = payload["tag_name"]
+        assets = payload["assets"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise ActionError("GitHub returned an unexpected response to the update check") from e
+    if not isinstance(tag, str) or not tag or not isinstance(assets, list):
+        raise ActionError("GitHub returned an unexpected response to the update check")
+
+    asset_urls = {
+        asset.get("name"): asset.get("browser_download_url")
+        for asset in assets
+        if isinstance(asset, dict)
+    }
+    exe_url = asset_urls.get(_EXE_ASSET_NAME)
+    checksum_url = asset_urls.get(_CHECKSUM_ASSET_NAME)
+    if not exe_url or not checksum_url:
+        raise ActionError(
+            f"the latest release ({tag}) is missing the expected "
+            f"{_EXE_ASSET_NAME}/{_CHECKSUM_ASSET_NAME} assets."
+        )
+    return ReleaseInfo(tag=tag, exe_url=exe_url, checksum_url=checksum_url)
+
+
+def check_for_binary_update() -> BinaryUpdateStatus:
+    """Read-only check, swallows every failure into `.error` - see
+    `BinaryUpdateStatus`'s own docstring."""
+    installed = installed_version()
+    try:
+        release = latest_release()
+    except ActionError as e:
+        return BinaryUpdateStatus(installed_version=installed, error=str(e))
+    return BinaryUpdateStatus(installed_version=installed, latest_tag=release.tag)
+
+
+def _download_to(url: str, dest: Path) -> None:
+    """Streams to a `.part` sibling and only renames it into place once
+    complete - a failed/interrupted download must never leave a
+    plausible-looking but truncated file at `dest`."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".part")
+    try:
+        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp:
+            if resp.status_code != 200:
+                raise ActionError(f"GitHub returned HTTP {resp.status_code} downloading {dest.name}")
+            with open(tmp, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=256 * 1024):
+                    if chunk:
+                        f.write(chunk)
+    except requests.RequestException as e:
+        raise ActionError(f"could not download {dest.name} ({e.__class__.__name__})") from e
+    tmp.replace(dest)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(256 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _parse_checksum_file(text: str) -> str:
+    """Reads the `<hex>  <filename>` format `Get-FileHash` writes (see
+    build-windows.yml's "Compute checksum" step) - only the hash matters
+    here, the filename half is purely documentation."""
+    first_line = text.strip().splitlines()[0] if text.strip() else ""
+    token = first_line.split()[0] if first_line.split() else ""
+    if len(token) != 64:
+        raise ActionError("the release's checksum file was not in the expected format")
+    return token.lower()
+
+
+def _relaunch_script(pid: int, new_exe: Path, target_exe: Path) -> str:
+    """A tiny generated .bat: Windows keeps a running .exe's file locked, so
+    this process cannot replace itself directly. The script waits for `pid`
+    (this process - which must exit right after launching it, see
+    `download_and_apply_binary_update`'s caller) to disappear from
+    `tasklist`, then `move`s the downloaded .exe over the running one's own
+    path - atomic on the same volume, unlike a copy+delete that could itself
+    get interrupted - relaunches it, and deletes itself last."""
+    return (
+        "@echo off\r\n"
+        f"set \"PID={pid}\"\r\n"
+        f"set \"NEWEXE={new_exe}\"\r\n"
+        f"set \"TARGET={target_exe}\"\r\n"
+        ":waitloop\r\n"
+        "tasklist /FI \"PID eq %PID%\" 2>NUL | find /I \"%PID%\" >NUL\r\n"
+        "if not errorlevel 1 (\r\n"
+        "    timeout /t 1 /nobreak >NUL\r\n"
+        "    goto waitloop\r\n"
+        ")\r\n"
+        "move /Y \"%NEWEXE%\" \"%TARGET%\" >NUL\r\n"
+        "start \"\" \"%TARGET%\"\r\n"
+        "del \"%~f0\"\r\n"
+    )
+
+
+def download_and_apply_binary_update(release: ReleaseInfo) -> None:
+    """Downloads the new .exe, verifies it against the release's own SHA256
+    checksum asset, then hands off to a detached helper script (see
+    `_relaunch_script`) that performs the actual file replacement once this
+    process exits. Nothing destructive happens before the checksum passes -
+    same "refuse before anything irreversible" posture `preflight()` uses
+    for the Stage-1 git flow.
+
+    The caller is responsible for closing the app immediately after this
+    returns (see `gui/dialogs/update_dialog.py`) - the helper script is
+    already waiting on this process's PID by the time control returns
+    here."""
+    if os.name != "nt":
+        raise ActionError(
+            "automatic binary updates are only supported on the Windows build. "
+            f"Download the new release manually from "
+            f"https://github.com/{GITHUB_REPO}/releases/latest"
+        )
+    if not is_frozen():
+        raise ActionError("binary updates only apply to the packaged .exe, not a source checkout.")
+
+    with _UpdateLock():
+        target_exe = Path(sys.executable).resolve()
+        update_dir = data_dir() / _UPDATE_SUBDIR
+        update_dir.mkdir(parents=True, exist_ok=True)
+        new_exe = update_dir / _NEW_EXE_NAME
+        checksum_file = update_dir / (_NEW_EXE_NAME + ".sha256")
+
+        _download_to(release.exe_url, new_exe)
+        _download_to(release.checksum_url, checksum_file)
+
+        expected = _parse_checksum_file(checksum_file.read_text(encoding="utf-8", errors="replace"))
+        actual = _sha256(new_exe)
+        checksum_file.unlink(missing_ok=True)
+        if actual != expected:
+            new_exe.unlink(missing_ok=True)
+            raise ActionError(
+                f"downloaded update failed checksum verification (expected {expected}, "
+                f"got {actual}); nothing was replaced."
+            )
+
+        script_path = update_dir / _HELPER_SCRIPT_NAME
+        script_path.write_text(_relaunch_script(os.getpid(), new_exe, target_exe), encoding="ascii")
+
+        subprocess.Popen(
+            ["cmd", "/c", str(script_path)],
+            cwd=str(update_dir),
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )

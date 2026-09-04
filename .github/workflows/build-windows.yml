@@ -32,6 +32,27 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Stamp the release version into the package
+        # eve_trader_local/_version.py ships committed with VERSION = None -
+        # a frozen build has no .git checkout inside it to ask "what version
+        # is this" the way Stage 1's updater does for a source checkout (see
+        # updater.py), so the in-app Stage-2 updater reads this instead.
+        # github.ref_name is the tag itself ("v1.2.3") on a tag push, and the
+        # current branch name on a manual workflow_dispatch run - fine
+        # either way, this only feeds a human-readable/compare-only string.
+        # Built as a plain array (one element per line) rather than a
+        # PowerShell here-string, since a here-string's closing "@ must sit
+        # at column 0 with no indentation - awkward to keep correct inside
+        # an indented YAML block scalar.
+        shell: pwsh
+        run: |
+          $lines = @(
+            'from __future__ import annotations',
+            'from typing import Optional',
+            'VERSION: Optional[str] = "${{ github.ref_name }}"'
+          )
+          Set-Content -Path eve_trader_local\_version.py -Value $lines -Encoding utf8
+
       - name: Install eve-trader-local with GUI + build extras
         run: pip install -e ".[gui,build]"
 
@@ -71,14 +92,29 @@ jobs:
           }
           Write-Host "Smoke test passed: process stayed alive and initialized its database."
 
+      - name: Compute checksum
+        # This is what the in-app Stage-2 updater (updater.py's
+        # download_and_apply_binary_update) verifies a downloaded .exe
+        # against before ever overwriting the running binary - it must not
+        # replace itself with anything it can't first confirm byte-for-byte
+        # matches what this workflow actually built.
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash -Path "packaging\dist\eve-trader-local.exe" -Algorithm SHA256).Hash.ToLower()
+          Set-Content -Path "packaging\dist\eve-trader-local.exe.sha256" -Value "$hash  eve-trader-local.exe" -Encoding ascii -NoNewline
+
       - uses: actions/upload-artifact@v4
         with:
           name: eve-trader-local-windows
-          path: packaging/dist/eve-trader-local.exe
+          path: |
+            packaging/dist/eve-trader-local.exe
+            packaging/dist/eve-trader-local.exe.sha256
 
       - name: Attach to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: packaging/dist/eve-trader-local.exe
+          files: |
+            packaging/dist/eve-trader-local.exe
+            packaging/dist/eve-trader-local.exe.sha256
           generate_release_notes: true

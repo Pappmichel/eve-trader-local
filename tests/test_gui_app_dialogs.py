@@ -1,5 +1,5 @@
-"""Smoke tests for the two app-level dialogs (gui/dialogs/) and the "App"
-menu that opens them - same "does the machinery work at all" level as
+"""Smoke tests for the app-level dialogs (gui/dialogs/) and the "App" menu
+that opens them - same "does the machinery work at all" level as
 test_gui.py's own smoke tests, not exhaustive per-field coverage (each
 config dataclass already has its own validation tests in
 test_*_config.py/test_*_actions*.py)."""
@@ -32,7 +32,7 @@ def test_main_window_has_an_app_menu_with_settings_and_characters(qapp, db):
 
     app_menu = window.menuBar().actions()[menu_labels.index("App")].menu()
     action_labels = [action.text() for action in app_menu.actions()]
-    assert action_labels == ["Settings...", "Characters..."]
+    assert action_labels == ["Settings...", "Characters...", "Check for Updates..."]
 
 
 def test_settings_dialog_opens_and_shows_all_five_tool_tabs(qapp, db):
@@ -186,3 +186,28 @@ def test_characters_dialog_remove_selected_removes_a_fixture_token(qapp, db):
 
     assert dialog.table.rowCount() == 0
     assert storage.load_all_tokens() == {}
+
+
+def test_update_dialog_shows_the_stage1_check_result_when_not_frozen(qapp, db, monkeypatch):
+    """Runs the dialog's real construction/run_action wiring but stubs out
+    `updater.check_for_update` itself - real network/git calls are already
+    covered by test_updater.py, this just proves the dialog renders
+    whatever that check reports."""
+    from eve_trader_local import updater
+    from eve_trader_local.gui.dialogs.update_dialog import UpdateDialog
+
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    monkeypatch.setattr(
+        updater, "check_for_update",
+        lambda: updater.UpdateStatus(installed_sha=None, error="not a git checkout"),
+    )
+
+    dialog = UpdateDialog()
+
+    deadline = time.monotonic() + 5
+    while dialog._threads and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.01)
+
+    assert "Update check unavailable" in dialog.info_label.text()
+    assert not dialog.action_btn.isEnabled()

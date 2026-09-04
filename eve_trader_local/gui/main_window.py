@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 from .dialogs.characters_dialog import CharactersDialog
 from .dialogs.settings_dialog import SettingsDialog
+from .dialogs.update_dialog import UpdateDialog
 from .views.doctrine_contract_history import ContractHistoryView
 from .views.doctrine_fittings import FittingsView
 from .views.doctrine_shopping_list import ShoppingListView
@@ -154,11 +155,12 @@ class MainWindow(QMainWindow):
                 menu.addAction(action)
 
     def _build_app_menu(self) -> None:
-        """Cross-tool, app-level actions (Settings, Characters) - deliberately
-        the one menu that isn't one of `_TOOL_MENUS`' per-tool entries, since
-        neither dialog belongs to just one tool. Both are opened as modal
-        `QDialog`s (`exec()`), not workspace tabs - see `dialogs/__init__.py`
-        for why they can't be `views.base.BaseView` subclasses."""
+        """Cross-tool, app-level actions (Settings, Characters, Check for
+        Updates) - deliberately the one menu that isn't one of
+        `_TOOL_MENUS`' per-tool entries, since none of these dialogs belongs
+        to just one tool. All three are opened as modal `QDialog`s
+        (`exec()`), not workspace tabs - see `dialogs/__init__.py` for why
+        they can't be `views.base.BaseView` subclasses."""
         menu = self.menuBar().addMenu("App")
 
         settings_action = QAction("Settings...", self)
@@ -169,11 +171,18 @@ class MainWindow(QMainWindow):
         characters_action.triggered.connect(self._open_characters)
         menu.addAction(characters_action)
 
+        update_action = QAction("Check for Updates...", self)
+        update_action.triggered.connect(self._open_update_check)
+        menu.addAction(update_action)
+
     def _open_settings(self) -> None:
         SettingsDialog(self).exec()
 
     def _open_characters(self) -> None:
         CharactersDialog(self).exec()
+
+    def _open_update_check(self) -> None:
+        UpdateDialog(self).exec()
 
     def _open_view(self, view_class: type) -> None:
         existing_index = self._open_views.get(view_class)

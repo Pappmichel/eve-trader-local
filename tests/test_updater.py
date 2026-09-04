@@ -8,6 +8,7 @@ preflight failure is a case where a real run would otherwise `git reset
 """
 from __future__ import annotations
 
+import hashlib
 import subprocess
 
 import pytest
@@ -277,3 +278,175 @@ def test_lock_is_released_after_a_failed_update(fake_git):
     with pytest.raises(ActionError):
         updater.apply_update()
     assert not (updater.data_dir() / "update.lock").exists()
+
+
+# --------------------------------------------------------------------------
+# Stage 2: binary release version check
+# --------------------------------------------------------------------------
+
+NEW_TAG = "v1.2.3"
+
+
+def _release_payload(tag=NEW_TAG, exe_url="https://example.invalid/exe", checksum_url="https://example.invalid/sha256"):
+    return {
+        "tag_name": tag,
+        "assets": [
+            {"name": "eve-trader-local.exe", "browser_download_url": exe_url},
+            {"name": "eve-trader-local.exe.sha256", "browser_download_url": checksum_url},
+        ],
+    }
+
+
+def test_latest_release_parses_assets(monkeypatch):
+    patch_get(monkeypatch, FakeResponse(200, _release_payload()))
+    release = updater.latest_release()
+    assert release.tag == NEW_TAG
+    assert release.exe_url == "https://example.invalid/exe"
+    assert release.checksum_url == "https://example.invalid/sha256"
+
+
+def test_latest_release_missing_assets_is_an_error(monkeypatch):
+    patch_get(monkeypatch, FakeResponse(200, {"tag_name": NEW_TAG, "assets": []}))
+    with pytest.raises(ActionError, match="missing the expected"):
+        updater.latest_release()
+
+
+def test_check_for_binary_update_reports_available(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater._version, "VERSION", "v1.0.0")
+    patch_get(monkeypatch, FakeResponse(200, _release_payload()))
+    status = updater.check_for_binary_update()
+    assert status.installed_version == "v1.0.0"
+    assert status.update_available
+    assert "Update available" in status.summary()
+
+
+def test_check_for_binary_update_up_to_date(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater._version, "VERSION", NEW_TAG)
+    patch_get(monkeypatch, FakeResponse(200, _release_payload()))
+    status = updater.check_for_binary_update()
+    assert not status.update_available
+    assert "Up to date" in status.summary()
+
+
+def test_check_for_binary_update_not_frozen_has_no_installed_version(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    patch_get(monkeypatch, FakeResponse(200, _release_payload()))
+    status = updater.check_for_binary_update()
+    assert status.installed_version is None
+    assert not status.update_available
+
+
+def test_check_for_binary_update_survives_network_failure(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater._version, "VERSION", "v1.0.0")
+    patch_get(monkeypatch, requests.ConnectionError("no route to host"))
+    status = updater.check_for_binary_update()
+    assert status.installed_version == "v1.0.0"
+    assert "could not reach GitHub" in status.error
+
+
+# --------------------------------------------------------------------------
+# Stage 2: download + apply - each of these must stop before Popen (the
+# helper script that would actually replace the running .exe) unless the
+# checksum genuinely verifies, same "refuse before anything destructive"
+# shape the Stage-1 preflight tests above assert.
+# --------------------------------------------------------------------------
+
+EXE_BYTES = b"fake-exe-bytes"
+EXE_SHA256 = hashlib.sha256(EXE_BYTES).hexdigest()
+
+
+class FakeStreamResponse:
+    """Replaces requests.get(..., stream=True)'s return value - just enough
+    of a Response to support `_download_to`'s `with ... as resp:` /
+    `iter_content` usage."""
+
+    def __init__(self, status_code, content: bytes = b""):
+        self.status_code = status_code
+        self._content = content
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def iter_content(self, chunk_size):
+        yield self._content
+
+
+def patch_downloads(monkeypatch, by_url: dict):
+    def fake_get(url, **kwargs):
+        assert kwargs.get("stream") is True
+        return by_url[url]
+
+    monkeypatch.setattr(updater.requests, "get", fake_get)
+
+
+@pytest.fixture
+def frozen_windows(monkeypatch):
+    """A frozen, Windows, portable-.exe environment - the only one
+    `download_and_apply_binary_update` will proceed under. Replaces
+    `subprocess.Popen` with a recorder rather than actually launching
+    cmd.exe."""
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater.os, "name", "nt")
+    monkeypatch.setattr(updater.sys, "executable", "C:\\portable\\eve-trader-local.exe")
+    calls: list[tuple] = []
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: calls.append((a, k)))
+    return calls
+
+
+def _fake_release():
+    return updater.ReleaseInfo(
+        tag=NEW_TAG, exe_url="https://example.invalid/exe", checksum_url="https://example.invalid/sha256"
+    )
+
+
+def test_download_and_apply_verifies_checksum_and_launches_helper(frozen_windows, monkeypatch):
+    release = _fake_release()
+    patch_downloads(monkeypatch, {
+        release.exe_url: FakeStreamResponse(200, EXE_BYTES),
+        release.checksum_url: FakeStreamResponse(200, f"{EXE_SHA256}  eve-trader-local.exe".encode()),
+    })
+
+    updater.download_and_apply_binary_update(release)
+
+    update_dir = updater.data_dir() / updater._UPDATE_SUBDIR
+    new_exe = update_dir / updater._NEW_EXE_NAME
+    assert new_exe.read_bytes() == EXE_BYTES
+    assert len(frozen_windows) == 1
+    args, _ = frozen_windows[0]
+    assert str(update_dir / updater._HELPER_SCRIPT_NAME) in args[0]
+
+
+def test_download_and_apply_refuses_checksum_mismatch(frozen_windows, monkeypatch):
+    release = _fake_release()
+    wrong_hash = "0" * 64
+    patch_downloads(monkeypatch, {
+        release.exe_url: FakeStreamResponse(200, EXE_BYTES),
+        release.checksum_url: FakeStreamResponse(200, f"{wrong_hash}  eve-trader-local.exe".encode()),
+    })
+
+    with pytest.raises(ActionError, match="checksum verification"):
+        updater.download_and_apply_binary_update(release)
+
+    assert not frozen_windows  # Popen (the relaunch helper) was never reached
+    update_dir = updater.data_dir() / updater._UPDATE_SUBDIR
+    assert not (update_dir / updater._NEW_EXE_NAME).exists()
+
+
+def test_download_and_apply_refuses_on_non_windows(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: True)
+    monkeypatch.setattr(updater.os, "name", "posix")
+    with pytest.raises(ActionError, match="only supported on the Windows build"):
+        updater.download_and_apply_binary_update(_fake_release())
+
+
+def test_download_and_apply_refuses_when_not_frozen(monkeypatch):
+    monkeypatch.setattr(updater, "is_frozen", lambda: False)
+    monkeypatch.setattr(updater.os, "name", "nt")
+    with pytest.raises(ActionError, match="packaged .exe"):
+        updater.download_and_apply_binary_update(_fake_release())
