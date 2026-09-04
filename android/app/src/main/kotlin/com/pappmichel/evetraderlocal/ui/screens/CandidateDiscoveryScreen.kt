@@ -67,15 +67,13 @@ fun CandidateDiscoveryScreen(database: AppDatabase) {
 
     fun addToShortlist(candidate: Candidate) {
         scope.launch {
-            val current = shortlistRepo.load()
-            if (current.any { it.itemId == candidate.typeId }) return@launch
-            shortlistRepo.save(
-                current + ShortlistItem(
+            val added = shortlistRepo.addIfAbsent(
+                ShortlistItem(
                     item = candidate.item, itemId = candidate.typeId, category = candidate.category,
                     volumeM3 = candidate.volumeM3, metaLevel = candidate.metaLevel,
                 )
             )
-            shortlistedIds = shortlistedIds + candidate.typeId
+            if (added) shortlistedIds = shortlistedIds + candidate.typeId
         }
     }
 

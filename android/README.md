@@ -78,6 +78,10 @@ current scope.
   Shortlist's own Add dialog. No hit-rate/avg-movement filtering (desktop's
   `min_hit_rate`/`min_avg_movement` thresholds) happens here - every click
   adds unconditionally, same as manually typing it into Shortlist would.
+  Goes through `ShortlistRepository.addIfAbsent`, which serializes its
+  load-check-save sequence behind a `Mutex` - tapping Add on two different
+  rows in quick succession used to race (both reading the same snapshot,
+  the later save silently overwriting and dropping the earlier addition).
 - **Trading -> Unlisted Stock & Undercut Check** (`data/trading/
   UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`): two
   independent, always-live one-shot checks (no saved snapshot to load on
