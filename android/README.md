@@ -71,6 +71,23 @@ current scope.
   Shortlist's own Add dialog. No hit-rate/avg-movement filtering (desktop's
   `min_hit_rate`/`min_avg_movement` thresholds) happens here - every click
   adds unconditionally, same as manually typing it into Shortlist would.
+- **Trading -> Unlisted Stock & Undercut Check** (`data/trading/
+  UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`): two
+  independent, always-live one-shot checks (no saved snapshot to load on
+  open, matching the desktop view's own restraint), ported from
+  `own_orders.py`'s `check_undercut`/`fetch_seller_stock_without_order` -
+  single-seller only, unlike those functions' actual desktop callers,
+  which pool across every registered seller character sharing a
+  structure's hangar (see `UnlistedUndercut.kt`'s own docstring). Undercut
+  Check cross-references the seller's own sell orders (`EsiClient.
+  characterOrders`) against the structure's full order book
+  (`structureOrdersRaw`, already used by Shortlist) by order id, since
+  ESI's structure order book carries no owning-character field. Unlisted
+  Stock cross-references shortlist item_ids against the seller's assets
+  (`EsiClient.characterAssets`, excluding `NON_STOCK_LOCATION_FLAGS`) minus
+  their own open sell-order volume there. Item names come from the
+  shortlist (no SDE cache exists yet), so a flagged type_id not on the
+  shortlist shows its bare number.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters (not per-tool, since Trading is the only tool with a
   config on this platform yet): a hand-written form over `TradingConfig`'s
@@ -152,9 +169,11 @@ current scope.
   this doesn't opt into) is worth re-checking once it has been.
 - CI (`.github/workflows/build-android.yml`) runs JVM unit tests
   (`app/src/test/`, JUnit 4) then assembles the debug APK. Test coverage is
-  currently just `ShortlistTest.kt` - a Kotlin port of the desktop build's
-  `tests/test_shortlist.py` formula/decision-precedence cases (the
-  Profit/Day and Goonmetrics-history cases aren't ported, since that half
-  of `shortlist.py` isn't ported to Kotlin yet). No lint step, no
+  `ShortlistTest.kt` (a Kotlin port of `tests/test_shortlist.py`'s
+  formula/decision-precedence cases - Profit/Day and Goonmetrics-history
+  cases aren't ported, since that half of `shortlist.py` isn't ported to
+  Kotlin yet) and `UnlistedUndercutTest.kt` (a port of
+  `tests/test_own_orders.py`'s single-seller `check_undercut`/
+  `fetch_seller_stock_without_order` cases). No lint step, no
   instrumented/UI tests (would need an emulator), no release signing, no
   Play Store upload.

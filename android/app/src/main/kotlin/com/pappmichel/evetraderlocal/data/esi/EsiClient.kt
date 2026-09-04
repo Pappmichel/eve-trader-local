@@ -45,6 +45,7 @@ fun TypeInfoResponse.metaLevel(): Int? =
 
 @Serializable
 data class MarketOrder(
+    @SerialName("order_id") val orderId: Long = 0,
     @SerialName("type_id") val typeId: Int = 0,
     val price: Double = 0.0,
     @SerialName("is_buy_order") val isBuyOrder: Boolean = false,
@@ -53,7 +54,9 @@ data class MarketOrder(
 
 @Serializable
 data class CharacterOrder(
+    @SerialName("order_id") val orderId: Long = 0,
     @SerialName("type_id") val typeId: Int = 0,
+    val price: Double = 0.0,
     @SerialName("is_buy_order") val isBuyOrder: Boolean = false,
     @SerialName("volume_remain") val volumeRemain: Double = 0.0,
     @SerialName("location_id") val locationId: Long = 0,
@@ -64,6 +67,8 @@ data class CharacterOrder(
 data class CharacterAsset(
     @SerialName("type_id") val typeId: Int = 0,
     @SerialName("location_id") val locationId: Long = 0,
+    val quantity: Double = 0.0,
+    @SerialName("location_flag") val locationFlag: String = "",
 )
 
 @Serializable

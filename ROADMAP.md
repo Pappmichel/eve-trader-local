@@ -273,19 +273,33 @@ which "careful reading" alone had caught):
   refresh token is a genuine bearer credential. See `android/README.md`'s
   own entry for what's still unexercised (a real device/Keystore
   invalidation behavior).
-- A JVM unit test suite (`app/src/test/`, JUnit 4) - so far just
-  `ShortlistTest.kt`, a Kotlin port of `tests/test_shortlist.py`'s
-  formula/decision-precedence cases (Profit/Day and Goonmetrics-history
-  cases aren't ported, matching `Shortlist.kt` itself not covering that
-  half yet). Runs in CI as a `testDebugUnitTest` step before the APK
-  assembles.
+- A JVM unit test suite (`app/src/test/`, JUnit 4) - `ShortlistTest.kt`, a
+  Kotlin port of `tests/test_shortlist.py`'s formula/decision-precedence
+  cases (Profit/Day and Goonmetrics-history cases aren't ported, matching
+  `Shortlist.kt` itself not covering that half yet), and
+  `UnlistedUndercutTest.kt`, a port of `tests/test_own_orders.py`'s
+  single-seller `check_undercut`/`fetch_seller_stock_without_order` cases.
+  Runs in CI as a `testDebugUnitTest` step before the APK assembles.
+- Trading → Unlisted Stock & Undercut Check (`data/trading/
+  UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`) - two
+  independent, always-live checks ported from `own_orders.py`'s
+  `check_undercut`/`fetch_seller_stock_without_order`, single-seller only
+  (unlike those functions' actual "_pooled" desktop callers, which pool
+  across every registered seller character sharing a structure's hangar).
+  Undercut Check cross-references the seller's own sell orders against the
+  structure's full order book by order id (ESI's structure book carries no
+  owning-character field); Unlisted Stock cross-references shortlist
+  item_ids against the seller's assets minus their own open sell-order
+  volume. Item names come from the shortlist, since there's still no SDE
+  cache on this platform.
 
 Not started: the rest of Trading (realized-trade reconciliation, price
-history, unlisted-stock/undercut checks, hit-rate/avg-movement-filtered
-auto-prune from Candidate Discovery, Profit / Day, the Goonmetrics
-fallback), all four other tools' business logic and their own Settings
-tabs, the SDE cache itself, tests for anything beyond Shortlist's pure
-formula, an app icon, a Play Store listing.
+history, hit-rate/avg-movement-filtered auto-prune from Candidate
+Discovery, Profit / Day, the Goonmetrics fallback, pooling either
+Unlisted-Stock-&-Undercut check across multiple seller characters), all
+four other tools' business logic and their own Settings tabs, the SDE
+cache itself, tests for anything beyond Shortlist's and Unlisted-Stock-&-
+Undercut's pure logic, an app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
