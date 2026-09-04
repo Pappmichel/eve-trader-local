@@ -287,8 +287,9 @@ which "careful reading" alone had caught):
   and `CandidateDiscoveryTest.kt`, a port of
   `tests/test_candidate_discovery.py`'s `is_wanted_market_path`/
   `_market_group_path` cases plus `guess_category`'s string/volume
-  fallback half. Runs in CI as a `testDebugUnitTest` step before the APK
-  assembles.
+  fallback half, and `EsiClientTest.kt`, a port of
+  `tests/test_esi_client.py`'s `_percentile`/`_summarize_orders` cases.
+  Runs in CI as a `testDebugUnitTest` step before the APK assembles.
 - Trading → Unlisted Stock & Undercut Check (`data/trading/
   UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`) - two
   independent, always-live checks ported from `own_orders.py`'s

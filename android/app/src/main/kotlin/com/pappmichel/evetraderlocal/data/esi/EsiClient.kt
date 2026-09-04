@@ -90,13 +90,16 @@ data class OrderStats(
  * `sorted` must already be sorted ascending for the caller's own side
  * (sells ascending for a low percentile, buys descending so the same `pct`
  * picks from the top) - not re-sorted here. */
-private fun percentile(sorted: List<Double>, pct: Double): Double? {
+// internal (not private) so EsiClientTest.kt can exercise these directly,
+// the same way esi_client.py's own test file imports its underscore-
+// prefixed _percentile/_summarize_orders straight in.
+internal fun percentile(sorted: List<Double>, pct: Double): Double? {
     if (sorted.isEmpty()) return null
     val idx = minOf((sorted.size * pct).toInt(), sorted.size - 1)
     return sorted[idx]
 }
 
-private fun summarizeOrders(orders: List<MarketOrder>): OrderStats {
+internal fun summarizeOrders(orders: List<MarketOrder>): OrderStats {
     val sells = orders.filter { !it.isBuyOrder }.map { it.price }.sorted()
     val buys = orders.filter { it.isBuyOrder }.map { it.price }.sortedDescending()
     return OrderStats(
