@@ -64,7 +64,11 @@ current scope.
   scopes existed falls back to "none known" for that one signal rather
   than failing the whole refresh - re-logging in picks up the new scopes
   (both roles now request the same flat scope set the desktop build's
-  `config.py` does, rather than a role-trimmed subset). Not ported yet:
+  `config.py` does, rather than a role-trimmed subset). A stale/revoked
+  refresh token on either character degrades the same way (that one
+  character's data is just unavailable) rather than aborting the whole
+  refresh - it used to take down even the Jita-only pricing above, which
+  needs no login at all. Not ported yet:
   Profit / Day (needs Goonmetrics region history for real average daily
   volume), the Goonmetrics current-price fallback when no seller token is
   available, and auto-add/prune from Candidate Discovery

@@ -94,7 +94,14 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 val activeIds = items.filter { it.itemId != 0 }.map { it.itemId }
                 val esi = EsiClient()
                 val jitaStats = esi.regionOrderStatsBulk(cfg.jitaRegionId, activeIds)
-                val sellerToken = tokenManager.listRecords("seller").firstOrNull()?.let { tokenManager.getToken(it.role) }
+                // Best-effort: a stale/revoked refresh token here used to
+                // abort the whole refresh (including the Jita-only pricing
+                // above, which needs no login at all) - now it just means
+                // no seller-specific data, same degrade-gracefully pattern
+                // the rest of this function already follows.
+                val sellerToken = tokenManager.listRecords("seller").firstOrNull()?.let {
+                    try { tokenManager.getToken(it.role) } catch (e: Exception) { null }
+                }
                 val structureStats = if (cfg.structureId != null && sellerToken != null) {
                     esi.structureOrderStatsBulk(cfg.structureId, activeIds, sellerToken.accessToken)
                 } else emptyMap()
@@ -127,7 +134,9 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 // for the same re-login-picks-up-new-scopes reason as
                 // ownOrdersByItem above.
                 var buyerCoveredUnavailable = false
-                val buyerToken = tokenManager.listRecords("buyer").firstOrNull()?.let { tokenManager.getToken(it.role) }
+                val buyerToken = tokenManager.listRecords("buyer").firstOrNull()?.let {
+                    try { tokenManager.getToken(it.role) } catch (e: Exception) { null }
+                }
                 val buyerAlreadyCoveredIds = if (buyerToken != null) {
                     try {
                         val covered = mutableSetOf<Int>()
