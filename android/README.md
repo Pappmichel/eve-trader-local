@@ -258,23 +258,37 @@ current scope.
   `ProductionConfig.kt`; `ui/screens/ItemLookupScreen.kt`): the first
   Production view, a Kotlin port of `production/pricing.py` scoped to just
   its buy-side comparison - "what does it cost to buy one unit of this
-  item right now, home structure or Jita?" Every *other* Production view
-  (Build Candidates, Planner, Ship Margins, Item Margin) needs a real
-  build cost, which means walking a blueprint's bill of materials via
-  `industryActivityMaterials`/`industryActivityProducts` SDE tables the
-  Android SDE cache doesn't have (confirmed out of scope when that cache
-  itself was built, see `data/sde/SdeRepository.kt`'s own docstring) -
-  `pricing.py`'s buy-side half is the one piece of desktop Production
-  needing zero blueprint data, so it's the one vertical slice portable
-  without first adding a chunk of new SDE schema. `ProductionConfig`
-  carries only the three fields this slice reads (broker fee, haul
-  cost/m3, an optional home structure id) rather than the desktop
-  dataclass's full field set - more get added alongside whichever feature
-  first needs them, the same incremental approach `StationTradingConfig`
-  followed. Simplified vs. desktop: no Goonmetrics fallback (ESI-only for
-  both sides - a failed/absent lookup just shows no quote for that side);
-  lookup is by type_id only, since the SDE cache has no name-search index
-  yet.
+  item right now, home structure or Jita?" This was the one vertical slice
+  portable before the SDE cache carried any blueprint data at all -
+  Ship Margins & Market Status (below) is what unblocked the rest.
+  Simplified vs. desktop: no Goonmetrics fallback (ESI-only for both sides
+  - a failed/absent lookup just shows no quote for that side); lookup is
+  by type_id only, since the SDE cache has no name-search index yet.
+- **Production -> Ship Margins & Market Status** (`data/production/
+  ProductionBuildCost.kt`, extends `ProductionConfig.kt`; `ui/screens/
+  ShipMarginScreen.kt`): Production's first real *build*-cost view, a
+  Kotlin port of `engine._unit_cost`/`_material_qty`/`margin_home`/
+  `margin_jita`, scoped to a single-item build-cost/margin lookup
+  (mirroring `engine.item_margin_detail`) rather than the desktop
+  feature's whole-catalog scan. Unlocked by extending the SDE cache (Room
+  version 3 -> 4) with Manufacturing-only blueprint data -
+  `industryActivityMaterials.csv`/`industryActivityProducts.csv`
+  (`sde_blueprint_materials`/`sde_blueprint_products`, `activityID = 1`
+  only; Reactions/Invention/Copying rows are skipped, nothing reads them)
+  - following the exact schema-addition shape `SdeRepository.kt`'s own
+  docstring predicted for Reprocessing Quote's `sde_type_materials`
+  table: a CSV, entities, and a Room version bump, not a redesign.
+  `ProductionConfig` grows four fields for this slice (market fees rate,
+  material efficiency, job-cost-index rate, facility tax rate) alongside
+  the three `ProductionPricing.kt` already reads. Simplified vs. desktop:
+  one flat, manually-entered ME level (no owned-BPO research tracking, no
+  structure/rig bonus), no live ESI system-cost-index pull (uses the same
+  flat fallback rate desktop itself falls back to), and EIV approximated
+  from real material buy prices rather than ESI's own adjusted-price
+  catalog. Every other Production view (Build Candidates, Planner,
+  Asset-Optimized Planner, Logistics, Special Orders, Invention
+  Estimator, Owned Blueprints, Current Jobs & Slots) remains
+  `PlaceholderScreen`.
 - **Doctrine -> Fittings** (`data/doctrine/EftFittingParser.kt`,
   `DoctrineSdeResolver.kt`; `ui/screens/DoctrineFittingsScreen.kt`): a
   Kotlin port of `doctrine/parser.py`'s EFT fitting-text parser (paste a
@@ -310,10 +324,43 @@ current scope.
   (`invTypeMaterials.csv` -> `sde_type_materials`, plus `invTypes.csv`'s
   `portionSize` column) - exactly the addition `SdeRepository.kt`'s own
   docstring predicted once a reprocessing feature needed real yield data.
-  Ore Shortlist and Mineral Shopping List stay `PlaceholderScreen`: the
-  former needs that fuller ore/ice yield formula plus a whole
-  candidate-discovery pipeline, the latter an LP solver - both real,
-  separate scope.
+- **Ore & Minerals -> Ore Shortlist** (`data/refining/OreShortlist.kt`,
+  extending `ReprocessingYield.kt`/`RefiningConfig.kt`; `ui/screens/
+  OreShortlistScreen.kt`): the ore/ice yield formula Reprocessing Quote
+  deliberately left out - structure type, rig tier, security status,
+  implant, and per-ore-family reprocessing skill levels, all confirmed
+  against wiki.eveuniversity.org/Reprocessing and all manually-entered
+  config fields (this app still doesn't pull skills via ESI for
+  refining, the same stance `RefiningConfig.kt` already documented for
+  scrapmetal). Candidate discovery is a real, fully live SDE query
+  (`SdeDao.oreIceCandidateTypes` - every published compressed ore/ice
+  type, category 25 filtered by a `Compressed%` name match, since a
+  compressed ore/ice type shares its *raw* ore's own group rather than
+  having a dedicated "Compressed <Family>" group of its own in the real
+  data), not scoped down to a manually-pasted list - no new SDE table
+  needed, just a new query over data the Reprocessing Quote port already
+  cached. Simplified vs. desktop: mineral-side pricing still needs a
+  registered seller character with structure access to complete (the
+  ore side prices from public Jita data alone, same documented gap
+  Reprocessing Quote already has); no Goonmetrics fallback for the
+  home-structure side.
+- **Ore & Minerals -> Mineral Shopping List** (`data/refining/
+  MineralShoppingList.kt`; `ui/screens/MineralShoppingListScreen.kt`):
+  `refining/optimizer.py` turned out to be a genuine mixed-integer linear
+  program (`scipy.optimize.linprog`, method `"highs"`, with both
+  ore-portion and direct-mineral decision variables marked integer - its
+  own docstring documents a real optimality-gap bug a relax-then-round
+  approach used to have, which is exactly why it isn't relaxed-then-
+  rounded here either). Porting an equivalent MIP solver into a
+  phone-friendly Kotlin/JVM dependency was judged impractical for one
+  pass, so this substitutes a documented simpler strategy instead: buy
+  every required mineral outright at its current cheapest Jita listing,
+  with no ore-refining alternative considered at all - that would need
+  both a real solver and the ore/ice yield engine Ore Shortlist just
+  added, a natural follow-up now that both exist. Further simplified vs.
+  even that direct-buy half of the desktop behavior: no haul-cost term
+  (the SDE cache doesn't carry mineral item-volume data in a form this
+  screen reads) and no Goonmetrics home-market comparison.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters: a `TabRow` with one tab per tool that has a config on
   this platform - Trading, Station Trading, Production, Ore & Minerals
@@ -458,10 +505,20 @@ current scope.
   cases), `EftFittingParserTest.kt` (26 cases ported from
   `tests/test_doctrine_parser.py`'s fake-resolver layer - item/quantity
   parsing, unresolved-name and ambiguous-split issues, malformed lines),
-  and `PasteParserTest.kt`/`ReprocessingYieldTest.kt`/
-  `ReprocessingQuoteTest.kt` (ported from
-  `tests/test_refining_{paste_parser,reprocessing,quote}.py` - paste-line
-  parsing, the scrapmetal yield formula including its 1%-vs-2%-per-level
-  regression guard, and the priced-quote assembly). No lint step, no
-  instrumented/UI tests (would need an emulator), no release signing, no
-  Play Store upload.
+  `PasteParserTest.kt`/`ReprocessingYieldTest.kt`/`ReprocessingQuoteTest.kt`
+  (ported from `tests/test_refining_{paste_parser,reprocessing,quote}.py` -
+  paste-line parsing, both the scrapmetal *and* ore/ice yield formulas
+  (the latter's cases ported from `test_refining_reprocessing.py`'s
+  ore/ice suite once Ore Shortlist added that path), and the priced-quote
+  assembly), `OreShortlistTest.kt` (candidate discovery and pricing cases
+  ported from `test_refining_pricing.py`/`test_refining_candidate_
+  discovery.py`), `MineralShoppingListTest.kt` (freshly written, not a
+  case-for-case port, since the desktop suite exercises LP behavior this
+  simpler direct-buy substitute doesn't implement - covers whole-unit
+  rounding, broker-fee markup, multiple independent lines, and the
+  no-sell-orders case), and `ProductionBuildCostTest.kt` (14 cases
+  covering material-quantity rounding, buy-vs-build at every price level,
+  an unpriceable material collapsing the whole estimate, product-quantity
+  division, and both margin formulas). No lint step, no instrumented/UI
+  tests (would need an emulator), no release signing, no Play Store
+  upload.

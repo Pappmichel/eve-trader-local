@@ -437,20 +437,68 @@ which "careful reading" alone had caught):
   `invTypeMaterials.csv` (`sde_type_materials` table) and `invTypes.csv`'s
   `portionSize` column - exactly the addition `SdeRepository`'s own
   docstring predicted ("a CSV, an entity, and a Room version bump") once a
-  reprocessing feature needed it. Ore Shortlist and Mineral Shopping List
-  remain `PlaceholderScreen`: the former needs the ore/ice yield path plus
-  a whole candidate-discovery pipeline, the latter an LP solver - both
-  real, separate scope.
+  reprocessing feature needed it.
+- Ore & Minerals -> Ore Shortlist (`data/refining/OreShortlist.kt`;
+  extends `ReprocessingYield.kt`/`RefiningConfig.kt`; `ui/screens/
+  OreShortlistScreen.kt`) - the ore/ice yield formula Reprocessing Quote
+  deliberately left out (structure type, rig tier, security status,
+  implant, per-ore-family skill levels - all manually-entered config
+  fields, matching this app's existing "no ESI skill pulls for refining"
+  stance), plus a real, fully live candidate-discovery pipeline: every
+  published compressed ore/ice type is queried straight from the SDE
+  cache (`SdeDao.oreIceCandidateTypes`, category 25 + a `Compressed%`
+  name filter - no new table, just a new query), not scoped down to a
+  manually-pasted list. Mineral-side pricing still needs a registered
+  seller character with structure access to complete (same documented
+  gap Reprocessing Quote already has); the ore side prices from public
+  Jita data alone.
+- Ore & Minerals -> Mineral Shopping List (`data/refining/
+  MineralShoppingList.kt`; `ui/screens/MineralShoppingListScreen.kt`) -
+  `refining/optimizer.py` turned out to be a genuine mixed-integer linear
+  program (`scipy.optimize.linprog`, both ore-portion and direct-mineral
+  variables integer, with its own documented fix for a relax-then-round
+  optimality-gap bug) - porting an equivalent MIP solver into a
+  phone-friendly Kotlin/JVM dependency was judged impractical for one
+  pass. This substitutes a documented simpler strategy instead: buy every
+  required mineral outright at its current cheapest Jita listing, with no
+  ore-refining alternative considered at all (that would need both a real
+  solver and the ore/ice yield engine Ore Shortlist just added - a
+  natural follow-up once both exist). Also missing vs. even that
+  direct-buy half of the desktop behavior: no haul-cost term (the SDE
+  cache has no mineral item-volume data cached in a form this screen
+  reads yet) and no Goonmetrics home-market comparison.
+- Production -> Ship Margins & Market Status (`data/production/
+  ProductionBuildCost.kt`; extends `ProductionConfig.kt`; `ui/screens/
+  ShipMarginScreen.kt`) - Production's first real *build*-cost view,
+  unlocked by extending the SDE cache (Room version 3 -> 4) with
+  Manufacturing-only blueprint data: `industryActivityMaterials.csv`/
+  `industryActivityProducts.csv` (`sde_blueprint_materials`/
+  `sde_blueprint_products`, activityID=1 only - Reactions/Invention/
+  Copying are out of scope, nothing reads them). Scoped to a single-item
+  build-cost/margin lookup (mirroring `engine.item_margin_detail`), not
+  the desktop feature's whole-catalog scan. Simplified vs. desktop: one
+  flat, manually-entered ME level (no owned-BPO research tracking, no
+  structure/rig bonus), no live ESI system-cost-index pull (uses the same
+  flat fallback rate the desktop build itself falls back to), and EIV
+  approximated from real material buy prices rather than ESI's own
+  adjusted-price catalog.
+- Every configured tool now has its own Settings tab (`ui/screens/
+  SettingsScreen.kt` grew a `TabRow`: Trading, Station Trading,
+  Production, Ore & Minerals - Doctrine has no config yet). Previously
+  only Trading's fields were editable; Station Trading/Production/Ore &
+  Minerals' config classes existed with no UI to change them outside a
+  hand-edited settings blob.
 
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
 or Unlisted-Stock-&-Undercut check across multiple characters,
-`average_daily_sold_by_type`, the rest of Production/Doctrine (everything
-needing a blueprint BOM or a persisted stockpile/shopping-list/contract
-layer), Ore & Minerals' own Ore Shortlist/Mineral Shopping List (the real
-ore/ice yield formula and an LP solver, respectively), every tool's own
-Settings tab, tests for anything beyond the pure logic already covered, an
-app icon, a Play Store listing.
+`average_daily_sold_by_type`, a real MIP/LP solver for Mineral Shopping
+List's ore-refining alternative, the rest of Production (Build Candidates,
+Planner, Asset-Optimized Planner, Logistics, Special Orders, Invention
+Estimator, Owned Blueprints, Current Jobs & Slots) and Doctrine (Stockpile
+Status, Shopping List, Contract History - all need a real persisted-fitting
+layer this platform doesn't have yet), tests for anything beyond the pure
+logic already covered, an app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
