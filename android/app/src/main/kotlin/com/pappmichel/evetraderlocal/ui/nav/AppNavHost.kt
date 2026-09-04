@@ -40,6 +40,7 @@ import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
 import com.pappmichel.evetraderlocal.ui.screens.ReprocessingQuoteScreen
 import com.pappmichel.evetraderlocal.ui.screens.SdeDataScreen
 import com.pappmichel.evetraderlocal.ui.screens.SettingsScreen
+import com.pappmichel.evetraderlocal.ui.screens.ShipMarginScreen
 import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
 import com.pappmichel.evetraderlocal.ui.screens.StationTradingShortlistScreen
 import com.pappmichel.evetraderlocal.ui.screens.StationTradingUndercutScreen
@@ -59,16 +60,18 @@ private const val DOCTRINE_FITTINGS_ROUTE = "doctrine/fittings"
 private const val REPROCESSING_QUOTE_ROUTE = "ore-minerals/reprocessing-quote"
 private const val MINERAL_SHOPPING_LIST_ROUTE = "ore-minerals/mineral-shopping-list"
 private const val ORE_SHORTLIST_ROUTE = "ore-minerals/ore-shortlist"
+private const val SHIP_MARGIN_ROUTE = "production/ship-margins"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
  * for - currently Trading/Candidate Discovery, Trading/Shortlist,
  * Trading/Unlisted Stock & Undercut Check, Trading/Price History,
  * Trading/Realized Trades & Transactions, Station Trading's own
- * Shortlist/Undercut & Skills, Production/Item Lookup, Doctrine/Fittings,
- * and Ore & Minerals' own Reprocessing Quote, Mineral Shopping List, and
- * Ore Shortlist (see ROADMAP.md's Android section for what's ported so
- * far). Add a route here as each new screen replaces its placeholder. */
+ * Shortlist/Undercut & Skills, Production/Item Lookup, Production/Ship
+ * Margins & Market Status, Doctrine/Fittings, and Ore & Minerals' own
+ * Reprocessing Quote, Mineral Shopping List, and Ore Shortlist (see
+ * ROADMAP.md's Android section for what's ported so far). Add a route
+ * here as each new screen replaces its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -86,6 +89,8 @@ private fun routeFor(tool: String, view: String): String =
         STATION_TRADING_UNDERCUT_ROUTE
     } else if (tool == "Production" && view == "Item Lookup") {
         PRODUCTION_ITEM_LOOKUP_ROUTE
+    } else if (tool == "Production" && view == "Ship Margins & Market Status") {
+        SHIP_MARGIN_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Ore & Minerals" && view == "Reprocessing Quote") {
@@ -214,6 +219,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(STATION_TRADING_SHORTLIST_ROUTE) { StationTradingShortlistScreen(database) }
                 composable(STATION_TRADING_UNDERCUT_ROUTE) { StationTradingUndercutScreen(database, tokenManager) }
                 composable(PRODUCTION_ITEM_LOOKUP_ROUTE) { ItemLookupScreen(database, tokenManager) }
+                composable(SHIP_MARGIN_ROUTE) { ShipMarginScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(REPROCESSING_QUOTE_ROUTE) { ReprocessingQuoteScreen(database, tokenManager) }
                 composable(MINERAL_SHOPPING_LIST_ROUTE) { MineralShoppingListScreen(database, tokenManager) }

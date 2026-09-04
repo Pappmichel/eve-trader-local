@@ -74,6 +74,60 @@ data class SdeTypeMaterialEntity(
     val quantity: Double,
 )
 
+/** One `industryActivityMaterials.csv` row, Manufacturing only (`activityId`
+ * is always 1 here - see `SdeFile.BLUEPRINT_MATERIALS`'s own comment for why
+ * Reaction/Invention/Copying rows are never fetched at all): one run of
+ * `blueprintTypeId` at ME 0 consumes `quantity` units of `materialTypeId`.
+ * The desktop build's `sde_blueprint_materials` table (storage.py) carries
+ * every activity id; this is a deliberately narrower slice added for
+ * Production's first real build-cost view (see
+ * `data/production/ProductionBuildCost.kt`) - every other activity
+ * (Reaction, Invention, Copying) has no ported consumer on Android yet,
+ * same "port only what's used" precedent `SdeTypeMaterialEntity` set for
+ * the Reprocessing Quote port.
+ *
+ * Composite primary key over (blueprintTypeId, materialTypeId): a real
+ * Manufacturing formula never lists the same material twice, so this
+ * reflects the true shape of the data instead of a synthetic id nothing
+ * needs. `activityId` is still stored (rather than assumed) so a query
+ * reads the same way the desktop schema's own WHERE clause does, and so a
+ * later port of another activity id can reuse this table without a
+ * migration that changes its shape, only one that loosens this key. */
+@Entity(
+    tableName = "sde_blueprint_materials",
+    primaryKeys = ["blueprintTypeId", "materialTypeId"],
+    indices = [Index("blueprintTypeId")],
+)
+data class SdeBlueprintMaterialEntity(
+    val blueprintTypeId: Int,
+    val activityId: Int,
+    val materialTypeId: Int,
+    val quantity: Double,
+)
+
+/** One `industryActivityProducts.csv` row, Manufacturing only (see
+ * `SdeBlueprintMaterialEntity`'s docstring for why): running
+ * `blueprintTypeId` produces `quantity` units of `productTypeId` per run.
+ * The counterpart of `storage.get_blueprint_for_product`'s source table -
+ * `SdeDao.blueprintForProduct` is the "which blueprint makes this item"
+ * lookup this table exists for.
+ *
+ * Composite primary key over (blueprintTypeId, productTypeId): a real
+ * Manufacturing blueprint has exactly one product per run (never two rows
+ * for the same blueprint+product pair), matching
+ * `SdeBlueprintMaterialEntity`'s same reasoning. */
+@Entity(
+    tableName = "sde_blueprint_products",
+    primaryKeys = ["blueprintTypeId", "productTypeId"],
+    indices = [Index("productTypeId")],
+)
+data class SdeBlueprintProductEntity(
+    val blueprintTypeId: Int,
+    val activityId: Int,
+    val productTypeId: Int,
+    val quantity: Double,
+)
+
 @Entity(tableName = "sde_groups")
 data class SdeGroupEntity(
     @PrimaryKey val groupId: Int,
@@ -157,6 +211,8 @@ interface SdeDao {
     @Insert suspend fun insertSolarSystems(rows: List<SdeSolarSystemEntity>)
     @Insert suspend fun insertStations(rows: List<SdeStationEntity>)
     @Insert suspend fun insertTypeMaterials(rows: List<SdeTypeMaterialEntity>)
+    @Insert suspend fun insertBlueprintMaterials(rows: List<SdeBlueprintMaterialEntity>)
+    @Insert suspend fun insertBlueprintProducts(rows: List<SdeBlueprintProductEntity>)
 
     @Query("DELETE FROM sde_types") suspend fun clearTypes()
     @Query("DELETE FROM sde_groups") suspend fun clearGroups()
@@ -165,6 +221,8 @@ interface SdeDao {
     @Query("DELETE FROM sde_solar_systems") suspend fun clearSolarSystems()
     @Query("DELETE FROM sde_stations") suspend fun clearStations()
     @Query("DELETE FROM sde_type_materials") suspend fun clearTypeMaterials()
+    @Query("DELETE FROM sde_blueprint_materials") suspend fun clearBlueprintMaterials()
+    @Query("DELETE FROM sde_blueprint_products") suspend fun clearBlueprintProducts()
 
     // ------------------------------------------------------ refresh state
     @Upsert suspend fun upsertRefreshState(state: SdeRefreshStateEntity)
@@ -295,6 +353,32 @@ interface SdeDao {
     )
     suspend fun oreIceCandidateTypes(): List<OreIceCandidateTypeRow>
 
+    /** "Which blueprint makes this item, and how many per run" - the Android
+     * counterpart of `storage.get_blueprint_for_product`, narrowed to
+     * Manufacturing only (this table has no Reaction/Invention rows at all -
+     * see `SdeBlueprintProductEntity`'s docstring), so no `activityId`
+     * filter/preference ordering is needed the way the desktop query's own
+     * `ORDER BY activity_id` is. `LIMIT 1` is a defensive no-op in practice
+     * (a real product has exactly one Manufacturing blueprint), same
+     * reasoning as `resolveTypeByName`'s own LIMIT 1. Null for a type with no
+     * Manufacturing blueprint at all - a raw material, or a type this cache
+     * hasn't been refreshed to know how to build. */
+    @Query(
+        "SELECT blueprintTypeId, quantity FROM sde_blueprint_products " +
+            "WHERE productTypeId = :productTypeId LIMIT 1"
+    )
+    suspend fun blueprintForProduct(productTypeId: Int): SdeBlueprintForProductRow?
+
+    /** One run's Manufacturing materials at ME 0, before any ME reduction -
+     * applying ME is the caller's job, matching `storage.
+     * get_blueprint_materials`'s own contract exactly. Empty (not null) for
+     * a blueprint id this cache has no material rows for. */
+    @Query(
+        "SELECT materialTypeId, quantity FROM sde_blueprint_materials " +
+            "WHERE blueprintTypeId = :blueprintTypeId"
+    )
+    suspend fun blueprintMaterials(blueprintTypeId: Int): List<TypeMaterialRow>
+
     // ------------------------------------------------------- row counts
     // The counterpart of storage.py's `sde_row_counts`: what the UI prints
     // after a refresh, and the cheapest way to tell an empty cache from a
@@ -306,7 +390,15 @@ interface SdeDao {
     @Query("SELECT COUNT(*) FROM sde_solar_systems") suspend fun countSolarSystems(): Int
     @Query("SELECT COUNT(*) FROM sde_stations") suspend fun countStations(): Int
     @Query("SELECT COUNT(*) FROM sde_type_materials") suspend fun countTypeMaterials(): Int
+    @Query("SELECT COUNT(*) FROM sde_blueprint_materials") suspend fun countBlueprintMaterials(): Int
+    @Query("SELECT COUNT(*) FROM sde_blueprint_products") suspend fun countBlueprintProducts(): Int
 }
+
+/** Room's projection for `SdeDao.blueprintForProduct` - mirrors the
+ * (blueprint_type_id, quantity) half of `storage.get_blueprint_for_product`'s
+ * tuple that a Manufacturing-only lookup still needs (its `activity_id` is
+ * always 1 here, so unlike the desktop tuple this doesn't need to carry it). */
+data class SdeBlueprintForProductRow(val blueprintTypeId: Int, val quantity: Double)
 
 /** Room's projection shape for `SdeDao.typeMaterials` - a `data class` (not
  * the entity itself) because the query selects two of its three columns,

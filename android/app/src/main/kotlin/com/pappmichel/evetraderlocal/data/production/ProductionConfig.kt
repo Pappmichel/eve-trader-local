@@ -9,16 +9,19 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** A small slice of the desktop build's production/config.py
- * `ProductionConfig` - only the fields Item Lookup's buy-price comparison
- * actually reads (see ProductionPricing.kt). The desktop dataclass also
- * carries build-candidate thresholds, structure/rig ME/TE settings,
- * job-cost-index overrides, invention-skill levels and stock-planner
- * knobs - none of those have a ported consumer here yet (no bill-of-
- * materials/blueprint data exists in the Android SDE cache, see
- * ProductionPricing.kt's module docstring), so adding fields for them now
- * would just be dead config nobody reads. Add them alongside whichever
- * feature first needs them, the same incremental approach
- * StationTradingConfig followed.
+ * `ProductionConfig` - only the fields a ported feature actually reads:
+ * Item Lookup's buy-price comparison (see ProductionPricing.kt) plus, as of
+ * the blueprint-BOM SDE port, Ship Margins & Market Status' single-item
+ * build-cost view (see ProductionBuildCost.kt). The desktop dataclass also
+ * carries build-candidate thresholds, per-structure/rig ME/TE settings, a
+ * live system-cost-index lookup, invention-skill levels and stock-planner
+ * knobs - none of those have a ported consumer here yet, so adding fields
+ * for them now would just be dead config nobody reads. Add them alongside
+ * whichever feature first needs them, the same incremental approach
+ * StationTradingConfig followed - exactly what happened here: four fields
+ * (marketFeesRate/materialEfficiency/jobCostIndexRate/facilityTaxRate)
+ * added alongside the feature that needed them, the original three left
+ * untouched.
  *
  * Persisted as its own JSON blob under scope "production" in the shared
  * `settings` table, same one-scope-per-tool-config shape
@@ -42,6 +45,39 @@ data class ProductionConfig(
     // desktop's Optional[int] = None: home_prices/homePrices simply
     // returns no home quotes and every lookup falls back to Jita-only.
     val homeLocationId: Long? = null,
+
+    // -- Added for Ship Margins & Market Status' single-item build-cost
+    // view (data/production/ProductionBuildCost.kt) - see that file's own
+    // docstring for the full simplified-vs-desktop math these feed. --
+
+    // Sell-side costs subtracted from a sale before the build margin is
+    // computed: SCC surcharge + broker's fee + sales tax. Matches
+    // production/config.py's `market_fees` default exactly (0.5% + 1.5% +
+    // 3.37%, confirmed against the in-game sell-order breakdown).
+    val marketFeesRate: Double = 0.0537,
+    // Blueprint/BPO research level, as a flat ME percent applied to every
+    // Manufacturing material (0-10, EVE's real ME range) - the Android
+    // counterpart of desktop's per-blueprint owned-BPO lookup
+    // (`engine._owned_bpo_mods`), which needs `character_blueprints` ESI
+    // sync data this app doesn't have yet. Defaults to 10 (perfect
+    // research), matching desktop's own ACTIVITY_MODS["Tech I"] fallback
+    // baseline for an unowned/unresearched blueprint - not an optimistic
+    // guess, the documented "assume perfect research" default the desktop
+    // build itself falls back to.
+    val materialEfficiency: Int = 10,
+    // Job-fee cost-index rate, *before* facility tax/SCC surcharge are
+    // added (see `jobCostRate` in ProductionBuildCost.kt) - the flat
+    // ACTIVITY_MODS["Tech I"].job_cost_rate fallback desktop itself uses
+    // whenever a live system cost index isn't available (see
+    // production/constants.py). No live ESI system-cost-index lookup is
+    // ported here (same reduction ProductionPricing.kt's own docstring
+    // already documents for the job-fee half of Production), so this is
+    // always the fallback value here, never a live-looked-up one.
+    val jobCostIndexRate: Double = 0.077742,
+    // Job-fee facility tax, additive on top of the index rather than
+    // folded into it (see production/config.py's own comment on the real
+    // EVE formula). 0.25% is the fixed NPC-station rate.
+    val facilityTaxRate: Double = 0.0025,
 ) {
     companion object {
         const val SCOPE = "production"

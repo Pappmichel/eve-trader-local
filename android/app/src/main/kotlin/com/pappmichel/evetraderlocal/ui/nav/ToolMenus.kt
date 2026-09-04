@@ -5,9 +5,9 @@ package com.pappmichel.evetraderlocal.ui.nav
  * of these a real screen later is a matter of pointing its route at that
  * screen in AppNavHost.kt, not restructuring navigation. Every entry opens
  * PlaceholderScreen except Trading/Candidate Discovery, Trading/Shortlist,
- * Trading/Unlisted Stock & Undercut Check, and Production/Item Lookup (see
- * ROADMAP.md's Android section for what's actually ported vs. still
- * pending). */
+ * Trading/Unlisted Stock & Undercut Check, Production/Item Lookup, and
+ * Production/Ship Margins & Market Status (see ROADMAP.md's Android section
+ * for what's actually ported vs. still pending). */
 val TOOL_MENUS: List<Pair<String, List<String>>> = listOf(
     "Trading" to listOf(
         "Shortlist", "Candidate Discovery", "Realized Trades & Transactions",

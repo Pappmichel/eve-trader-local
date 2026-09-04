@@ -2,6 +2,8 @@ package com.pappmichel.evetraderlocal.data.sde
 
 import androidx.room.withTransaction
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.data.production.BlueprintForProduct
+import com.pappmichel.evetraderlocal.data.production.ProductionBomSource
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -25,7 +27,23 @@ enum class SdeFile(val filename: String, val table: String) {
     // it is - see this enum's own file-ordering note above for why TYPES is
     // first for the opposite reason (it is the biggest, and the ETag file).
     TYPE_MATERIALS("invTypeMaterials.csv", "sde_type_materials"),
+    // Manufacturing-only blueprint BOM (activityID=1 rows only - see
+    // SdeBlueprintMaterialEntity/SdeBlueprintProductEntity's own docstrings
+    // for why Reaction/Invention/Copying are out of scope). Added for
+    // Production's first real build-cost view
+    // (data/production/ProductionBuildCost.kt) - fetched last, same
+    // "every other table already works without it" reasoning
+    // TYPE_MATERIALS' own comment gives.
+    BLUEPRINT_PRODUCTS("industryActivityProducts.csv", "sde_blueprint_products"),
+    BLUEPRINT_MATERIALS("industryActivityMaterials.csv", "sde_blueprint_materials"),
 }
+
+/** Manufacturing is CCP's `activityID` 1 - the only activity this cache
+ * stores (see `SdeBlueprintMaterialEntity`'s docstring). Reaction (11),
+ * Invention (8) and Copying (5) rows are filtered out at parse time, same
+ * as `sde.py`'s own `_RELEVANT_ACTIVITIES` filter on desktop, just narrowed
+ * further to the one activity this port's first build-cost consumer needs. */
+private const val MANUFACTURING_ACTIVITY_ID = 1
 
 /** What a completed refresh reports back: row counts per table (the
  * counterpart of storage.py's `sde_row_counts`) and when it happened. */
@@ -94,7 +112,7 @@ data class SdeStaleness(
 class SdeRepository(
     private val db: AppDatabase,
     private val downloader: SdeDownloader = SdeDownloader(),
-) {
+) : ProductionBomSource {
     private val dao = db.sdeDao()
 
     /** Downloads the current Fuzzwork dump and replaces the cache. Safe to
@@ -226,6 +244,38 @@ class SdeRepository(
             }
         }
 
+        onProgress(SdeFile.BLUEPRINT_PRODUCTS, 8, total)
+        val blueprintProducts = ArrayList<SdeBlueprintProductEntity>(30_000)
+        downloader.fetchCsv(SdeFile.BLUEPRINT_PRODUCTS.filename) { reader ->
+            blueprintProducts.clear()
+            SdeCsv.readRows(reader) { row ->
+                val activityId = row.intOrNull("activityID") ?: return@readRows
+                if (activityId != MANUFACTURING_ACTIVITY_ID) return@readRows
+                val blueprintTypeId = row.intOrNull("typeID") ?: return@readRows
+                val productTypeId = row.intOrNull("productTypeID") ?: return@readRows
+                val quantity = row.doubleOrNull("quantity") ?: return@readRows
+                blueprintProducts.add(
+                    SdeBlueprintProductEntity(blueprintTypeId, activityId, productTypeId, quantity)
+                )
+            }
+        }
+
+        onProgress(SdeFile.BLUEPRINT_MATERIALS, 9, total)
+        val blueprintMaterials = ArrayList<SdeBlueprintMaterialEntity>(300_000)
+        downloader.fetchCsv(SdeFile.BLUEPRINT_MATERIALS.filename) { reader ->
+            blueprintMaterials.clear()
+            SdeCsv.readRows(reader) { row ->
+                val activityId = row.intOrNull("activityID") ?: return@readRows
+                if (activityId != MANUFACTURING_ACTIVITY_ID) return@readRows
+                val blueprintTypeId = row.intOrNull("typeID") ?: return@readRows
+                val materialTypeId = row.intOrNull("materialTypeID") ?: return@readRows
+                val quantity = row.doubleOrNull("quantity") ?: return@readRows
+                blueprintMaterials.add(
+                    SdeBlueprintMaterialEntity(blueprintTypeId, activityId, materialTypeId, quantity)
+                )
+            }
+        }
+
         val refreshedAt = Instant.now().toString()
         // withTransaction is room-ktx's coroutine-aware counterpart of an
         // @Transaction DAO method: it pins every suspending call in the block
@@ -241,6 +291,8 @@ class SdeRepository(
             dao.clearSolarSystems()
             dao.clearStations()
             dao.clearTypeMaterials()
+            dao.clearBlueprintProducts()
+            dao.clearBlueprintMaterials()
             dao.insertTypes(types)
             dao.insertGroups(groups)
             dao.insertCategories(categories)
@@ -248,6 +300,8 @@ class SdeRepository(
             dao.insertSolarSystems(solarSystems)
             dao.insertStations(stations)
             dao.insertTypeMaterials(typeMaterials)
+            dao.insertBlueprintProducts(blueprintProducts)
+            dao.insertBlueprintMaterials(blueprintMaterials)
             dao.upsertRefreshState(SdeRefreshStateEntity(refreshedAt = refreshedAt, dumpEtag = dumpEtag))
         }
 
@@ -285,6 +339,8 @@ class SdeRepository(
             SdeFile.SOLAR_SYSTEMS.table to dao.countSolarSystems(),
             SdeFile.STATIONS.table to dao.countStations(),
             SdeFile.TYPE_MATERIALS.table to dao.countTypeMaterials(),
+            SdeFile.BLUEPRINT_PRODUCTS.table to dao.countBlueprintProducts(),
+            SdeFile.BLUEPRINT_MATERIALS.table to dao.countBlueprintMaterials(),
         )
     }
 
@@ -379,4 +435,31 @@ class SdeRepository(
     suspend fun groupCategoryIds(): Map<Int, Int> = withContext(Dispatchers.IO) {
         dao.allGroups().mapNotNull { g -> g.categoryId?.let { g.groupId to it } }.toMap()
     }
+
+    // ------------------------------------------------ blueprint BOM lookups
+    // Backs data/production/ProductionBuildCost.kt's recursive build-cost
+    // walk. Both mirror storage.py's get_blueprint_for_product/
+    // get_blueprint_materials shape, narrowed to the one activity
+    // (Manufacturing) this cache stores - see SdeBlueprintProductEntity's
+    // own docstring for why no activity_id parameter is needed here the way
+    // the desktop functions take/return one.
+
+    /** "Which blueprint makes `productTypeId`, and how many per run" - null
+     * for a raw material or anything this cache has no Manufacturing
+     * blueprint for. */
+    override suspend fun blueprintForProduct(productTypeId: Int): BlueprintForProduct? =
+        withContext(Dispatchers.IO) {
+            dao.blueprintForProduct(productTypeId)?.let { BlueprintForProduct(it.blueprintTypeId, it.quantity) }
+        }
+
+    /** One run's Manufacturing materials for `blueprintTypeId`, at ME 0 -
+     * applying ME reduction is the caller's job, matching
+     * `storage.get_blueprint_materials`'s own contract. Empty (not null) for
+     * a blueprint id with no material rows cached. */
+    override suspend fun blueprintMaterials(blueprintTypeId: Int): List<Pair<Int, Double>> =
+        withContext(Dispatchers.IO) {
+            dao.blueprintMaterials(blueprintTypeId).map { it.materialTypeId to it.quantity }
+        }
+
+    override suspend fun volumeOf(typeId: Int): Double? = withContext(Dispatchers.IO) { dao.type(typeId)?.volume }
 }

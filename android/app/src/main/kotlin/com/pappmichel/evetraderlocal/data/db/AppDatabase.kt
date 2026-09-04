@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintMaterialEntity
+import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintProductEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeCategoryEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeDao
 import com.pappmichel.evetraderlocal.data.sde.SdeGroupEntity
@@ -24,15 +26,19 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
  * Version 2 adds the SDE cache tables (data/sde/) alongside the original
  * tokens/settings pair. Version 3 adds `sde_type_materials` and
  * `SdeTypeEntity.portionSize` for the Ore & Minerals / Reprocessing Quote
- * port (see SdeRepository's own docstring). */
+ * port (see SdeRepository's own docstring). Version 4 adds
+ * `sde_blueprint_products`/`sde_blueprint_materials` (Manufacturing-only
+ * blueprint BOM data) for Production's first real build-cost view - see
+ * `data/production/ProductionBuildCost.kt`. */
 @Database(
     entities = [
         TokenEntity::class, SettingsEntity::class,
         SdeTypeEntity::class, SdeGroupEntity::class, SdeCategoryEntity::class,
         SdeMarketGroupEntity::class, SdeSolarSystemEntity::class, SdeStationEntity::class,
         SdeRefreshStateEntity::class, SdeTypeMaterialEntity::class,
+        SdeBlueprintProductEntity::class, SdeBlueprintMaterialEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
