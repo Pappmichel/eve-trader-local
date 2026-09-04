@@ -78,6 +78,17 @@ data class ProductionConfig(
     // folded into it (see production/config.py's own comment on the real
     // EVE formula). 0.25% is the fixed NPC-station rate.
     val facilityTaxRate: Double = 0.0025,
+
+    // -- Added for Build Candidates (data/production/ProductionBuildCandidates.kt) --
+
+    // Minimum build-vs-buy margin (margin_home) a scanned catalog item must
+    // clear to be surfaced as a candidate at all - matches
+    // production/config.py's own `min_margin` default exactly (15%, "is this
+    // worth building at all", same threshold desktop's stock-target planner
+    // uses). `min_daily_profit`/Goonmetrics-movement ranking is not ported
+    // (see ProductionBuildCandidates.kt's own docstring) - this is the one
+    // gate this port actually has.
+    val minMargin: Double = 0.15,
 ) {
     companion object {
         const val SCOPE = "production"

@@ -74,11 +74,25 @@ private val DOCTRINE_SCOPES = listOf(
     "esi-assets.read_assets.v1", "esi-contracts.read_character_contracts.v1",
 )
 
+// Matches production.PRODUCER_ROLE_PREFIX's own three needs: the home
+// structure's docking/order-book access ProductionPricing.homePrices
+// already looks for under this role prefix, plus - new for Current Jobs &
+// Slots (ProductionJobs.kt) - the character's own industry jobs and
+// trained skill levels (the latter is what lets this port show a real
+// total/free slot count, unlike the local desktop build's own reduced
+// character_slot_overview - see that file's module docstring).
+private val PRODUCTION_SCOPES = listOf(
+    "esi-markets.structure_markets.v1",
+    "esi-industry.read_character_jobs.v1",
+    "esi-skills.read_skills.v1",
+)
+
 private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
     Triple("Buyer (Trading)", "buyer", TRADING_SCOPES),
     Triple("Seller (Trading / Ore & Minerals)", "seller", TRADING_SCOPES),
     Triple("Trader (Station Trading)", "trader", STATION_TRADING_SCOPES),
     Triple("Doctrine", "doctrine", DOCTRINE_SCOPES),
+    Triple("Producer (Production)", "producer", PRODUCTION_SCOPES),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -3,7 +3,8 @@ package com.pappmichel.evetraderlocal.data.sde
 import androidx.room.withTransaction
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.production.BlueprintForProduct
-import com.pappmichel.evetraderlocal.data.production.ProductionBomSource
+import com.pappmichel.evetraderlocal.data.production.CandidateType
+import com.pappmichel.evetraderlocal.data.production.ProductionCandidateSource
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -112,7 +113,7 @@ data class SdeStaleness(
 class SdeRepository(
     private val db: AppDatabase,
     private val downloader: SdeDownloader = SdeDownloader(),
-) : ProductionBomSource {
+) : ProductionCandidateSource {
     private val dao = db.sdeDao()
 
     /** Downloads the current Fuzzwork dump and replaces the cache. Safe to
@@ -462,4 +463,14 @@ class SdeRepository(
         }
 
     override suspend fun volumeOf(typeId: Int): Double? = withContext(Dispatchers.IO) { dao.type(typeId)?.volume }
+
+    /** Build Candidates' whole-catalog scan universe - every published type
+     * with a cached Manufacturing blueprint (`SdeDao.manufacturableTypes`,
+     * see that query's own docstring). */
+    override suspend fun manufacturableTypes(): List<CandidateType> = withContext(Dispatchers.IO) {
+        dao.manufacturableTypes().mapNotNull { t ->
+            val name = t.typeName ?: return@mapNotNull null
+            CandidateType(typeId = t.typeId, typeName = name, volumeM3 = t.volume, metaLevel = t.metaLevel)
+        }
+    }
 }

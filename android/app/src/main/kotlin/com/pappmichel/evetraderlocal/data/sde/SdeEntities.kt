@@ -242,6 +242,23 @@ interface SdeDao {
     @Query("SELECT * FROM sde_groups") suspend fun allGroups(): List<SdeGroupEntity>
     @Query("SELECT * FROM sde_categories") suspend fun allCategories(): List<SdeCategoryEntity>
 
+    /** Every published type with a cached Manufacturing blueprint that
+     * produces it - Build Candidates' whole-catalog scan universe (the
+     * Android counterpart of desktop's `storage.load_sde_types_with_
+     * market_group` + `classify_activity(type_id) is not None` filter,
+     * narrowed the same "Manufacturing only" way every other query on this
+     * cache already is - see `SdeBlueprintProductEntity`'s own docstring).
+     * `DISTINCT` guards a type whose product happens to appear in more than
+     * one blueprint row (shouldn't happen in real SDE data, but costs
+     * nothing to guard); unpublished types (removed/never-released items)
+     * are excluded the same way `oreIceCandidateTypes` excludes them. */
+    @Query(
+        "SELECT DISTINCT t.* FROM sde_types t " +
+            "JOIN sde_blueprint_products p ON p.productTypeId = t.typeId " +
+            "WHERE t.published = 1"
+    )
+    suspend fun manufacturableTypes(): List<SdeTypeEntity>
+
     // ----------------------------------------------------------- lookups
     @Query("SELECT typeName FROM sde_types WHERE typeId = :typeId")
     suspend fun typeName(typeId: Int): String?

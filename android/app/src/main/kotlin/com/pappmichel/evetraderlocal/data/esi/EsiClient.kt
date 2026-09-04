@@ -133,6 +133,29 @@ data class EsiContractItem(
     @SerialName("is_singleton") val isSingleton: Boolean = false,
 )
 
+/** One row of `/characters/{character_id}/industry/jobs/` - the counterpart
+ * of esi_client.py's own industry-jobs read (see production/esi_sync.py).
+ * `productTypeId`/`blueprintTypeId` are null for a job with no direct
+ * product (research/copying jobs output a BPO/BPC, not a market item, same
+ * as the desktop build's own `product_type_id IS NULL` case). `installerId`
+ * is the *character* who started the job - for a corp job that can be a
+ * different character than the one whose token fetched this list, which is
+ * exactly why `ProductionJobs.kt` resolves it against every logged-in
+ * producer character's own name rather than assuming it's always the
+ * caller. */
+@Serializable
+data class IndustryJob(
+    @SerialName("job_id") val jobId: Long = 0,
+    @SerialName("installer_id") val installerId: Long = 0,
+    @SerialName("activity_id") val activityId: Int = 0,
+    @SerialName("blueprint_type_id") val blueprintTypeId: Int = 0,
+    @SerialName("product_type_id") val productTypeId: Int? = null,
+    val runs: Int = 0,
+    val status: String = "",
+    @SerialName("start_date") val startDate: String = "",
+    @SerialName("end_date") val endDate: String = "",
+)
+
 @Serializable
 data class CharacterWalletTransaction(
     @SerialName("transaction_id") val transactionId: Long,
@@ -403,6 +426,43 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
         json.decodeFromString<CharacterSkillsResponse>(
             getBody("/characters/$characterId/skills/", mapOf("datasource" to "tranquility"), accessToken)
         ).skills
+
+    /** This character's active/paused/ready/delivered industry jobs
+     * (character *and* corp jobs the character installed, or - if they hold
+     * the right corp role - every corp job regardless of installer; ESI
+     * itself decides that, not this method) - the counterpart of
+     * esi_client.py's own industry-jobs pull behind production/esi_sync.py.
+     * Requires esi-industry.read_character_jobs.v1. `includeCompleted`
+     * mirrors ESI's own query parameter of the same name; Current Jobs &
+     * Slots only ever wants the still-running set, so it defaults to false
+     * (ESI's own endpoint default). Paginated defensively like every other
+     * list endpoint here, though a single character's active job count in
+     * practice never approaches a second page. */
+    suspend fun characterIndustryJobs(
+        characterId: Long,
+        accessToken: String,
+        includeCompleted: Boolean = false,
+    ): List<IndustryJob> {
+        val out = mutableListOf<IndustryJob>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/characters/$characterId/industry/jobs/",
+                mapOf(
+                    "datasource" to "tranquility",
+                    "include_completed" to includeCompleted.toString(),
+                    "page" to page.toString(),
+                ),
+                accessToken,
+            )
+            val chunk: List<IndustryJob> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
+    }
 
     /** The NPC station ids in one solar system - a public endpoint, so this
      * needs no token. Used to find "is this in Jita" the way the desktop
