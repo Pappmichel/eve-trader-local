@@ -33,9 +33,11 @@ current scope.
 - **Trading -> Shortlist** (`data/trading/Shortlist.kt`,
   `data/trading/ShortlistRepository.kt`, `ui/screens/ShortlistScreen.kt`):
   the second real tool screen. Manual shortlist membership (add/remove/
-  toggle-active, persisted the same JSON-blob-per-scope way as
-  `TradingConfig`) plus a "Refresh" action running `evaluateShortlist` - a
-  straight Kotlin port of `shortlist.py`'s margin/decision formula -
+  edit/toggle-active - tapping a row opens the same dialog Add uses,
+  pre-filled, so fixing a typo no longer means delete-and-re-add;
+  persisted the same JSON-blob-per-scope way as `TradingConfig`) plus a
+  "Refresh" action running `evaluateShortlist` - a straight Kotlin port of
+  `shortlist.py`'s margin/decision formula -
   against live Jita region order stats and (when a Seller character is
   logged in and a structure id is configured) live structure order-book
   stats, plus (same conditions) the seller's own open sell orders at that

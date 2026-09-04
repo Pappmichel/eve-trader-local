@@ -1,5 +1,6 @@
 package com.pappmichel.evetraderlocal.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -71,6 +72,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     var status by remember { mutableStateOf("Loading saved shortlist...") }
     var busy by remember { mutableStateOf(false) }
     var showAddDialog by remember { mutableStateOf(false) }
+    var editingItem by remember { mutableStateOf<ShortlistItem?>(null) }
 
     LaunchedEffect(Unit) {
         items = shortlistRepo.load()
@@ -181,6 +183,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 items(items) { item ->
                     val row = rowByItem[item.item]
                     ListItem(
+                        modifier = Modifier.clickable { editingItem = item },
                         headlineContent = { Text(item.item) },
                         supportingContent = {
                             Text(
@@ -210,26 +213,43 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     }
 
     if (showAddDialog) {
-        AddShortlistItemDialog(
+        ShortlistItemDialog(
+            existing = null,
             onDismiss = { showAddDialog = false },
-            onAdd = { newItem ->
+            onSave = { newItem ->
                 persist(items + newItem)
                 showAddDialog = false
             },
         )
     }
+    editingItem?.let { existing ->
+        ShortlistItemDialog(
+            existing = existing,
+            onDismiss = { editingItem = null },
+            onSave = { edited ->
+                persist(items.map { if (it == existing) edited else it })
+                editingItem = null
+            },
+        )
+    }
 }
 
+/** Add-or-edit dialog: `existing == null` means "Add shortlist item" (a
+ * fresh, always-active entry); otherwise this pre-fills from - and
+ * preserves - that item's `active` flag while editing its other fields.
+ * Tapping a row in the list (as opposed to its checkbox/delete button)
+ * opens this in edit mode - the only way to fix a typo used to be delete
+ * and re-add. */
 @Composable
-private fun AddShortlistItemDialog(onDismiss: () -> Unit, onAdd: (ShortlistItem) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var typeId by remember { mutableStateOf("") }
-    var category by remember { mutableStateOf("") }
-    var volume by remember { mutableStateOf("") }
+private fun ShortlistItemDialog(existing: ShortlistItem?, onDismiss: () -> Unit, onSave: (ShortlistItem) -> Unit) {
+    var name by remember { mutableStateOf(existing?.item ?: "") }
+    var typeId by remember { mutableStateOf(existing?.itemId?.takeIf { it != 0 }?.toString() ?: "") }
+    var category by remember { mutableStateOf(existing?.category ?: "") }
+    var volume by remember { mutableStateOf(existing?.volumeM3?.toString() ?: "") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Add shortlist item") },
+        title = { Text(if (existing == null) "Add shortlist item" else "Edit shortlist item") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Item name") })
@@ -242,14 +262,14 @@ private fun AddShortlistItemDialog(onDismiss: () -> Unit, onAdd: (ShortlistItem)
             TextButton(
                 enabled = name.isNotBlank() && typeId.toIntOrNull() != null && volume.toDoubleOrNull() != null,
                 onClick = {
-                    onAdd(
+                    onSave(
                         ShortlistItem(
                             item = name, itemId = typeId.toIntOrNull() ?: 0, category = category,
-                            volumeM3 = volume.toDoubleOrNull() ?: 0.0,
+                            volumeM3 = volume.toDoubleOrNull() ?: 0.0, active = existing?.active ?: true,
                         )
                     )
                 },
-            ) { Text("Add") }
+            ) { Text(if (existing == null) "Add" else "Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

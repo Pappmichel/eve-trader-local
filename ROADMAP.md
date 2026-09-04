@@ -236,8 +236,9 @@ which "careful reading" alone had caught):
   ShortlistScreen.kt`) — a Kotlin port of `shortlist.py`'s margin/decision
   formula, plus new `EsiClient` methods for live Jita region order stats and
   (when a Seller character is logged in) live structure order-book stats.
-  Membership (which items are tracked) is manual add/remove/toggle-active
-  here, not auto-populated/pruned from Candidate Discovery the way
+  Membership (which items are tracked) is manual add/remove/edit/
+  toggle-active here (tapping a row opens the same dialog Add uses,
+  pre-filled), not auto-populated/pruned from Candidate Discovery the way
   desktop's `refresh-and-prune` does it (though a Candidate Discovery row
   can now add itself here directly — see below) — and Profit / Day, the
   Goonmetrics current-price fallback, and buyer-covered tracking aren't
