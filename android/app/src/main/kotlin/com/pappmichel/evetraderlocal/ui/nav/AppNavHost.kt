@@ -30,6 +30,7 @@ import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
+import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
 import com.pappmichel.evetraderlocal.ui.screens.PriceHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
@@ -49,15 +50,16 @@ private const val REALIZED_TRADES_ROUTE = "trading/realized-trades"
 private const val SDE_DATA_ROUTE = "sde-data"
 private const val STATION_TRADING_SHORTLIST_ROUTE = "station-trading/shortlist"
 private const val STATION_TRADING_UNDERCUT_ROUTE = "station-trading/undercut-skills"
+private const val PRODUCTION_ITEM_LOOKUP_ROUTE = "production/item-lookup"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
  * for - currently Trading/Candidate Discovery, Trading/Shortlist,
  * Trading/Unlisted Stock & Undercut Check, Trading/Price History,
- * Trading/Realized Trades & Transactions, and Station Trading's own
- * Shortlist/Undercut & Skills (see ROADMAP.md's Android section for what's
- * ported so far). Add a route here as each new screen replaces its
- * placeholder. */
+ * Trading/Realized Trades & Transactions, Station Trading's own
+ * Shortlist/Undercut & Skills, and Production/Item Lookup (see
+ * ROADMAP.md's Android section for what's ported so far). Add a route
+ * here as each new screen replaces its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -73,6 +75,8 @@ private fun routeFor(tool: String, view: String): String =
         STATION_TRADING_SHORTLIST_ROUTE
     } else if (tool == "Station Trading" && view == "Undercut & Skills") {
         STATION_TRADING_UNDERCUT_ROUTE
+    } else if (tool == "Production" && view == "Item Lookup") {
+        PRODUCTION_ITEM_LOOKUP_ROUTE
     } else {
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
@@ -192,6 +196,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(REALIZED_TRADES_ROUTE) { RealizedTradesScreen(database, tokenManager) }
                 composable(STATION_TRADING_SHORTLIST_ROUTE) { StationTradingShortlistScreen(database) }
                 composable(STATION_TRADING_UNDERCUT_ROUTE) { StationTradingUndercutScreen(database, tokenManager) }
+                composable(PRODUCTION_ITEM_LOOKUP_ROUTE) { ItemLookupScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->
                     val tool = backStackEntry.arguments?.getString("tool") ?: ""
                     val view = backStackEntry.arguments?.getString("view") ?: ""

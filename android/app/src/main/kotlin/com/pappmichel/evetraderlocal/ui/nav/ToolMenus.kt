@@ -4,8 +4,8 @@ package com.pappmichel.evetraderlocal.ui.nav
  * main_window.py `_TOOL_MENUS` - kept as plain data here too, so giving one
  * of these a real screen later is a matter of pointing its route at that
  * screen in AppNavHost.kt, not restructuring navigation. Every entry opens
- * PlaceholderScreen except Trading/Candidate Discovery,
- * Trading/Shortlist, and Trading/Unlisted Stock & Undercut Check (see
+ * PlaceholderScreen except Trading/Candidate Discovery, Trading/Shortlist,
+ * Trading/Unlisted Stock & Undercut Check, and Production/Item Lookup (see
  * ROADMAP.md's Android section for what's actually ported vs. still
  * pending). */
 val TOOL_MENUS: List<Pair<String, List<String>>> = listOf(
