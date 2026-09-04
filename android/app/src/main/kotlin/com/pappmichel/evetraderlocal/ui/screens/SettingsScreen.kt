@@ -77,8 +77,11 @@ fun SettingsScreen(database: AppDatabase) {
     // default for that field instead of what they actually typed.
     fun save() {
         val invalid = mutableListOf<String>()
-        fun reqInt(label: String, text: String): Int = text.toIntOrNull() ?: run { invalid.add(label); 0 }
-        fun reqDouble(label: String, text: String): Double = text.toDoubleOrNull() ?: run { invalid.add(label); 0.0 }
+        // .trim() so stray whitespace (an easy copy-paste artifact) doesn't
+        // turn an otherwise-valid number into a rejected one - toIntOrNull/
+        // toDoubleOrNull don't tolerate surrounding whitespace themselves.
+        fun reqInt(label: String, text: String): Int = text.trim().toIntOrNull() ?: run { invalid.add(label); 0 }
+        fun reqDouble(label: String, text: String): Double = text.trim().toDoubleOrNull() ?: run { invalid.add(label); 0.0 }
 
         val newJitaRegionId = reqInt("Jita Region ID", jitaRegionId)
         val newReferenceRegionId = reqInt("Reference Region ID", referenceRegionId)

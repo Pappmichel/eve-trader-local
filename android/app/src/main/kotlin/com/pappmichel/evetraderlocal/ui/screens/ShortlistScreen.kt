@@ -290,18 +290,20 @@ private fun ShortlistItemDialog(
             }
         },
         confirmButton = {
+            // .trim() so stray whitespace (an easy copy-paste artifact)
+            // doesn't turn an otherwise-valid number into a rejected one.
             TextButton(
-                enabled = name.isNotBlank() && typeId.toIntOrNull() != null && volume.toDoubleOrNull() != null,
+                enabled = name.isNotBlank() && typeId.trim().toIntOrNull() != null && volume.trim().toDoubleOrNull() != null,
                 onClick = {
-                    val newTypeId = typeId.toIntOrNull() ?: 0
+                    val newTypeId = typeId.trim().toIntOrNull() ?: 0
                     if (isDuplicateTypeId(newTypeId)) {
                         duplicateError = true
                         return@TextButton
                     }
                     onSave(
                         ShortlistItem(
-                            item = name, itemId = newTypeId, category = category,
-                            volumeM3 = volume.toDoubleOrNull() ?: 0.0, active = existing?.active ?: true,
+                            item = name.trim(), itemId = newTypeId, category = category.trim(),
+                            volumeM3 = volume.trim().toDoubleOrNull() ?: 0.0, active = existing?.active ?: true,
                         )
                     )
                 },
