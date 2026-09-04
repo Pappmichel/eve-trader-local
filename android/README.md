@@ -285,10 +285,38 @@ current scope.
   structure/rig bonus), no live ESI system-cost-index pull (uses the same
   flat fallback rate desktop itself falls back to), and EIV approximated
   from real material buy prices rather than ESI's own adjusted-price
-  catalog. Every other Production view (Build Candidates, Planner,
-  Asset-Optimized Planner, Logistics, Special Orders, Invention
-  Estimator, Owned Blueprints, Current Jobs & Slots) remains
-  `PlaceholderScreen`.
+  catalog.
+- **Production -> Build Candidates** (`data/production/
+  ProductionBuildCandidates.kt`; `ui/screens/
+  ProductionBuildCandidatesScreen.kt`): a Kotlin port of `engine.
+  discover_build_candidates`, reusing `ProductionBuildCost.kt`'s
+  `unitBuildCost`/`marginHome` math (introduced for Ship Margins) across
+  every manufacturable, published SDE type - a new `SdeDao.
+  manufacturableTypes()` query joins `sde_blueprint_products` against
+  `sde_types` (no new table). Simplified vs. desktop: no Jita
+  cross-shopping during the scan (would mean hundreds of per-type ESI
+  calls at catalog scale; home prices are one bulk download regardless of
+  type count, and Jita has no equivalent bulk endpoint), margin-only
+  ranking instead of desktop's Goonmetrics daily-movement weighting, and
+  no `min_daily_profit` filter.
+- **Production -> Current Jobs & Slots** (new `EsiClient.
+  characterIndustryJobs`; `data/production/ProductionJobs.kt`; `ui/
+  screens/ProductionCurrentJobsScreen.kt`): a live ESI read ported from
+  `jobs.py`'s `list_current_jobs`/`character_slot_overview`, plus the
+  existing skill-based job-slot formula. A new "Producer" login role
+  requests `esi-industry.read_character_jobs.v1` alongside
+  `esi-skills.read_skills.v1` - since `characterSkills` already existed
+  (from Station Trading), this view shows a *real* total/free slot
+  count, something the desktop build's own `character_slot_overview`
+  explicitly can't do (see that function's own docstring - it has no
+  such skill read wired up). Invention Estimator was evaluated and
+  confirmed out of scope: `invention.py`'s recipe lookup needs
+  `industryActivityProbabilities`/`industryActivitySkills` SDE tables
+  this cache doesn't carry. Planner, Asset-Optimized Planner, Logistics,
+  Special Orders, and Owned Blueprints remain `PlaceholderScreen` - each
+  needs real additional infrastructure (multi-level BOM explosion,
+  character-asset cross-referencing, or ESI endpoints/business rules not
+  yet modeled here).
 - **Doctrine -> Fittings** (`data/doctrine/EftFittingParser.kt`,
   `DoctrineSdeResolver.kt`; `ui/screens/DoctrineFittingsScreen.kt`): a
   Kotlin port of `doctrine/parser.py`'s EFT fitting-text parser (paste a
@@ -297,16 +325,50 @@ current scope.
   lines). Item names are resolved via two new lookup queries added to the
   existing SDE cache (`SdeRepository.resolveTypeByName`/`hullTypeNames`) -
   no new table and no Room-version bump, since both are plain queries over
-  `sde_types`, already fully populated. Preview-only: nothing is
-  persisted, since Stockpile Status/Shopping List/Contract History (the
-  other three Doctrine views, still `PlaceholderScreen`) all need a real
-  Doctrine/Fitting persistence layer this platform doesn't have yet, and
-  building one just to unblock the parser was judged out of scope for one
-  pass. One honest gap, surfaced in the screen itself: the SDE cache has
-  no `dgmTypeEffects` table, so slot classification always returns null
-  and most fitted modules parse into a generic "cargo" slot rather than
-  their real low/med/high/rig section - item names, quantities, and parse
-  issues are unaffected by this gap.
+  `sde_types`, already fully populated. A parsed fit can now be saved,
+  listed, and deleted under a name (`DoctrineFittingRepository` - a
+  settings-blob repository, same shape as `ShortlistRepository`),
+  backing the three views below. One honest gap, surfaced in the screen
+  itself: the SDE cache has no `dgmTypeEffects` table, so slot
+  classification always returns null and most fitted modules parse into
+  a generic "cargo" slot rather than their real low/med/high/rig section
+  - item names, quantities, and parse issues are unaffected by this gap.
+- **Doctrine -> Stockpile Status** (`data/doctrine/DoctrineValidation.kt`,
+  `StockpileStatus.kt`; `ui/screens/DoctrineStockpileStatusScreen.kt`):
+  `DoctrineValidation.kt` ports `validation.py`'s Soll/priority-allocation/
+  deviation math case-for-case - the contract-side matching functions are
+  deliberately not ported, since there's no consumer for them without a
+  full ESI contract-sync engine. `StockpileStatus.kt` sums saved fittings'
+  required quantities and compares them against `EsiClient.
+  characterAssets` for a registered Doctrine character, falling back to
+  manual entry when none is registered (same "don't block on missing
+  auth" pattern `RealizedTradesScreen.kt`/`UnlistedUndercutScreen.kt`
+  already use). Simplified vs. desktop: no contract-target multiplier
+  (needs that same unported contract-sync engine) and no single fixed
+  stockpile location (sums a character's whole asset list, or a location
+  filter, rather than one hangar).
+- **Doctrine -> Shopping List** (`data/doctrine/ShoppingList.kt`; `ui/
+  screens/DoctrineShoppingListScreen.kt`): prices Stockpile Status's real
+  shortfalls via `EsiClient.regionOrderStatsBulk`/`GoonmetricsClient.
+  currentPrices` - no new price-fetch machinery, reusing exactly what
+  Trading/Ore & Minerals already built. No "Build" column: this
+  platform's Production port is a single-item build-cost estimate (Ship
+  Margins/Build Candidates), not the desktop's recursive BOM-walk
+  build-cost engine, so a buy-vs-build comparison per shortfall line
+  isn't available here yet.
+- **Doctrine -> Contract History** (new `EsiClient.characterContracts`/
+  `characterContractItems`; `data/doctrine/ContractHistory.kt`; `ui/
+  screens/DoctrineContractHistoryScreen.kt`): a simple read-only listing
+  of currently-visible finished contracts with resolved item names -
+  not the desktop's permanent fitting-matched history table, which needs
+  the same not-yet-ported contract-sync/matching engine Stockpile
+  Status's contract-target multiplier is also missing. A new "Doctrine"
+  login role requests the two new ESI scopes this and Stockpile Status
+  need (`esi-assets.read_assets.v1`, `esi-contracts.read_character_
+  contracts.v1`) - kept as its own role/scope pair rather than folded
+  into "Seller" (which already carries `esi-assets.read_assets.v1` for
+  Ore & Minerals/Unlisted Stock), matching the desktop build's own
+  separate `doctrine` role prefix.
 - **Ore & Minerals -> Reprocessing Quote** (`data/refining/PasteParser.kt`,
   `ReprocessingYield.kt`, `ReprocessingQuote.kt`, `RefiningConfig.kt`;
   `ui/screens/ReprocessingQuoteScreen.kt`): a Kotlin port of
@@ -516,9 +578,14 @@ current scope.
   case-for-case port, since the desktop suite exercises LP behavior this
   simpler direct-buy substitute doesn't implement - covers whole-unit
   rounding, broker-fee markup, multiple independent lines, and the
-  no-sell-orders case), and `ProductionBuildCostTest.kt` (14 cases
+  no-sell-orders case), `ProductionBuildCostTest.kt` (14 cases
   covering material-quantity rounding, buy-vs-build at every price level,
   an unpriceable material collapsing the whole estimate, product-quantity
-  division, and both margin formulas). No lint step, no instrumented/UI
-  tests (would need an emulator), no release signing, no Play Store
-  upload.
+  division, and both margin formulas), `ProductionBuildCandidatesTest.kt`
+  and `ProductionJobsTest.kt` (the catalog-scan and job-slot-formula cases
+  for Production's two newest views), and `DoctrineValidationTest.kt`/
+  `StockpileStatusTest.kt`/`ShoppingListTest.kt`/`ContractHistoryTest.kt`
+  (31 cases total, ported from `tests/test_doctrine_engine.py` and
+  hand-written for the platform-specific orchestration around it). No
+  lint step, no instrumented/UI tests (would need an emulator), no
+  release signing, no Play Store upload.
