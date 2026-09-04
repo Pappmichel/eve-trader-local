@@ -173,11 +173,13 @@ current scope.
   comment on when that must become a real `Migration`). The lookup API
   (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
   `stationIdsInSystem`) plus new bulk-table reads (`marketGroups`,
-  `typesWithMarketGroup`, `categoryNames`, `groupCategoryIds`) now back both
-  Candidate Discovery's SDE-backed fast path (see below) and Realized
-  Trades' buy-side region filter (see above). Station Trading's own
-  candidate discovery still doesn't read it - needs a populated cache and a
-  real device to verify the results match, tracked as a follow-up.
+  `typesWithMarketGroup`, `categoryNames`, `groupCategoryIds`) now back
+  Candidate Discovery's SDE-backed fast path (see below), Realized Trades'
+  buy-side region filter, Station Trading's item-name resolution, and
+  Doctrine/Ore & Minerals' own lookups (see their respective entries
+  below). Station Trading's Goonmetrics-based candidate discovery itself
+  never needed station/category data, so there's nothing left to wire up
+  there.
 - **Candidate Discovery reads the SDE cache** (`CandidateDiscovery.
   buildCandidateUniverseFromSde`/`buildCandidateUniverse`): the same
   "prefer the local cache, fall back to the live ESI walk only when it's
@@ -248,10 +250,10 @@ current scope.
     registered trader character rather than simplified to one, since
     Station Trading's single role has no reason not to pool the way
     Trading's buyer/seller split does.
-  - Simplified vs. desktop: item names/categories aren't resolved from the
-    local SDE cache yet (rows show a bare type_id) - the same gap
-    Candidate Discovery's own docstring already documents, and the same
-    follow-up work would close both at once.
+  - Item names/categories in both screens are resolved from the local SDE
+    cache (`SdeRepository.typeName`/`categoryNameFor`), falling back to
+    the bare type_id/"Unknown" when the cache is unrefreshed or doesn't
+    carry a given type.
 - **Production -> Item Lookup** (`data/production/ProductionPricing.kt`,
   `ProductionConfig.kt`; `ui/screens/ItemLookupScreen.kt`): the first
   Production view, a Kotlin port of `production/pricing.py` scoped to just

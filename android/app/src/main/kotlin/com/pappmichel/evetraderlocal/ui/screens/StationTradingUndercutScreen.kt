@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
+import com.pappmichel.evetraderlocal.data.sde.SdeRepository
 import com.pappmichel.evetraderlocal.data.trading.STATION_TRADING_SKILL_LABELS
 import com.pappmichel.evetraderlocal.data.trading.StationTradingConfigRepository
 import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
@@ -63,10 +64,12 @@ fun StationTradingUndercutScreen(database: AppDatabase, tokenManager: TokenManag
     val scope = rememberCoroutineScope()
     val tradingConfigRepo = remember { TradingConfigRepository(database) }
     val stationConfigRepo = remember { StationTradingConfigRepository(database) }
+    val sdeRepo = remember { SdeRepository(database) }
     val esi = remember { EsiClient() }
 
     var sellRows by remember { mutableStateOf<List<UndercutRow>>(emptyList()) }
     var buyRows by remember { mutableStateOf<List<UndercutRow>>(emptyList()) }
+    var itemNames by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var undercutStatus by remember {
         mutableStateOf("Not run yet - checks every registered trader's own orders at Jita's trade hub.")
     }
@@ -92,6 +95,8 @@ fun StationTradingUndercutScreen(database: AppDatabase, tokenManager: TokenManag
                 undercutStatus = "Checking sell and buy orders..."
                 sellRows = checkUndercutPooled(traders, esi, tradingCfg.jitaRegionId, cfg)
                 buyRows = checkBuyUndercutPooled(traders, esi, tradingCfg.jitaRegionId, cfg)
+                itemNames = (sellRows.map { it.typeId } + buyRows.map { it.typeId }).toSet()
+                    .associateWith { sdeRepo.typeName(it) ?: it.toString() }
                 undercutStatus = "${sellRows.size} sell-side, ${buyRows.size} buy-side undercut(s) found."
             } catch (e: Exception) {
                 undercutStatus = e.message ?: "Undercut check failed."
@@ -149,11 +154,11 @@ fun StationTradingUndercutScreen(database: AppDatabase, tokenManager: TokenManag
 
         if (sellRows.isNotEmpty()) {
             Text("Sell side", style = MaterialTheme.typography.labelLarge)
-            sellRows.forEach { UndercutRowItem(it) }
+            sellRows.forEach { UndercutRowItem(it, itemNames[it.typeId] ?: it.typeId.toString()) }
         }
         if (buyRows.isNotEmpty()) {
             Text("Buy side", style = MaterialTheme.typography.labelLarge)
-            buyRows.forEach { UndercutRowItem(it) }
+            buyRows.forEach { UndercutRowItem(it, itemNames[it.typeId] ?: it.typeId.toString()) }
         }
 
         HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
@@ -187,9 +192,9 @@ fun StationTradingUndercutScreen(database: AppDatabase, tokenManager: TokenManag
 }
 
 @Composable
-private fun UndercutRowItem(row: UndercutRow) {
+private fun UndercutRowItem(row: UndercutRow, itemName: String) {
     ListItem(
-        headlineContent = { Text("Type ${row.typeId}") },
+        headlineContent = { Text(itemName) },
         supportingContent = { Text("mine ${"%,.2f".format(row.myPrice)} vs. ${"%,.2f".format(row.competitorPrice)}") },
         trailingContent = { Text("%,.2f".format(row.difference)) },
     )

@@ -27,6 +27,7 @@ import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.esi.OrderStats
 import com.pappmichel.evetraderlocal.data.history.GoonmetricsClient
+import com.pappmichel.evetraderlocal.data.sde.SdeRepository
 import com.pappmichel.evetraderlocal.data.trading.StationTradingConfig
 import com.pappmichel.evetraderlocal.data.trading.StationTradingConfigRepository
 import com.pappmichel.evetraderlocal.data.trading.StationTradingShortlistItem
@@ -53,24 +54,27 @@ import kotlinx.coroutines.launch
  * number when a live one is one bounded call away" rule
  * `actions._build_shortlist_rows` documents.
  *
- * Simplified vs. desktop: item names/categories are not resolved from the
- * local SDE cache the desktop build reads (`storage.get_sde_type`) - the
- * Android SDE cache exists (`data/sde/`) but wiring this screen onto it is
- * separate, tracked work, same status Candidate Discovery's own docstring
- * already notes. Rows show their bare type_id here instead of an item name
- * until that lands. */
+ * Item names/categories are resolved from the local SDE cache
+ * (`SdeRepository.typeName`/`categoryNameFor`), the same lookups
+ * `storage.get_sde_type` backs on desktop - a row whose type_id isn't in
+ * the cache yet (never refreshed, or a corner-case type Fuzzwork's dump
+ * doesn't carry) falls back to its bare type_id/"Unknown" rather than
+ * blocking the row. */
 @Composable
 fun StationTradingShortlistScreen(database: AppDatabase) {
     val scope = rememberCoroutineScope()
     val tradingConfigRepo = remember { TradingConfigRepository(database) }
     val configRepo = remember { StationTradingConfigRepository(database) }
     val shortlistRepo = remember { StationTradingShortlistRepository(database) }
+    val sdeRepo = remember { SdeRepository(database) }
     val goonmetrics = remember { GoonmetricsClient() }
     val esi = remember { EsiClient() }
 
     data class ShortlistRow(
         val item: StationTradingShortlistItem,
         val stats: OrderStats?,
+        val name: String,
+        val category: String?,
     )
 
     var rows by remember { mutableStateOf<List<ShortlistRow>>(emptyList()) }
@@ -93,7 +97,14 @@ fun StationTradingShortlistScreen(database: AppDatabase) {
         val tradingCfg = tradingConfigRepo.load()
         val items = shortlistRepo.load()
         val live = confirmLive(items.map { it.typeId }, tradingCfg.jitaRegionId, esi)
-        rows = items.map { ShortlistRow(it, live[it.typeId]) }
+        rows = items.map {
+            ShortlistRow(
+                item = it,
+                stats = live[it.typeId],
+                name = sdeRepo.typeName(it.typeId) ?: it.typeId.toString(),
+                category = sdeRepo.categoryNameFor(it.typeId),
+            )
+        }
         status = if (rows.isEmpty()) {
             "No shortlist items yet - Discover to scan the Jita market."
         } else {
@@ -141,10 +152,10 @@ fun StationTradingShortlistScreen(database: AppDatabase) {
             items(rows) { row ->
                 val (profitPerUnit, margin) = profitAndMargin(row.stats, stationCfg)
                 ListItem(
-                    headlineContent = { Text("Type ${row.item.typeId}") },
+                    headlineContent = { Text(row.name) },
                     supportingContent = {
                         Text(
-                            "spread ${"%.1f%%".format(row.item.spreadPct * 100)} · " +
+                            "${row.category ?: "Unknown"} · spread ${"%.1f%%".format(row.item.spreadPct * 100)} · " +
                                 "avg/day ${"%.0f".format(row.item.avgDailyVolume)}" +
                                 if (!row.item.active) " · inactive" else ""
                         )

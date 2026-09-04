@@ -350,10 +350,13 @@ which "careful reading" alone had caught):
   newlines/quoted commas beats a new dependency for a handful of
   fixed-shape files).
   The lookup API (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
-  `stationIdsInSystem`) now backs both Candidate Discovery (see below) and
-  Realized Trades' buy-side filter (see above) - Station Trading's own
-  candidate discovery is the one tracked follow-up left, needing a
-  populated cache and a real device to verify against.
+  `stationIdsInSystem`) now backs Candidate Discovery (see below),
+  Realized Trades' buy-side filter (see above), and Station Trading's
+  Shortlist/Undercut screens' item-name resolution. Station Trading's own
+  candidate discovery (the Goonmetrics-based market scan) is the one
+  tracked follow-up left that still doesn't read it - it never needed
+  station or category data to begin with, so there's nothing concrete to
+  wire up there yet.
 - Candidate Discovery now reads the SDE cache when it's populated
   (`CandidateDiscovery.buildCandidateUniverseFromSde`, via new `SdeDao`/
   `SdeRepository` bulk-table reads) - the fast path desktop's own
@@ -386,12 +389,13 @@ which "careful reading" alone had caught):
   Trading's Shortlist (different tool, different type_id universe - a new
   `station_trading` login role with its own scopes, since Station Trading
   needs `esi-skills.read_skills.v1` for the Skills half and neither of
-  Trading's roles request it). Simplified vs. desktop: item names/
-  categories aren't resolved from the SDE cache yet (rows show a bare
-  type_id) - same status Candidate Discovery's own gap already has, and the
-  same follow-up work would close both. Skill-derived fee/tax discounts
-  are shown as raw levels only, never turned into a numeric discount - those
-  depend on NPC corp standings this app has no way to read (an omission the
+  Trading's roles request it). Item names/categories in the Shortlist and
+  Undercut screens now read from the local SDE cache
+  (`SdeRepository.typeName`/`categoryNameFor`), falling back to the bare
+  type_id when the cache is unrefreshed or doesn't carry that type. Skill-
+  derived fee/tax discounts are shown as raw levels only, never turned into
+  a numeric discount - those depend on NPC corp standings this app has no
+  way to read (an omission the
   desktop build's own constants.py documents too).
 - Production -> Item Lookup (`data/production/ProductionPricing.kt`,
   `ProductionConfig.kt`; `ui/screens/ItemLookupScreen.kt`) - the first
@@ -440,9 +444,7 @@ which "careful reading" alone had caught):
 
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
-or Unlisted-Stock-&-Undercut check across multiple characters, rewiring
-Station Trading's own candidate discovery onto the new SDE cache
-(Candidate Discovery and Realized Trades are both done, see above),
+or Unlisted-Stock-&-Undercut check across multiple characters,
 `average_daily_sold_by_type`, the rest of Production/Doctrine (everything
 needing a blueprint BOM or a persisted stockpile/shopping-list/contract
 layer), Ore & Minerals' own Ore Shortlist/Mineral Shopping List (the real
