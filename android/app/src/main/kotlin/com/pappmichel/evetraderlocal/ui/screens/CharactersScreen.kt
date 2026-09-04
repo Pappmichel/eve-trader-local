@@ -38,18 +38,18 @@ import kotlinx.coroutines.launch
  * to this list once those tools themselves are ported (same "structure
  * now, business logic later" scope as PlaceholderScreen - see ROADMAP.md's
  * Android section). */
+// The desktop build's own config.py requests the same flat scope tuple for
+// every character regardless of role - simpler than tracking which role
+// needs which scope, and EVE SSO doesn't mind a character holding a scope
+// it happens not to use. Mirrored here rather than trimmed per role.
+private val TRADING_SCOPES = listOf(
+    "esi-markets.read_character_orders.v1", "esi-markets.structure_markets.v1",
+    "esi-wallet.read_character_wallet.v1", "esi-assets.read_assets.v1",
+)
+
 private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
-    Triple(
-        "Buyer (Trading)", "buyer",
-        listOf("esi-markets.structure_markets.v1", "esi-wallet.read_character_wallet.v1"),
-    ),
-    Triple(
-        "Seller (Trading / Ore & Minerals)", "seller",
-        listOf(
-            "esi-markets.structure_markets.v1", "esi-wallet.read_character_wallet.v1",
-            "esi-markets.read_character_orders.v1",
-        ),
-    ),
+    Triple("Buyer (Trading)", "buyer", TRADING_SCOPES),
+    Triple("Seller (Trading / Ore & Minerals)", "seller", TRADING_SCOPES),
 )
 
 @OptIn(ExperimentalMaterial3Api::class)

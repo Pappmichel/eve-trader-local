@@ -57,6 +57,18 @@ data class CharacterOrder(
     @SerialName("is_buy_order") val isBuyOrder: Boolean = false,
     @SerialName("volume_remain") val volumeRemain: Double = 0.0,
     @SerialName("location_id") val locationId: Long = 0,
+    @SerialName("region_id") val regionId: Int = 0,
+)
+
+@Serializable
+data class CharacterAsset(
+    @SerialName("type_id") val typeId: Int = 0,
+    @SerialName("location_id") val locationId: Long = 0,
+)
+
+@Serializable
+data class SolarSystemResponse(
+    val stations: List<Long> = emptyList(),
 )
 
 /** Summary stats for one side (buy/sell) of an order book - a robust price
@@ -195,6 +207,40 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
                 "/characters/$characterId/orders/", mapOf("datasource" to "tranquility"), accessToken,
             ).first
         )
+
+    /** This character's assets (every item they own, wherever it is) - the
+     * counterpart of esi_client.py's `character_assets`. Requires a token
+     * with esi-assets.read_assets.v1. Paginated: a well-stocked character's
+     * asset list is unbounded, unlike their order list. */
+    suspend fun characterAssets(characterId: Long, accessToken: String): List<CharacterAsset> {
+        val out = mutableListOf<CharacterAsset>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/characters/$characterId/assets/",
+                mapOf("datasource" to "tranquility", "page" to page.toString()),
+                accessToken,
+            )
+            val chunk: List<CharacterAsset> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
+    }
+
+    /** The NPC station ids in one solar system - a public endpoint, so this
+     * needs no token. Used to find "is this in Jita" the way the desktop
+     * build's own `storage.get_station_ids_in_system` does from its local
+     * SDE cache (`fetch_buyer_already_covered`'s station check) - no SDE
+     * cache exists on this platform yet (see ROADMAP.md's Android
+     * section), but ESI itself already carries this for any system with
+     * NPC stations, Jita included, so no cache is actually needed here. */
+    suspend fun solarSystemStationIds(solarSystemId: Int): List<Long> =
+        json.decodeFromString<SolarSystemResponse>(
+            getBody("/universe/systems/$solarSystemId/", mapOf("datasource" to "tranquility", "language" to "en"))
+        ).stations
 
     private suspend fun getBodyWithPages(
         path: String, params: Map<String, String>, accessToken: String? = null, retries: Int = 3,

@@ -41,16 +41,24 @@ current scope.
   stats, plus (same conditions) the seller's own open sell orders at that
   structure (`EsiClient.characterOrders`, mirroring `esi_client.py`'s
   `character_orders` - the same source `own_orders.py`'s
-  `fetch_own_sell_orders` reads on desktop) so "Already ordered" is now
-  reachable, not just "Import". Best-effort: a Seller character authorized
-  before this scope existed (`esi-markets.read_character_orders.v1`) falls
-  back to "none known" rather than failing the whole refresh - re-logging
-  in picks up the scope. Not ported yet: Profit / Day (needs Goonmetrics
-  region history for real average daily volume), the Goonmetrics
-  current-price fallback when no seller token is available, buyer-covered
-  tracking (already in inventory/on a buy order - a separate signal from
-  the seller's own sell orders above), and auto-add/prune from Candidate
-  Discovery
+  `fetch_own_sell_orders` reads on desktop). When a Buyer character is
+  logged in, it also checks buyer coverage - an open buy order in Jita or
+  at the structure (`characterOrders` again), or existing inventory at a
+  Jita station or the structure (`EsiClient.characterAssets` +
+  `EsiClient.solarSystemStationIds`, the latter a public ESI call that
+  gets Jita's NPC station ids without needing the SDE cache this platform
+  doesn't have yet - mirroring `own_orders.py`'s
+  `fetch_buyer_already_covered`, which reads the same thing from a local
+  SDE-backed table on desktop). Together these make "Already ordered"
+  reachable through either signal, not just "Import" for everything.
+  Best-effort throughout: a Seller/Buyer character authorized before these
+  scopes existed falls back to "none known" for that one signal rather
+  than failing the whole refresh - re-logging in picks up the new scopes
+  (both roles now request the same flat scope set the desktop build's
+  `config.py` does, rather than a role-trimmed subset). Not ported yet:
+  Profit / Day (needs Goonmetrics region history for real average daily
+  volume), the Goonmetrics current-price fallback when no seller token is
+  available, and auto-add/prune from Candidate Discovery
   (`refresh-and-prune` on desktop) - this screen is refresh-only,
   membership is manual (though Candidate Discovery's own screen can now
   add a candidate here directly - see below; there's just no automatic

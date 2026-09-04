@@ -45,17 +45,21 @@ import com.pappmichel.evetraderlocal.data.trading.evaluateShortlist
 import com.pappmichel.evetraderlocal.data.trading.summaryCounts
 import kotlinx.coroutines.launch
 
+// Stable, never changes - distinct from cfg.jitaRegionId (The Forge
+// region). Same constant own_orders.py's JITA_SOLAR_SYSTEM_ID names.
+private const val JITA_SOLAR_SYSTEM_ID = 30000142
+
 private fun fmtPct(value: Double?): String = if (value != null) "%.1f%%".format(value * 100) else "-"
 private fun fmtIsk(value: Double?): String = if (value != null) "%,.2f".format(value) else "-"
 
 /** Trading -> Shortlist: the live import/sell decision table, mirroring the
  * desktop build's trading_shortlist.py view - manual membership management
  * (add/remove/toggle-active) plus a "Refresh" action running
- * `evaluateShortlist` against live Jita + structure order-book prices plus
- * the seller's own open sell orders there (see `Shortlist.kt`'s own
- * docstring for what's still simplified vs. the desktop version: no
- * buyer-covered tracking, no Goonmetrics fallback or Profit/Day, no
- * auto-add/prune from Candidate Discovery). */
+ * `evaluateShortlist` against live Jita + structure order-book prices, the
+ * seller's own open sell orders there, and the buyer's own coverage (open
+ * buy orders/existing inventory) - see `Shortlist.kt`'s own docstring for
+ * what's still simplified vs. the desktop version: no Goonmetrics
+ * fallback or Profit/Day, no auto-add/prune from Candidate Discovery. */
 @Composable
 fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
@@ -94,14 +98,13 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 } else emptyMap()
                 // How much of each item the seller already has listed for
                 // sale at the structure right now - see own_orders.py's
-                // fetch_own_sell_orders. Gates the Import/"Already ordered"
-                // decision in evaluateShortlistItem; buyer-covered (already
-                // in inventory/on a buy order) isn't tracked yet. Best-effort:
-                // a seller character authorized before this scope existed
-                // won't have esi-markets.read_character_orders.v1 yet, so a
-                // 403 here falls back to "none known" rather than failing
-                // the whole refresh - re-logging in as Seller picks up the
-                // scope.
+                // fetch_own_sell_orders. One of two independent signals
+                // gating the Import/"Already ordered" decision (the other,
+                // buyer coverage, is computed below). Best-effort: a seller
+                // character authorized before this scope existed won't have
+                // esi-markets.read_character_orders.v1 yet, so a 403 here
+                // falls back to "none known" rather than failing the whole
+                // refresh - re-logging in as Seller picks up the scope.
                 var ownOrdersUnavailable = false
                 val ownOrdersByItem = if (cfg.structureId != null && sellerToken != null) {
                     try {
@@ -115,7 +118,32 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                     }
                 } else emptyMap()
 
-                val evaluated = evaluateShortlist(items, jitaStats, structureStats, cfg, ownOrdersByItem)
+                // Items the buyer needn't import more of: either an open
+                // BUY order in Jita or at the structure, or existing
+                // inventory at a Jita station or the structure - see
+                // own_orders.py's fetch_buyer_already_covered. Best-effort
+                // for the same re-login-picks-up-new-scopes reason as
+                // ownOrdersByItem above.
+                var buyerCoveredUnavailable = false
+                val buyerToken = tokenManager.listRecords("buyer").firstOrNull()?.let { tokenManager.getToken(it.role) }
+                val buyerAlreadyCoveredIds = if (buyerToken != null) {
+                    try {
+                        val covered = mutableSetOf<Int>()
+                        esi.characterOrders(buyerToken.characterId, buyerToken.accessToken)
+                            .filter { it.isBuyOrder && (it.regionId == cfg.jitaRegionId || it.locationId == cfg.structureId) }
+                            .forEach { covered.add(it.typeId) }
+                        val jitaStationIds = esi.solarSystemStationIds(JITA_SOLAR_SYSTEM_ID).toSet()
+                        esi.characterAssets(buyerToken.characterId, buyerToken.accessToken)
+                            .filter { it.locationId in jitaStationIds || it.locationId == cfg.structureId }
+                            .forEach { covered.add(it.typeId) }
+                        covered
+                    } catch (e: Exception) {
+                        buyerCoveredUnavailable = true
+                        emptySet()
+                    }
+                } else emptySet()
+
+                val evaluated = evaluateShortlist(items, jitaStats, structureStats, cfg, ownOrdersByItem, buyerAlreadyCoveredIds)
                 rows = evaluated.sortedByDescending { it.margin ?: Double.NEGATIVE_INFINITY }
                 val summary = summaryCounts(evaluated)
                 status = "Import: ${summary.importCandidates} · Already ordered: ${summary.alreadyOrdered} · " +
@@ -123,6 +151,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 if (cfg.structureId == null) status += " (no structure configured - Net Sell left blank)"
                 else if (structureStats.isEmpty() && activeIds.isNotEmpty()) status += " (no seller character logged in - Net Sell left blank)"
                 if (ownOrdersUnavailable) status += " (couldn't read own orders - re-log in as Seller for the read_character_orders scope)"
+                if (buyerCoveredUnavailable) status += " (couldn't check buyer coverage - re-log in as Buyer for the orders/assets scopes)"
             } catch (e: Exception) {
                 status = e.message ?: "Refresh failed."
             } finally {

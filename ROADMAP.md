@@ -243,13 +243,19 @@ which "careful reading" alone had caught):
   Shortlist (`ui/screens/CandidateDiscoveryScreen.kt`'s per-row button) — a
   manual stand-in for `refresh-and-prune`'s auto-add, with no
   hit-rate/avg-movement filtering behind it.
-- Shortlist now reads the seller's own open sell orders at the structure
-  (`EsiClient.characterOrders`, mirroring `esi_client.py`'s
-  `character_orders`/`own_orders.py`'s `fetch_own_sell_orders`), so
-  "Already ordered" is reachable — best-effort, falling back to "none
-  known" for a Seller character authorized before this scope existed.
-  Buyer-covered tracking (already in inventory/on a buy order) is a
-  separate, still-unported signal.
+- Shortlist now reads both signals that make "Already ordered" reachable:
+  the seller's own open sell orders at the structure, and buyer coverage
+  (an open buy order in Jita/at the structure, or existing inventory at a
+  Jita station/the structure) — `EsiClient.characterOrders`/
+  `characterAssets`/`solarSystemStationIds`, mirroring `esi_client.py`'s
+  `character_orders`/`character_assets` and `own_orders.py`'s
+  `fetch_own_sell_orders`/`fetch_buyer_already_covered` (the Jita-station
+  lookup uses a public ESI call instead of the SDE-backed table desktop
+  reads, since there's no SDE cache on this platform yet). Best-effort per
+  signal, falling back to "none known" for a Seller/Buyer character
+  authorized before its scopes existed — both login roles now request the
+  same flat scope set `config.py` does on desktop, rather than a
+  role-trimmed subset.
 - A Settings screen (`ui/screens/SettingsScreen.kt`), reachable from the
   drawer next to Characters - a hand-written form over `TradingConfig`'s
   fields, since Kotlin has no equivalent of the desktop `SettingsDialog`'s
@@ -270,8 +276,8 @@ which "careful reading" alone had caught):
 
 Not started: the rest of Trading (realized-trade reconciliation, price
 history, unlisted-stock/undercut checks, hit-rate/avg-movement-filtered
-auto-prune from Candidate Discovery, buyer-covered tracking, Profit / Day,
-the Goonmetrics fallback), all four other tools' business logic and their
+auto-prune from Candidate Discovery, Profit / Day, the Goonmetrics
+fallback), all four other tools' business logic and their
 own Settings tabs, the SDE cache itself, Android-side tests, an app icon,
 a Play Store listing.
 
