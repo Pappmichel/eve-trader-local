@@ -70,18 +70,39 @@ fun SettingsScreen(database: AppDatabase) {
         status = "Loaded."
     }
 
+    // Parses every field before saving anything, rather than silently
+    // falling back to a default per-field the way an earlier version of
+    // this screen did - a typo (e.g. "0.,5") used to be discarded without
+    // telling the user, saving (and displaying back) TradingConfig()'s
+    // default for that field instead of what they actually typed.
     fun save() {
+        val invalid = mutableListOf<String>()
+        fun reqInt(label: String, text: String): Int = text.toIntOrNull() ?: run { invalid.add(label); 0 }
+        fun reqDouble(label: String, text: String): Double = text.toDoubleOrNull() ?: run { invalid.add(label); 0.0 }
+
+        val newJitaRegionId = reqInt("Jita Region ID", jitaRegionId)
+        val newReferenceRegionId = reqInt("Reference Region ID", referenceRegionId)
+        val trimmedStructureId = structureId.trim()
+        val newStructureId = if (trimmedStructureId.isEmpty()) null else trimmedStructureId.toLongOrNull()
+            ?: run { invalid.add("Structure ID"); null }
+        val newImportCostPerM3 = reqDouble("Import Cost per m3", importCostPerM3)
+        val newStructureSellHaircut = reqDouble("Structure Sell Haircut", structureSellHaircut)
+        val newJitaBuyBrokerFee = reqDouble("Jita Buy Broker Fee", jitaBuyBrokerFee)
+        val newMinProfitThreshold = reqDouble("Min Profit Threshold", minProfitThreshold)
+        val newMinMarginThreshold = reqDouble("Min Margin Threshold", minMarginThreshold)
+        val newMinHitRate = reqDouble("Min Hit Rate", minHitRate)
+        val newMinAvgMovement = reqDouble("Min Avg Movement", minAvgMovement)
+
+        if (invalid.isNotEmpty()) {
+            status = "Not saved - invalid value for: ${invalid.joinToString(", ")}."
+            return
+        }
+
         val cfg = TradingConfig(
-            jitaRegionId = jitaRegionId.toIntOrNull() ?: TradingConfig().jitaRegionId,
-            referenceRegionId = referenceRegionId.toIntOrNull() ?: TradingConfig().referenceRegionId,
-            structureId = structureId.trim().toLongOrNull(),
-            importCostPerM3 = importCostPerM3.toDoubleOrNull() ?: TradingConfig().importCostPerM3,
-            structureSellHaircut = structureSellHaircut.toDoubleOrNull() ?: TradingConfig().structureSellHaircut,
-            jitaBuyBrokerFee = jitaBuyBrokerFee.toDoubleOrNull() ?: TradingConfig().jitaBuyBrokerFee,
-            minProfitThreshold = minProfitThreshold.toDoubleOrNull() ?: TradingConfig().minProfitThreshold,
-            minMarginThreshold = minMarginThreshold.toDoubleOrNull() ?: TradingConfig().minMarginThreshold,
-            minHitRate = minHitRate.toDoubleOrNull() ?: TradingConfig().minHitRate,
-            minAvgMovement = minAvgMovement.toDoubleOrNull() ?: TradingConfig().minAvgMovement,
+            jitaRegionId = newJitaRegionId, referenceRegionId = newReferenceRegionId, structureId = newStructureId,
+            importCostPerM3 = newImportCostPerM3, structureSellHaircut = newStructureSellHaircut,
+            jitaBuyBrokerFee = newJitaBuyBrokerFee, minProfitThreshold = newMinProfitThreshold,
+            minMarginThreshold = newMinMarginThreshold, minHitRate = newMinHitRate, minAvgMovement = newMinAvgMovement,
             excludedPathPrefixes = excludedPathPrefixes.lines().map { it.trim() }.filter { it.isNotEmpty() },
         )
         scope.launch {
