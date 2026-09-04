@@ -5,6 +5,7 @@ import com.pappmichel.evetraderlocal.data.db.SettingsEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 /** Same fields/defaults as the desktop build's config.py `TradingConfig`
