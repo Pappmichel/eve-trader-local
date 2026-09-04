@@ -76,9 +76,15 @@ current scope.
    client id won't work here - its callback URL is `http://localhost:8000/
    callback`, not this one). Connection type: Authorization Code with
    PKCE. Callback URL: `eveauth-eve-trader-local://callback`.
-2. Copy `local.properties.example` to `local.properties` and fill in
-   `EVE_SSO_CLIENT_ID` (gitignored, per-machine - same idea as the desktop
-   build's `.env`).
+2. `local.properties` already carries a working `EVE_SSO_CLIENT_ID` and is
+   committed to this repo **for now** (2026-09-04, explicit instruction -
+   this repo is private, so its client id isn't treated as sensitive
+   here). This is a deliberate departure from the usual gitignored/
+   per-machine pattern (`local.properties.example` still documents that
+   normal shape, same idea as the desktop build's `.env.example`) - revisit
+   before this repo is ever made public or the app distributed. Don't let
+   Android Studio's auto-written `sdk.dir` line get committed here on your
+   next sync (see the file's own comment).
 3. Open the `android/` folder in Android Studio (Iguana/2023.2 or newer -
    needs JDK 17, which Android Studio bundles its own copy of).
 4. **This project ships without a Gradle wrapper jar** - only
