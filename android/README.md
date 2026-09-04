@@ -108,7 +108,11 @@ current scope.
   (`eveauth-eve-trader-local://callback`, see `AndroidManifest.xml`)
   instead of a loopback `http.server`, since there's no port to bind on
   Android. Only the Trading roles (buyer/seller) are wired into
-  `CharactersScreen`'s role list so far.
+  `CharactersScreen`'s role list so far. Each authorized character also
+  shows its live ISK wallet balance (`EsiClient.characterWalletBalance`,
+  mirroring `esi_client.py`'s `character_wallet_balance`) - best-effort per
+  character, so one with an expired/under-scoped token simply shows no
+  balance rather than blocking the rest of the list.
 
 ## Setup
 

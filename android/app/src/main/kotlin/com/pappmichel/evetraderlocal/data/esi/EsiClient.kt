@@ -201,6 +201,13 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
         return typeIds.associateWith { tid -> summarizeOrders(byType[tid] ?: emptyList()) }
     }
 
+    /** This character's current ISK wallet balance - a bare number, not a
+     * list/object (ESI's own response shape for this endpoint). Same
+     * esi-wallet.read_character_wallet.v1 scope every login role already
+     * requests. Counterpart of esi_client.py's `character_wallet_balance`. */
+    suspend fun characterWalletBalance(characterId: Long, accessToken: String): Double =
+        getBody("/characters/$characterId/wallet/", mapOf("datasource" to "tranquility"), accessToken).toDouble()
+
     /** This character's open market orders (buy and sell) - the counterpart
      * of esi_client.py's `character_orders`. Requires a token with
      * esi-markets.read_character_orders.v1. Not paginated: ESI's own
@@ -279,8 +286,9 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
         throw EsiError(lastError ?: "Exhausted retries for $path")
     }
 
-    private suspend fun getBody(path: String, params: Map<String, String>, retries: Int = 3): String =
-        getBodyWithPages(path, params, null, retries).first
+    private suspend fun getBody(
+        path: String, params: Map<String, String>, accessToken: String? = null, retries: Int = 3,
+    ): String = getBodyWithPages(path, params, accessToken, retries).first
 
     private fun retryAfterMillis(response: Response, attempt: Int): Long {
         val header = response.header("Retry-After")?.toDoubleOrNull()

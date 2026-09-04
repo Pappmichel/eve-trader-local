@@ -30,7 +30,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.auth.TokenRecord
+import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import kotlinx.coroutines.launch
+
+private fun fmtIsk(value: Double): String = "%,.2f ISK".format(value)
 
 /** Role -> (label, role prefix, scopes) - the same shape as the desktop
  * build's characters_dialog.py `_LOGIN_ROLES`. Only the Trading roles are
@@ -57,6 +60,7 @@ private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
 fun CharactersScreen(tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
     var records by remember { mutableStateOf<List<TokenRecord>>(emptyList()) }
+    var walletBalances by remember { mutableStateOf<Map<String, Double>>(emptyMap()) }
     var selectedRole by remember { mutableIntStateOf(0) }
     var status by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -65,6 +69,19 @@ fun CharactersScreen(tokenManager: TokenManager) {
         scope.launch {
             records = tokenManager.listRecords()
             if (records.isEmpty()) status = "No characters authorized yet - pick a role and log in."
+            // Best-effort, one character at a time: a character authorized
+            // before esi-wallet.read_character_wallet.v1 was requested (or
+            // whose token happens to be mid-refresh-failure) simply shows no
+            // balance rather than blocking the rest of the list.
+            val esi = EsiClient()
+            walletBalances = records.mapNotNull { record ->
+                try {
+                    val fresh = tokenManager.getToken(record.role)
+                    record.role to esi.characterWalletBalance(fresh.characterId, fresh.accessToken)
+                } catch (e: Exception) {
+                    null
+                }
+            }.toMap()
         }
     }
     LaunchedEffect(Unit) { refresh() }
@@ -76,6 +93,9 @@ fun CharactersScreen(tokenManager: TokenManager) {
                     headlineContent = { Text(record.characterName) },
                     supportingContent = {
                         Text("${record.role} - ${if (record.isExpired()) "expired" else "valid"}")
+                    },
+                    trailingContent = {
+                        walletBalances[record.role]?.let { Text(fmtIsk(it)) }
                     },
                 )
                 HorizontalDivider()

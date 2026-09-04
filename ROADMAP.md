@@ -215,7 +215,9 @@ which "careful reading" alone had caught):
   custom URI scheme redirect instead of a loopback `http.server`, since
   there's no port to bind on Android — still no server anywhere in the
   flow, which is the property that actually matters. Only the Trading
-  roles are wired into the UI so far.
+  roles are wired into the UI so far. Each authorized character shows its
+  live ISK wallet balance (`EsiClient.characterWalletBalance`) -
+  best-effort per character.
 - Trading → Candidate Discovery, the first real (non-placeholder) tool
   screen (`data/esi/EsiClient.kt`, `data/trading/`, `ui/screens/
   CandidateDiscoveryScreen.kt`) — a Kotlin port of `candidate_discovery.py`'s
