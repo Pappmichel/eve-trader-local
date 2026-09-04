@@ -133,10 +133,15 @@ current scope.
 - No app icon (`android:icon` is deliberately omitted from
   `AndroidManifest.xml` rather than pointing at a nonexistent resource) -
   add one via Android Studio's Image Asset tool.
-- No encryption at rest for stored tokens (Room writes a plain SQLite
-  file, matching the desktop build's own plain SQLite `tokens` table) -
-  fine for a single-user local app in the same sense it already is on
-  desktop, but worth revisiting before this ever ships to a store.
+- Stored tokens are now encrypted at rest (`data/auth/TokenCrypto.kt`,
+  AES-256-GCM, key held in the Android Keystore) - a real departure from
+  the desktop build's own plain SQLite `tokens` table, since an EVE SSO
+  refresh token is a genuine bearer credential worth protecting even in a
+  single-user local app. What's still missing: nothing else in the
+  database is encrypted (settings/shortlist membership aren't secrets),
+  and this hasn't been exercised on a real device yet - Keystore behavior
+  (especially key invalidation on lock-screen/biometric changes, which
+  this doesn't opt into) is worth re-checking once it has been.
 - CI (`.github/workflows/build-android.yml`) only assembles the debug APK
   as a compile gate - no lint/test step (there are no Android-side tests
   yet), no release signing, no Play Store upload.

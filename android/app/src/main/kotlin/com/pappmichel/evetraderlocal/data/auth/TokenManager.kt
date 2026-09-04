@@ -123,7 +123,7 @@ class TokenManager(private val context: Context, private val db: AppDatabase) {
 
     suspend fun listRecords(prefix: String? = null): List<TokenRecord> = withContext(Dispatchers.IO) {
         db.tokenDao().getAll()
-            .map { json.decodeFromString<TokenRecord>(it.recordJson) }
+            .map { json.decodeFromString<TokenRecord>(TokenCrypto.decrypt(it.recordJson)) }
             .filter { prefix == null || it.role.startsWith("$prefix:") }
             .sortedBy { it.role }
     }
@@ -177,11 +177,12 @@ class TokenManager(private val context: Context, private val db: AppDatabase) {
     }
 
     private suspend fun saveRecord(record: TokenRecord) {
-        db.tokenDao().upsert(TokenEntity(role = record.role, recordJson = json.encodeToString(record)))
+        val encrypted = TokenCrypto.encrypt(json.encodeToString(record))
+        db.tokenDao().upsert(TokenEntity(role = record.role, recordJson = encrypted))
     }
 
     private suspend fun loadRecord(role: String): TokenRecord? =
-        db.tokenDao().get(role)?.let { json.decodeFromString(it.recordJson) }
+        db.tokenDao().get(role)?.let { json.decodeFromString(TokenCrypto.decrypt(it.recordJson)) }
 }
 
 @Serializable

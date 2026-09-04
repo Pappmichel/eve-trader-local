@@ -261,13 +261,19 @@ which "careful reading" alone had caught):
   `android/README.md`), so it installs Gradle itself and invokes it
   directly rather than `./gradlew`. No lint/test step (no Android-side
   tests exist yet), no release signing, no Play Store upload.
+- Encryption at rest for stored tokens (`data/auth/TokenCrypto.kt`,
+  AES-256-GCM with an Android-Keystore-held key) - a real departure from
+  the desktop build's plain SQLite `tokens` table, since an EVE SSO
+  refresh token is a genuine bearer credential. See `android/README.md`'s
+  own entry for what's still unexercised (a real device/Keystore
+  invalidation behavior).
 
 Not started: the rest of Trading (realized-trade reconciliation, price
 history, unlisted-stock/undercut checks, hit-rate/avg-movement-filtered
 auto-prune from Candidate Discovery, buyer-covered tracking, Profit / Day,
 the Goonmetrics fallback), all four other tools' business logic and their
 own Settings tabs, the SDE cache itself, Android-side tests, an app icon,
-encryption at rest for stored tokens, a Play Store listing.
+a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
