@@ -15,10 +15,15 @@ current scope.
 - **Navigation** (`ui/nav/`): a nav drawer listing every tool/view from
   `ToolMenus.kt`'s `TOOL_MENUS`, mirroring `gui/main_window.py`'s
   `_TOOL_MENUS` structure. Every entry still opens `PlaceholderScreen`
-  except Trading/Candidate Discovery and Trading/Shortlist (see below) -
-  production planning, doctrine stockpiles, refining, station trading, and
-  the rest of Trading itself are real, substantial work still ahead (see
-  ROADMAP.md's Android section for the current per-tool state).
+  except the three Trading views below - production planning, doctrine
+  stockpiles, refining, station trading, and the rest of Trading itself
+  are real, substantial work still ahead (see ROADMAP.md's Android section
+  for the current per-tool state). Drawer taps navigate via
+  `AppNavHost.kt`'s `navigateFromDrawer` (`popUpTo(start) { saveState =
+  true }` + `launchSingleTop` + `restoreState`, Navigation-Compose's own
+  recommended drawer pattern) - without it, repeatedly picking drawer
+  items pushes an unbounded pile of duplicate back-stack entries instead
+  of returning to an existing one.
 - **Trading -> Candidate Discovery** (`data/esi/EsiClient.kt`,
   `data/trading/`, `ui/screens/CandidateDiscoveryScreen.kt`): the first
   real (non-placeholder) tool screen. Walks EVE's market-group tree live

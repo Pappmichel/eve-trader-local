@@ -21,6 +21,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -55,6 +57,23 @@ private fun routeFor(tool: String, view: String): String =
         "placeholder/${Uri.encode(tool)}/${Uri.encode(view)}"
     }
 
+/** Standard drawer/bottom-nav-style navigation, per Navigation-Compose's
+ * own recommended pattern - without it, picking the same (or any) drawer
+ * item repeatedly pushes a fresh copy onto the back stack every time
+ * (never returning to an existing instance), so the back button has to be
+ * pressed once per visit before the app actually exits, and per-screen
+ * state (e.g. Candidate Discovery's scan results) is duplicated rather
+ * than resumed. `popUpTo(startDestination) { saveState = true }` plus
+ * `launchSingleTop`/`restoreState` collapses the back stack to at most one
+ * instance of each destination and restores its state on return. */
+private fun NavController.navigateFromDrawer(route: String) {
+    navigate(route) {
+        popUpTo(graph.findStartDestination().id) { saveState = true }
+        launchSingleTop = true
+        restoreState = true
+    }
+}
+
 /** The mobile counterpart of main_window.py's menu-bar-plus-tab-workspace
  * shell: a nav drawer listing every tool/view from `TOOL_MENUS` (mirroring
  * `_TOOL_MENUS`), one screen visible at a time instead of closable tabs -
@@ -82,7 +101,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                     label = { Text("Characters") },
                     selected = false,
                     onClick = {
-                        navController.navigate("characters")
+                        navController.navigateFromDrawer("characters")
                         scope.launch { drawerState.close() }
                     },
                     modifier = Modifier.padding(horizontal = 8.dp),
@@ -91,7 +110,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                     label = { Text("Settings") },
                     selected = false,
                     onClick = {
-                        navController.navigate("settings")
+                        navController.navigateFromDrawer("settings")
                         scope.launch { drawerState.close() }
                     },
                     modifier = Modifier.padding(horizontal = 8.dp),
@@ -107,7 +126,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                             label = { Text(view) },
                             selected = false,
                             onClick = {
-                                navController.navigate(routeFor(tool, view))
+                                navController.navigateFromDrawer(routeFor(tool, view))
                                 scope.launch { drawerState.close() }
                             },
                             modifier = Modifier.padding(horizontal = 8.dp),
