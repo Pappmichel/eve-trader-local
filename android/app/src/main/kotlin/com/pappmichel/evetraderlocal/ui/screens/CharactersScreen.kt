@@ -1,0 +1,129 @@
+package com.pappmichel.evetraderlocal.ui.screens
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenu
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.pappmichel.evetraderlocal.data.auth.TokenManager
+import com.pappmichel.evetraderlocal.data.auth.TokenRecord
+import kotlinx.coroutines.launch
+
+/** Role -> (label, role prefix, scopes) - the same shape as the desktop
+ * build's characters_dialog.py `_LOGIN_ROLES`. Only the Trading roles are
+ * wired here so far; Production/Doctrine/Station Trading roles get added
+ * to this list once those tools themselves are ported (same "structure
+ * now, business logic later" scope as PlaceholderScreen - see ROADMAP.md's
+ * Android section). */
+private val LOGIN_ROLES: List<Triple<String, String, List<String>>> = listOf(
+    Triple(
+        "Buyer (Trading)", "buyer",
+        listOf("esi-markets.structure_markets.v1", "esi-wallet.read_character_wallet.v1"),
+    ),
+    Triple(
+        "Seller (Trading / Ore & Minerals)", "seller",
+        listOf("esi-markets.structure_markets.v1", "esi-wallet.read_character_wallet.v1"),
+    ),
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CharactersScreen(tokenManager: TokenManager) {
+    val scope = rememberCoroutineScope()
+    var records by remember { mutableStateOf<List<TokenRecord>>(emptyList()) }
+    var selectedRole by remember { mutableIntStateOf(0) }
+    var status by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        scope.launch {
+            records = tokenManager.listRecords()
+            if (records.isEmpty()) status = "No characters authorized yet - pick a role and log in."
+        }
+    }
+    LaunchedEffect(Unit) { refresh() }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        LazyColumn(modifier = Modifier.weight(1f)) {
+            items(records) { record ->
+                ListItem(
+                    headlineContent = { Text(record.characterName) },
+                    supportingContent = {
+                        Text("${record.role} - ${if (record.isExpired()) "expired" else "valid"}")
+                    },
+                )
+                HorizontalDivider()
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+
+        var expanded by remember { mutableStateOf(false) }
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = LOGIN_ROLES[selectedRole].first,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Role") },
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                modifier = Modifier.menuAnchor().fillMaxWidth(),
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                LOGIN_ROLES.forEachIndexed { index, (label, _, _) ->
+                    DropdownMenuItem(text = { Text(label) }, onClick = { selectedRole = index; expanded = false })
+                }
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Row {
+            Button(
+                enabled = !busy,
+                onClick = {
+                    val (label, rolePrefix, scopes) = LOGIN_ROLES[selectedRole]
+                    busy = true
+                    status = "Opening the browser for EVE SSO login as $label..."
+                    scope.launch {
+                        try {
+                            val record = tokenManager.login(rolePrefix, scopes)
+                            status = "Authorized ${record.characterName} as '${record.role}'."
+                            refresh()
+                        } catch (e: Exception) {
+                            status = e.message ?: "Login failed."
+                        } finally {
+                            busy = false
+                        }
+                    }
+                },
+            ) { Text("Log In...") }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(status)
+    }
+}

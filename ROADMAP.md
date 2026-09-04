@@ -166,19 +166,57 @@ coverage).
   updater that actually checks `/releases/latest` and applies it doesn't
   exist yet.
 
-## Android (standalone, no server) — noted, not decided (2026-09-03)
+## Android (standalone, no server) — started 2026-09-04
 
 Confirmed requirement: the tool should eventually also run as a standalone
 Android app (no backend server involved — the same "whoever runs it owns
-the data" model as desktop, just on a phone). Explicitly **not** started
-yet, and deliberately decided to build the PyQt/PySide desktop GUI first,
-then revisit the Android approach once that exists to build from — not a
-rejection of the requirement, just a sequencing call (a working desktop GUI
-first gives something concrete to base an Android UI decision on, and lets
-the Android work reuse whatever `eve_trader_local` GUI-adjacent code turns
-out to be shareable).
+the data" model as desktop, just on a phone). Originally sequenced *after*
+the desktop GUI so there'd be something concrete to base the Android
+approach on (see the three options this section used to leave open, kept
+below for the record) — that desktop GUI now exists (see "Native GUI"
+above), so this has started.
 
-Options discussed and left open, to revisit at that point:
+**Decision: plain native Kotlin/Compose, not Chaquopy.** Of the three
+previously-listed options, this is closest to the "Chaquopy" shape (native
+Android UI, not a wrapped web frontend or BeeWare/Toga) but *without* the
+embedded CPython runtime — `android/` is a from-scratch Kotlin app with no
+dependency on `eve_trader_local` at all, business logic included. Chosen
+for the best native Android feel and the simplest build (no CPython
+packaging inside an APK) at a real, accepted cost: none of
+`eve_trader_local`'s five tools' business logic (candidate discovery,
+production planning, doctrine stockpiles, refining, station trading) is
+reused — it gets ported to Kotlin by hand, tool by tool, same as the
+desktop GUI itself was built view by view. Revisit Chaquopy specifically if
+that porting cost turns out to dominate.
+
+What exists in `android/` so far (see that folder's own README.md for
+full detail and honest limitations — notably: written and reviewed by hand,
+never compiled, no Android SDK/Gradle/JDK 17 available in the environment
+this was built in):
+- The same New Eden-inspired dark theme as `gui/theme.py`, ported to
+  Compose's `ColorScheme` (`ui/theme/`) — kept in sync by eye, no shared
+  source of truth between Compose and Qt QSS.
+- A nav-drawer shell mirroring `main_window.py`'s `_TOOL_MENUS` structure
+  (`ui/nav/ToolMenus.kt`) — every tool/view listed, every one still opening
+  a `PlaceholderScreen` (no business logic ported yet).
+- A local Room database mirroring the desktop build's `tokens`/`settings`
+  SQLite tables (`storage.py`) — app-private storage is this platform's own
+  "local-first, no server" answer, same role a portable `.exe`'s data
+  folder plays on desktop.
+- A real, working EVE SSO OAuth2 PKCE login flow (`data/auth/
+  TokenManager.kt`, `ui/screens/CharactersScreen.kt`) mirroring `auth.py`'s
+  flow exactly (state check, PKCE verifier/challenge, code exchange,
+  refresh, `/oauth/verify`), adapted for the platform: a Custom Tab plus a
+  custom URI scheme redirect instead of a loopback `http.server`, since
+  there's no port to bind on Android — still no server anywhere in the
+  flow, which is the property that actually matters. Only the Trading
+  roles are wired into the UI so far.
+
+Not started: every tool's actual business logic, a Settings screen, CI for
+the Android build, an app icon, encryption at rest for stored tokens, a
+Play Store listing.
+
+Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
   `eve_trader_local` directly with no porting; the only option with real
   code-sharing across both, but Toga is less mature/polished than PyQt.
@@ -193,7 +231,7 @@ Options discussed and left open, to revisit at that point:
   (background-service/lifecycle restrictions make an always-on local server
   awkward on mobile).
 
-Whichever is chosen, it inherits this repo's existing constraints
-unchanged: no server this project operates, SQLite as the local store, and
-the same offline-first/user-owns-their-data model already established for
-desktop.
+Whichever was chosen inherits this repo's existing constraints unchanged:
+no server this project operates, SQLite (via Room on Android) as the local
+store, and the same offline-first/user-owns-their-data model already
+established for desktop.

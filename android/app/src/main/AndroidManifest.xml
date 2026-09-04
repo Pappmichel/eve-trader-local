@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- No android:icon yet - no launcher icon asset exists in this
+         skeleton (see android/README.md); Android Studio's "Image Asset"
+         tool is the normal way to add one, not something to hand-author. -->
+    <application
+        android:name=".EveTraderApplication"
+        android:allowBackup="true"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.EveTraderLocal">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- EVE SSO redirect target - see data/auth/TokenManager.kt.
+                 A custom URI scheme, not a loopback HTTP server like the
+                 desktop build's auth.py: there is no port to bind on
+                 Android, and a custom-scheme redirect is the idiomatic
+                 platform equivalent that keeps the same "no server
+                 anywhere" property. Register this exact redirect URI
+                 (eveauth-eve-trader-local://callback) for this app's
+                 client id at https://developers.eveonline.com. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="eveauth-eve-trader-local" android:host="callback" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

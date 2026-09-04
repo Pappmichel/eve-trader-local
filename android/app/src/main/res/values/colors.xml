@@ -1,0 +1,7 @@
+<resources>
+    <!-- Only used for the pre-Compose window background (see themes.xml) -
+         everything else uses ui/theme/Color.kt, the actual source of truth
+         for this app's palette (kept in sync by eye with the desktop
+         build's gui/theme.py). -->
+    <color name="bg_window">#0A0E14</color>
+</resources>

@@ -1,0 +1,14 @@
+# Copy to local.properties (gitignored, per-machine) and fill in.
+
+# Path to your Android SDK - Android Studio writes this automatically on
+# first sync if it's missing, you normally don't need to set it by hand.
+# sdk.dir=C\:\\Users\\<you>\\AppData\\Local\\Android\\Sdk
+
+# Register an application at https://developers.eveonline.com the same way
+# the desktop build's .env.example describes, but with this exact callback
+# URL instead of a localhost one:
+#   eveauth-eve-trader-local://callback
+# (see AndroidManifest.xml's intent-filter / data/auth/TokenManager.kt for
+# why a custom URI scheme, not a loopback port, is this platform's
+# equivalent of the desktop flow.)
+EVE_SSO_CLIENT_ID=your_client_id_here

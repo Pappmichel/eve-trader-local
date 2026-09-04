@@ -347,18 +347,40 @@ actual installer (Inno Setup, Start Menu entry + uninstaller) is future work.
 
 `.github/workflows/build-windows.yml` builds and smoke-tests this on a real
 Windows GitHub Actions runner on every `vX.Y.Z` tag push, uploads the result
-as a build artifact, and attaches it to a GitHub Release - this is also the
-artifact ROADMAP.md's Stage-2 self-updater will eventually poll
-`/releases/latest` for, once that updater component itself is built (a
-separate, not-yet-started piece - this workflow only produces what it would
-fetch).
+as a build artifact, attaches it (plus a `.sha256` checksum file) to a
+GitHub Release, and stamps that tag into `eve_trader_local/_version.py` so
+the frozen build knows its own version.
 
-Explicitly **not** done yet:
+ROADMAP.md's Stage-2 self-updater is built (2026-09-04): the App menu's
+"Check for Updates..." (`gui/dialogs/update_dialog.py`) polls
+`/releases/latest`, verifies the downloaded `.exe` against that release's
+checksum, then hands off to a detached helper that replaces the running
+binary and relaunches it - see `updater.py`'s
+`download_and_apply_binary_update` for the full mechanics. The packaged
+`.exe` is also portable now: `paths.py`'s `data_dir()` defaults to a folder
+next to the `.exe` itself (not `%USERPROFILE%`) whenever the app is running
+frozen, so the whole install - database, config, logs, window state,
+update cache - travels together as one folder.
 
-- A real installer (Inno Setup or similar).
-- The Stage-2 self-updater component itself (see ROADMAP.md) - this
-  packaging step produces the release artifact it would need, but the
-  updater that checks for and applies it doesn't exist yet.
+The GUI also now has a dark, EVE Online-inspired theme (`gui/theme.py`,
+applied once in `gui/main.py`) instead of default Qt styling.
+
+Explicitly **not** done yet: a real installer (Inno Setup or similar, Start
+Menu entry + uninstaller) - the portable `.exe` plus in-app updater is
+still the whole distribution story.
+
+## Android (native, in progress - started 2026-09-04)
+
+`android/` is a from-scratch Kotlin + Jetpack Compose app - not a Python
+port via Chaquopy, see ROADMAP.md's "Android" section for that decision and
+its trade-off. What exists so far: the same dark theme as the desktop GUI,
+a nav drawer mirroring `main_window.py`'s tool/view menu structure (every
+entry still a placeholder), a local Room database mirroring the desktop
+build's `tokens`/`settings` tables, and a real EVE SSO OAuth2 PKCE login
+flow. None of the five tools' business logic is ported yet. See
+`android/README.md` for setup and this increment's honest limitations
+(notably: written and reviewed by hand, never compiled - no Android
+SDK/Gradle/JDK 17 was available in the environment it was built in).
 
 ## Why the OAuth flow needed no rearchitecting
 
