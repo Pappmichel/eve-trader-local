@@ -26,6 +26,7 @@ import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.esi.JITA_SOLAR_SYSTEM_ID
+import com.pappmichel.evetraderlocal.data.sde.SdeRepository
 import com.pappmichel.evetraderlocal.data.trading.BUY_LOOKBACK_MULTIPLIER
 import com.pappmichel.evetraderlocal.data.trading.RealizedSummary
 import com.pappmichel.evetraderlocal.data.trading.RealizedTrade
@@ -65,6 +66,7 @@ import kotlinx.coroutines.launch
 fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
     val configRepo = remember { TradingConfigRepository(database) }
+    val sdeRepo = remember { SdeRepository(database) }
     val client = remember { EsiClient() }
 
     var trades by remember { mutableStateOf<List<RealizedTrade>>(emptyList()) }
@@ -103,7 +105,17 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
                 val sellerToken = tokenManager.getToken(sellerRecord.role).accessToken
 
                 status = "Resolving Jita's stations..."
-                val jitaStations = client.solarSystemStationIds(JITA_SOLAR_SYSTEM_ID).toSet()
+                // Prefer the whole Forge region's stations from the local
+                // SDE cache when it's populated - the same live-import
+                // buyer could just as easily use a different Jita-system
+                // station, or (less commonly) another station in The Forge
+                // entirely, and only the SDE-backed region query can see
+                // those. Falls back to the single-system live-ESI list
+                // (narrower, but always available) whenever the cache is
+                // empty - see TradeReconciliation.kt's own note on what
+                // that narrower fallback costs.
+                val jitaStations = sdeRepo.stationIdsInRegion(config.jitaRegionId.toLong()).toSet()
+                    .ifEmpty { client.solarSystemStationIds(JITA_SOLAR_SYSTEM_ID).toSet() }
 
                 status = "Fetching the buyer's wallet transactions..."
                 val rawBuys = fetchRecentTransactions(

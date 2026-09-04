@@ -31,17 +31,19 @@ import java.time.temporal.ChronoUnit
  *   token; the matcher itself is already pooled-shaped (it takes flat buy
  *   and sell lists, not characters), so widening it later is a caller-side
  *   change only.
- * - **Buy-side location filter is Jita's own stations, not the whole Jita
- *   region.** Desktop filters buys to `storage.get_station_ids_in_region(
- *   cfg.jita_region_id)` - every station in The Forge - out of its local
- *   SDE-backed tables. There is no SDE cache on this platform yet (see
- *   ROADMAP.md's Android section), so `EsiClient.solarSystemStationIds`
- *   fetches the *solar system's* own station list live from public ESI
- *   instead. That is genuinely narrower: a buyer who imports through some
- *   other station in The Forge (real, if uncommon) has those buys silently
- *   dropped, and their sales then look like sales with no cost basis at all
- *   rather than being mis-matched - under-reported profit, never invented
- *   profit. Widen it to the full region the moment the SDE cache lands.
+ * - **Buy-side location filter prefers the whole Jita region, falling back
+ *   to just Jita's own solar system.** Desktop always filters buys to
+ *   `storage.get_station_ids_in_region(cfg.jita_region_id)` - every station
+ *   in The Forge - out of its local SDE-backed tables. This platform's own
+ *   SDE cache (`data/sde/SdeRepository.stationIdsInRegion`) now backs the
+ *   same query when it has been refreshed (see `RealizedTradesScreen.kt`);
+ *   on a cache that hasn't been refreshed yet, this falls back to
+ *   `EsiClient.solarSystemStationIds`, which only sees Jita's own solar
+ *   system - genuinely narrower: a buyer who imports through some other
+ *   station in The Forge (real, if uncommon) has those buys silently
+ *   dropped in that fallback case, and their sales then look like sales
+ *   with no cost basis at all rather than being mis-matched -
+ *   under-reported profit, never invented profit.
  * - **The sell side does get the wallet-journal tax refinement**, same as
  *   desktop: a sale's real post-tax ISK is looked up by its own
  *   `journal_ref_id` (see `journalAmountByRefId`/ASSUMED_TAX_RATE_IN_

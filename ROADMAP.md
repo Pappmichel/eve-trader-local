@@ -325,10 +325,12 @@ which "careful reading" alone had caught):
   the same correctness fix already landed on desktop) and the
   wallet-journal tax refinement via `journal_ref_id`. Simplified vs.
   desktop: one buyer and one seller character rather than pooled
-  multi-character matching; buys are filtered to Jita's own NPC stations
-  live via ESI rather than the whole Forge region (no SDE cache reads it
-  yet - see the SDE cache entry below); item names/volumes for any
-  non-shortlisted traded type fall back to a live `/universe/types/` call;
+  multi-character matching; buys are filtered to the whole Forge region via
+  the local SDE cache when it's populated (`SdeRepository.
+  stationIdsInRegion`, wired up once the SDE cache itself landed - see
+  below), falling back to just Jita's own solar system live via ESI on an
+  unrefreshed cache; item names/volumes for any non-shortlisted traded type
+  fall back to a live `/universe/types/` call;
   nothing is persisted, so `average_daily_sold_by_type` (which needs a
   saved run) isn't ported; there's no raw wallet-transaction listing, the
   other half of the desktop tab.
@@ -345,10 +347,10 @@ which "careful reading" alone had caught):
   (Kotlin has no equivalent, and one state machine handling embedded
   newlines/quoted commas beats a new dependency for six fixed-shape files).
   The lookup API (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
-  `stationIdsInSystem`) is used by Candidate Discovery now (see below) but
-  still unused elsewhere - Realized Trades' Jita-station buy-side filter and
-  Station Trading's own candidate discovery are tracked follow-ups, needing
-  a populated cache and a real device to verify against.
+  `stationIdsInSystem`) now backs both Candidate Discovery (see below) and
+  Realized Trades' buy-side filter (see above) - Station Trading's own
+  candidate discovery is the one tracked follow-up left, needing a
+  populated cache and a real device to verify against.
 - Candidate Discovery now reads the SDE cache when it's populated
   (`CandidateDiscovery.buildCandidateUniverseFromSde`, via new `SdeDao`/
   `SdeRepository` bulk-table reads) - the fast path desktop's own
@@ -392,10 +394,10 @@ which "careful reading" alone had caught):
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
 or Unlisted-Stock-&-Undercut check across multiple characters, rewiring
-Realized Trades and Station Trading onto the new SDE cache (Candidate
-Discovery is done, see above), `average_daily_sold_by_type`, the other
-three tools' business logic (Production, Doctrine, Ore & Minerals/Refining)
-and every tool's own
+Station Trading's own candidate discovery onto the new SDE cache
+(Candidate Discovery and Realized Trades are both done, see above),
+`average_daily_sold_by_type`, the other three tools' business logic
+(Production, Doctrine, Ore & Minerals/Refining) and every tool's own
 Settings tab, tests for anything beyond the pure logic already covered, an
 app icon, a Play Store listing.
 

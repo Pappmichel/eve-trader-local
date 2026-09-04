@@ -131,9 +131,11 @@ current scope.
   2500-per-page cap) and `characterWalletJournal` (page/X-Pages, same
   scheme as `characterAssets`). Simplified vs. desktop: one buyer and one
   seller character rather than pooled multi-character matching; the buy-side
-  location filter is Jita's own NPC stations via a live `solarSystemStationIds`
-  call, not the whole Forge region (no SDE cache reads it yet); item
-  names/volumes for any traded type_id fall back to a live `/universe/types/`
+  location filter prefers the whole Forge region via the local SDE cache
+  when it's populated (`SdeRepository.stationIdsInRegion`), falling back to
+  just Jita's own solar system via a live `solarSystemStationIds` call on
+  an unrefreshed cache; item names/volumes for any traded type_id fall back
+  to a live `/universe/types/`
   call (no shortlist coverage guarantee, unlike Price History); nothing is
   persisted between runs, so `average_daily_sold_by_type` (which needs a
   saved run to read back) isn't ported at all; there's no raw
@@ -167,11 +169,11 @@ current scope.
   comment on when that must become a real `Migration`). The lookup API
   (`typeName`, `categoryNameFor`, `stationIdsInRegion`,
   `stationIdsInSystem`) plus new bulk-table reads (`marketGroups`,
-  `typesWithMarketGroup`, `categoryNames`, `groupCategoryIds`) now back
-  Candidate Discovery's SDE-backed fast path (see below). Realized Trades'
-  Jita-station buy-side filter and Station Trading's own candidate
-  discovery still don't read it - both need a populated cache and a real
-  device to verify the results match, tracked as a follow-up.
+  `typesWithMarketGroup`, `categoryNames`, `groupCategoryIds`) now back both
+  Candidate Discovery's SDE-backed fast path (see below) and Realized
+  Trades' buy-side region filter (see above). Station Trading's own
+  candidate discovery still doesn't read it - needs a populated cache and a
+  real device to verify the results match, tracked as a follow-up.
 - **Candidate Discovery reads the SDE cache** (`CandidateDiscovery.
   buildCandidateUniverseFromSde`/`buildCandidateUniverse`): the same
   "prefer the local cache, fall back to the live ESI walk only when it's
