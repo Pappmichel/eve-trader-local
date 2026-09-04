@@ -50,7 +50,11 @@ object CandidateDiscovery {
         return if ("module" in s || "rig" in s || volumeM3 >= 5.0) "Module/Rig" else "Material"
     }
 
-    private fun marketGroupPath(groupId: Int, names: Map<Int, String>, parents: Map<Int, Int>): String {
+    // internal (not private) so ShortlistTest-style JUnit tests in this
+    // module can exercise it directly, the same way candidate_discovery.py's
+    // own _market_group_path is imported straight into
+    // tests/test_candidate_discovery.py despite its underscore prefix.
+    internal fun marketGroupPath(groupId: Int, names: Map<Int, String>, parents: Map<Int, Int>): String {
         val parts = mutableListOf<String>()
         var cur = groupId
         var guard = 0

@@ -282,8 +282,12 @@ which "careful reading" alone had caught):
   cases (Profit/Day and Goonmetrics-history cases aren't ported, matching
   `Shortlist.kt` itself not covering that half yet), and
   `UnlistedUndercutTest.kt`, a port of `tests/test_own_orders.py`'s
-  single-seller `check_undercut`/`fetch_seller_stock_without_order` cases.
-  Runs in CI as a `testDebugUnitTest` step before the APK assembles.
+  single-seller `check_undercut`/`fetch_seller_stock_without_order` cases,
+  and `CandidateDiscoveryTest.kt`, a port of
+  `tests/test_candidate_discovery.py`'s `is_wanted_market_path`/
+  `_market_group_path` cases plus `guess_category`'s string/volume
+  fallback half. Runs in CI as a `testDebugUnitTest` step before the APK
+  assembles.
 - Trading → Unlisted Stock & Undercut Check (`data/trading/
   UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`) - two
   independent, always-live checks ported from `own_orders.py`'s

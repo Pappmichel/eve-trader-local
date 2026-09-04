@@ -180,8 +180,12 @@ current scope.
   `ShortlistTest.kt` (a Kotlin port of `tests/test_shortlist.py`'s
   formula/decision-precedence cases - Profit/Day and Goonmetrics-history
   cases aren't ported, since that half of `shortlist.py` isn't ported to
-  Kotlin yet) and `UnlistedUndercutTest.kt` (a port of
+  Kotlin yet), `UnlistedUndercutTest.kt` (a port of
   `tests/test_own_orders.py`'s single-seller `check_undercut`/
-  `fetch_seller_stock_without_order` cases). No lint step, no
+  `fetch_seller_stock_without_order` cases), and `CandidateDiscoveryTest.kt`
+  (a port of `tests/test_candidate_discovery.py`'s `is_wanted_market_path`/
+  `_market_group_path` cases plus the string/volume fallback half of
+  `guess_category` - the real-SDE-category-name half isn't ported, same
+  reason `CandidateDiscovery.kt` itself doesn't have it). No lint step, no
   instrumented/UI tests (would need an emulator), no release signing, no
   Play Store upload.
