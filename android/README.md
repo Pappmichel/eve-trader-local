@@ -47,6 +47,13 @@ current scope.
   "Import"), and auto-add/prune from Candidate Discovery
   (`refresh-and-prune` on desktop) - this screen is refresh-only,
   membership is manual.
+- **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
+  next to Characters (not per-tool, since Trading is the only tool with a
+  config on this platform yet): a hand-written form over `TradingConfig`'s
+  fields. The desktop build's own `SettingsDialog` builds its form
+  generically off each config dataclass via Python reflection - Kotlin has
+  no equivalent, so this is a plain fixed form instead, over the same field
+  set `TradingConfig.kt` already scopes itself to.
 - **Local database** (`data/db/`): Room, mirroring the desktop build's
   `tokens`/`settings` SQLite tables (`storage.py`) - same JSON-blob-per-row
   shape, same table names' worth of meaning. App-private storage is this

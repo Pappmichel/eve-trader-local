@@ -29,6 +29,7 @@ import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
+import com.pappmichel.evetraderlocal.ui.screens.SettingsScreen
 import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
 import kotlinx.coroutines.launch
 
@@ -81,6 +82,15 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                     },
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
+                NavigationDrawerItem(
+                    label = { Text("Settings") },
+                    selected = false,
+                    onClick = {
+                        navController.navigate("settings")
+                        scope.launch { drawerState.close() }
+                    },
+                    modifier = Modifier.padding(horizontal = 8.dp),
+                )
                 TOOL_MENUS.forEach { (tool, views) ->
                     Text(
                         tool,
@@ -120,6 +130,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 modifier = Modifier.padding(padding),
             ) {
                 composable("characters") { CharactersScreen(tokenManager) }
+                composable("settings") { SettingsScreen(database) }
                 composable(CANDIDATE_DISCOVERY_ROUTE) { CandidateDiscoveryScreen(database) }
                 composable(SHORTLIST_ROUTE) { ShortlistScreen(database, tokenManager) }
                 composable("placeholder/{tool}/{view}") { backStackEntry ->

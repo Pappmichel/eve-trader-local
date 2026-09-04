@@ -233,13 +233,18 @@ this was built in):
   current-price fallback, and own-orders/buyer-covered tracking (so
   "Already ordered" is currently unreachable) aren't ported either. See
   `android/README.md`'s own Shortlist entry for the full list.
+- A Settings screen (`ui/screens/SettingsScreen.kt`), reachable from the
+  drawer next to Characters - a hand-written form over `TradingConfig`'s
+  fields, since Kotlin has no equivalent of the desktop `SettingsDialog`'s
+  reflection-driven generic form and Trading is the only tool with a config
+  on this platform yet.
 
 Not started: the rest of Trading (realized-trade reconciliation, price
 history, unlisted-stock/undercut checks, auto-add/prune from Candidate
 Discovery, own-orders/buyer-covered tracking, Profit / Day, the Goonmetrics
-fallback), all four other tools' business logic, the SDE cache itself, a
-Settings screen, CI for the Android build, an app icon, encryption at rest
-for stored tokens, a Play Store listing.
+fallback), all four other tools' business logic and their own Settings tabs,
+the SDE cache itself, CI for the Android build, an app icon, encryption at
+rest for stored tokens, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
