@@ -3,12 +3,18 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- No android:icon yet - no launcher icon asset exists in this
-         skeleton (see android/README.md); Android Studio's "Image Asset"
-         tool is the normal way to add one, not something to hand-author. -->
+    <!-- A generic placeholder icon (res/mipmap-anydpi-v26/ic_launcher*.xml,
+         an adaptive icon over two plain vector drawables - minSdk 26 means
+         every device this app supports has adaptive-icon support, so no
+         legacy PNG mipmaps are needed) - not designed artwork, just
+         something other than the default Android icon so the app is
+         recognizable in an app drawer. Swap for a real icon later via
+         Android Studio's "Image Asset" tool (see android/README.md). -->
     <application
         android:name=".EveTraderApplication"
         android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:theme="@style/Theme.EveTraderLocal">
 

@@ -286,6 +286,11 @@ which "careful reading" alone had caught):
   `android/README.md`), so it installs Gradle itself and invokes it
   directly rather than `./gradlew`. No lint step, no instrumented/UI tests
   (would need an emulator), no release signing, no Play Store upload.
+- A generic placeholder app icon (`res/mipmap-anydpi-v26/ic_launcher*.xml`,
+  an adaptive icon over two plain vector drawables - a flat
+  `BgWindow`-colored background behind a blocky cyan "E" monogram
+  foreground) - not designed artwork, just something other than the
+  default Android icon. See `android/README.md`'s own entry.
 - Encryption at rest for stored tokens (`data/auth/TokenCrypto.kt`,
   AES-256-GCM with an Android-Keystore-held key) - a real departure from
   the desktop build's plain SQLite `tokens` table, since an EVE SSO
@@ -664,13 +669,24 @@ which "careful reading" alone had caught):
   Minerals' config classes existed with no UI to change them outside a
   hand-edited settings blob.
 
-Not started: Production's Invention Estimator (confirmed genuinely
-blocked - needs `industryActivityProbabilities`/`industryActivitySkills`
-SDE tables this cache doesn't carry; Logistics and Asset-Optimized Planner
-were likewise investigated and confirmed genuinely blocked on the same
-missing `plan_production` stock-target engine as Planner/Special Orders -
-see above for all four), tests for anything beyond the pure logic already
-covered, an app icon, a Play Store listing.
+Not started: Production's Invention Estimator (see correction note below -
+being revisited, not actually blocked; Logistics and Asset-Optimized
+Planner remain confirmed genuinely blocked on the same missing
+`plan_production` stock-target engine as Planner/Special Orders - see
+above for those three), tests for anything beyond the pure logic already
+covered, a Play Store listing.
+
+**Correction, same day:** the Invention Estimator "confirmed genuinely
+blocked" conclusion above was wrong in its implication. `industryActivity
+Probabilities.csv`/`industryActivitySkills.csv` are plain Fuzzwork CSVs
+already fetched by this repo's own desktop Python code (`sde.py`) via the
+exact same pipeline Android's `SdeDownloader.kt` already uses for every
+other SDE table - not some unreachable data source, just two tables
+nobody had gotten around to adding to the Android cache yet, same as
+`invTypeMaterials`/`industryActivityMaterials`+`Products` before them.
+Being ported for real now, same established pattern (new CSV entries,
+new Room entities, a version bump, DAO/`SdeRepository` mirrors, then the
+actual probability/decryptor math from `production/invention.py`).
 
 At this point every ROADMAP item that was open going into this Android
 push has either landed for real or been investigated and confirmed

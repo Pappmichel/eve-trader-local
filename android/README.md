@@ -649,9 +649,16 @@ current scope.
   implicit-receiver ones). CI is green as of this writing, but this still
   hasn't run on a device/emulator - expect a first-run round of smaller
   fixes once it actually opens in Android Studio or installs on a phone.
-- No app icon (`android:icon` is deliberately omitted from
-  `AndroidManifest.xml` rather than pointing at a nonexistent resource) -
-  add one via Android Studio's Image Asset tool.
+- A generic placeholder app icon (`res/mipmap-anydpi-v26/ic_launcher*.xml`,
+  an adaptive icon over two plain vector drawables -
+  `ic_launcher_background.xml`/`ic_launcher_foreground.xml`, a flat
+  `BgWindow`-colored square behind a blocky cyan "E" monogram) - not
+  designed artwork, just something other than the default Android icon so
+  the app is recognizable in an app drawer/recents. minSdk 26 means every
+  device this app supports has adaptive-icon support, so no legacy PNG
+  mipmap fallbacks were needed. Swap for a real, designed icon later via
+  Android Studio's Image Asset tool, which regenerates every
+  density/shape variant from one source image.
 - Stored tokens are now encrypted at rest (`data/auth/TokenCrypto.kt`,
   AES-256-GCM, key held in the Android Keystore) - a real departure from
   the desktop build's own plain SQLite `tokens` table, since an EVE SSO
