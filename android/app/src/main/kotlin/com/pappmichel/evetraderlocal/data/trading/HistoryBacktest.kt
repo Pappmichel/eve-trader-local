@@ -2,15 +2,18 @@ package com.pappmichel.evetraderlocal.data.trading
 
 import com.pappmichel.evetraderlocal.data.history.HistoryPoint
 
-/** Margin-momentum trends from region price history - a Kotlin port of the
- * `compute_margin_trends` half of the desktop build's history_backtest.py.
- * The candidate-scoring/backtest half of that module (`_score_candidate`,
- * `select_candidate_window`) is a different feature and isn't ported here.
+/** Margin-momentum trends *and* hit-rate/avg-movement candidate scoring from
+ * region price history - a Kotlin port of both halves of the desktop
+ * build's history_backtest.py: `compute_margin_trends` (`computeMarginTrends`
+ * below) and `_score_candidate`/`_latest_margin` (`scoreCandidate` below).
+ * `select_candidate_window`'s rotating-offset "safe mode" batching is NOT
+ * ported - see `scoreCandidate`'s own KDoc for why that's a reasonable
+ * scope-down here, not a missing feature.
  *
- * The per-day formula is the same landed-cost/net-sell shape the desktop
- * module shares with `_latest_margin`/`_score_candidate` - and the same
- * shape shortlist evaluation uses against live order-book percentiles, just
- * fed *daily region averages* instead:
+ * The per-day formula is the same landed-cost/net-sell shape shared by
+ * `computeMarginTrends`, `scoreCandidate`, and Shortlist.kt's live
+ * order-book evaluation - just fed *daily region averages* here instead of
+ * a live order-book snapshot:
  *
  *     landed  = jitaAvgPrice * (1 + jitaBuyBrokerFee) + volumeM3 * importCostPerM3
  *     netSell = refAvgPrice * structureSellHaircut
@@ -18,13 +21,15 @@ import com.pappmichel.evetraderlocal.data.history.HistoryPoint
  *
  * A region-wide daily average is a deliberately different (smoother) input
  * from a live order-book snapshot - it answers "is this item trending
- * better or worse than it has been", not "what can I buy it for right now".
+ * better or worse than it has been" / "has this item been reliably
+ * profitable", not "what can I buy it for right now".
  *
  * No storage coupling: history comes in from the caller (on Android, freshly
- * fetched by GoonmetricsClient on the user's Refresh press - see
+ * fetched by GoonmetricsClient on the user's button press - see
  * PriceHistoryScreen.kt for why this platform fetches instead of reading a
- * cache), volumes come in from the shortlist, results go back out. Same
- * "caller wires the data in" split history_backtest.py itself documents. */
+ * cache), volumes/candidates come in from the shortlist/Candidate Discovery,
+ * results go back out. Same "caller wires the data in" split
+ * history_backtest.py itself documents. */
 object HistoryBacktest {
     // Minimum paired (jita+reference, same date) history days required before
     // a trend is reported at all - below this a "3-day vs 30-day average"
@@ -111,6 +116,117 @@ object HistoryBacktest {
             )
         }
         return results
+    }
+
+    /** Indexes history points by (regionId, typeId, date) for O(1) paired
+     * lookups - the Kotlin counterpart of `_index_history`. */
+    fun indexHistory(points: List<HistoryPoint>): Map<Triple<Int, Int, String>, HistoryPoint> =
+        points.associateBy { Triple(it.regionId, it.typeId, it.date) }
+
+    /** Same landed/net-sell/margin formula as `scoreCandidate`'s per-day
+     * loop, but for a single day only (`date`, normally the most recent one
+     * with data) - used for the `add` gate below, which cares about
+     * *current* profitability specifically, not the multi-day average
+     * score. Returns 0.0 (not null) when either region has no price for
+     * that day - the direct counterpart of `_latest_margin`'s own
+     * `if not jita or not ref: return 0.0`. */
+    private fun latestMargin(
+        histIndex: Map<Triple<Int, Int, String>, HistoryPoint>, typeId: Int, date: String,
+        volumeM3: Double, config: TradingConfig,
+    ): Double {
+        val jita = histIndex[Triple(config.jitaRegionId, typeId, date)] ?: return 0.0
+        val ref = histIndex[Triple(config.referenceRegionId, typeId, date)] ?: return 0.0
+        val landed = jita.avgPrice * (1 + config.jitaBuyBrokerFee) + volumeM3 * config.importCostPerM3
+        val netSell = ref.avgPrice * config.structureSellHaircut
+        return if (landed > 0) (netSell - landed) / landed else 0.0
+    }
+
+    /** Aggregates every paired (Jita, reference-region) day of history for
+     * one candidate into a hit-rate/score, and decides whether to
+     * recommend it - the Kotlin counterpart of `_score_candidate`, ported
+     * case-for-case (see HistoryBacktestTest.kt).
+     *
+     * `score = avgProfitM3 x ln(1+avgMove) x hitRate`: profit per m3
+     * rewards import efficiency, ln(1+avgMove) rewards liquidity without
+     * letting a single very-high-volume day dominate, hitRate rewards
+     * consistency over a lucky day. `add` (the actual recommendation)
+     * requires *all* of: at least one profitable day, hitRate clearing
+     * `config.minHitRate`, the *latest* day's margin (not just the
+     * average) clearing `config.minMarginThreshold`, a positive score, and
+     * average liquidity clearing `config.minAvgMovement` - a good
+     * historical average alone isn't enough if the item isn't profitable
+     * or liquid right now.
+     *
+     * Returns null when there's no Jita history for this candidate's
+     * typeId at all - the direct counterpart of `_score_candidate`'s own
+     * `if not dates: return None`.
+     *
+     * Deliberately NOT ported: `find_new_import_candidates`'s batching and
+     * `select_candidate_window`'s rotating-offset "safe mode" (a persisted
+     * cursor so repeated runs eventually cover a candidate universe too
+     * large to score in one run/request budget). Android has no
+     * counterpart of that persisted offset yet, and the callers here
+     * (CandidateDiscoveryScreen.kt's "Add Recommended", ShortlistScreen.kt's
+     * "Prune") score a bounded set on a single button press - the already-
+     * discovered candidate list, or the current shortlist - rather than an
+     * unbounded universe, so there is no unattended-search case to rotate a
+     * window through the way the desktop CLI's `find-candidates --safe`
+     * does. Worth porting if a caller ever needs to score the *entire*
+     * live-ESI-walk candidate universe (thousands of items) in bounded
+     * batches. */
+    fun scoreCandidate(
+        candidate: Candidate,
+        histIndex: Map<Triple<Int, Int, String>, HistoryPoint>,
+        config: TradingConfig,
+    ): NewCandidateResult? {
+        val dates = histIndex.keys
+            .filter { (region, typeId, _) -> region == config.jitaRegionId && typeId == candidate.typeId }
+            .map { it.third }
+            .sorted()
+        if (dates.isEmpty()) return null
+
+        var days = 0
+        var goodDays = 0
+        var bestMargin = -999.0
+        var sumProfitM3 = 0.0
+        var sumMove = 0.0
+        val latestDate = dates.last()
+
+        for (d in dates) {
+            val jita = histIndex[Triple(config.jitaRegionId, candidate.typeId, d)] ?: continue
+            val ref = histIndex[Triple(config.referenceRegionId, candidate.typeId, d)] ?: continue
+            val landed = jita.avgPrice * (1 + config.jitaBuyBrokerFee) + candidate.volumeM3 * config.importCostPerM3
+            if (landed <= 0 || candidate.volumeM3 <= 0) continue
+            val netSell = ref.avgPrice * config.structureSellHaircut
+            val profit = netSell - landed
+            val margin = profit / landed
+            val profitM3 = profit / candidate.volumeM3
+            days++
+            sumProfitM3 += profitM3
+            sumMove += ref.movement
+            if (margin >= config.minMarginThreshold) goodDays++
+            bestMargin = maxOf(bestMargin, margin)
+        }
+
+        if (days == 0) return null
+
+        val hitRate = goodDays.toDouble() / days
+        val avgProfitM3 = sumProfitM3 / days
+        val avgMove = sumMove / days
+        val score = avgProfitM3 * kotlin.math.ln(1 + avgMove) * hitRate
+        val latestMarginValue = latestMargin(histIndex, candidate.typeId, latestDate, candidate.volumeM3, config)
+
+        val add = goodDays > 0 && hitRate >= config.minHitRate && latestMarginValue >= config.minMarginThreshold &&
+            score > 0 && avgMove >= config.minAvgMovement
+
+        return NewCandidateResult(
+            item = candidate.item, category = candidate.category, typeId = candidate.typeId,
+            volumeM3 = candidate.volumeM3, pairedDays = days, profitableDays = goodDays,
+            hitRate = hitRate, latestMargin = latestMarginValue, bestMargin = bestMargin,
+            avgProfitM3 = avgProfitM3, avgSellMovement = avgMove, score = score,
+            recommendation = if (add) "Consider import" else "Skip", add = add,
+            metaLevel = candidate.metaLevel,
+        )
     }
 }
 

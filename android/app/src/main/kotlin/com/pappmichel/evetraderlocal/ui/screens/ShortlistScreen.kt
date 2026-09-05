@@ -38,10 +38,14 @@ import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
+import com.pappmichel.evetraderlocal.data.history.GoonmetricsClient
+import com.pappmichel.evetraderlocal.data.trading.Candidate
+import com.pappmichel.evetraderlocal.data.trading.HistoryBacktest
 import com.pappmichel.evetraderlocal.data.trading.ShortlistItem
 import com.pappmichel.evetraderlocal.data.trading.ShortlistRepository
 import com.pappmichel.evetraderlocal.data.trading.ShortlistRow
 import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
+import com.pappmichel.evetraderlocal.data.trading.averageMarketDailyVolume
 import com.pappmichel.evetraderlocal.data.trading.evaluateShortlist
 import com.pappmichel.evetraderlocal.data.trading.summaryCounts
 import kotlinx.coroutines.launch
@@ -55,12 +59,33 @@ private fun fmtIsk(value: Double?): String = if (value != null) "%,.2f".format(v
 
 /** Trading -> Shortlist: the live import/sell decision table, mirroring the
  * desktop build's trading_shortlist.py view - manual membership management
- * (add/remove/toggle-active) plus a "Refresh" action running
- * `evaluateShortlist` against live Jita + structure order-book prices, the
- * seller's own open sell orders there, and the buyer's own coverage (open
- * buy orders/existing inventory) - see `Shortlist.kt`'s own docstring for
- * what's still simplified vs. the desktop version: no Goonmetrics
- * fallback or Profit/Day, no auto-add/prune from Candidate Discovery. */
+ * (add/remove/toggle-active) plus:
+ *
+ * - "Refresh": `evaluateShortlist` against live Jita + structure order-book
+ *   prices, the seller's own open sell orders there, and the buyer's own
+ *   coverage (open buy orders/existing inventory), plus Goonmetrics
+ *   reference-region history for Profit / Day (`averageMarketDailyVolume` -
+ *   best-effort, same as desktop's `_refresh_shortlist_rows`: a Goonmetrics
+ *   outage leaves Profit/Day blank rather than failing the whole refresh).
+ * - "Prune": the auto-*remove*/reactivate half of desktop's
+ *   `refresh-and-prune`, scoring every active-or-inactive shortlist item
+ *   with an item_id against its own Jita/reference-region history via
+ *   `HistoryBacktest.scoreCandidate` (the same hit-rate/avg-movement/margin
+ *   filter Candidate Discovery's "Score & Add Recommended" uses for
+ *   auto-*add*), deactivating what no longer clears the bar and
+ *   reactivating what does. Scoped down from desktop's own version: no
+ *   skip-streak grace period (a temporary Goonmetrics gap deactivates
+ *   immediately here, not after `skip_grace_period_days`) and no
+ *   `max_active_shortlist_items` rank cap - both are persisted-state
+ *   conveniences desktop's `storage.py` backs (a skip-streak-since
+ *   timestamp table) that this platform has no counterpart for yet, and
+ *   pruning on today's numbers alone is still a real, useful signal
+ *   without them. An item Goonmetrics has no history for at all is left
+ *   untouched either way (no verdict, not treated as a reason to prune).
+ *
+ * See `Shortlist.kt`'s own docstring for what's still simplified vs. the
+ * desktop version (only the Goonmetrics current-price fallback remains
+ * unported). */
 @Composable
 fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
@@ -161,7 +186,23 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                     }
                 } else emptySet()
 
-                val evaluated = evaluateShortlist(items, jitaStats, structureStats, cfg, ownOrdersByItem, buyerAlreadyCoveredIds)
+                // Real market-wide average daily traded quantity, for
+                // Profit / Day - see Shortlist.kt's averageMarketDailyVolume
+                // for why this is neither order-book depth nor this
+                // trader's own sales. Best-effort, same as desktop's
+                // _refresh_shortlist_rows: a Goonmetrics outage leaves
+                // Profit/Day blank rather than failing the whole refresh.
+                var historyUnavailable = false
+                val avgDailyVolumeByItem = try {
+                    averageMarketDailyVolume(GoonmetricsClient().priceHistoryChunked(cfg.referenceRegionId, activeIds))
+                } catch (e: Exception) {
+                    historyUnavailable = true
+                    emptyMap()
+                }
+
+                val evaluated = evaluateShortlist(
+                    items, jitaStats, structureStats, cfg, ownOrdersByItem, buyerAlreadyCoveredIds, avgDailyVolumeByItem,
+                )
                 rows = evaluated.sortedByDescending { it.margin ?: Double.NEGATIVE_INFINITY }
                 val summary = summaryCounts(evaluated)
                 status = "Import: ${summary.importCandidates} · Already ordered: ${summary.alreadyOrdered} · " +
@@ -171,8 +212,55 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                 else if (structureStats.isEmpty() && activeIds.isNotEmpty()) status += " (no seller character logged in - Net Sell left blank)"
                 if (ownOrdersUnavailable) status += " (couldn't read own orders - re-log in as Seller for the read_character_orders scope)"
                 if (buyerCoveredUnavailable) status += " (couldn't check buyer coverage - re-log in as Buyer for the orders/assets scopes)"
+                if (historyUnavailable) status += " (couldn't fetch Goonmetrics history - Profit/Day left blank)"
             } catch (e: Exception) {
                 status = e.message ?: "Refresh failed."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    fun prune() {
+        val candidates = items.filter { it.itemId != 0 }
+        if (candidates.isEmpty()) {
+            status = "Nothing to prune - every shortlist item is missing a type ID."
+            return
+        }
+        busy = true
+        status = "Fetching price history for ${candidates.size} item(s)..."
+        scope.launch {
+            try {
+                val cfg = configRepo.load()
+                val gm = GoonmetricsClient()
+                val typeIds = candidates.map { it.itemId }
+                val points = gm.priceHistoryChunked(cfg.jitaRegionId, typeIds) +
+                    gm.priceHistoryChunked(cfg.referenceRegionId, typeIds)
+                val histIndex = HistoryBacktest.indexHistory(points)
+                val resultsByType = candidates.mapNotNull { item ->
+                    val candidate = Candidate(
+                        item = item.item, typeId = item.itemId, volumeM3 = item.volumeM3,
+                        category = item.category, marketGroupPath = "", metaLevel = item.metaLevel,
+                    )
+                    HistoryBacktest.scoreCandidate(candidate, histIndex, cfg)?.let { item.itemId to it }
+                }.toMap()
+
+                var deactivated = 0
+                var reactivated = 0
+                val pruned = items.map { item ->
+                    val result = resultsByType[item.itemId] ?: return@map item
+                    when {
+                        item.active && !result.add -> { deactivated++; item.copy(active = false) }
+                        !item.active && result.add -> { reactivated++; item.copy(active = true) }
+                        else -> item
+                    }
+                }
+                items = pruned
+                shortlistRepo.save(pruned)
+                status = "Pruned: scored ${resultsByType.size} of ${candidates.size} (some had no Goonmetrics " +
+                    "history) - $deactivated deactivated, $reactivated reactivated."
+            } catch (e: Exception) {
+                status = e.message ?: "Prune failed."
             } finally {
                 busy = false
             }
@@ -189,6 +277,7 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
         Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(enabled = !busy && items.isNotEmpty(), onClick = { refresh() }) { Text("Refresh") }
+                Button(enabled = !busy && items.isNotEmpty(), onClick = { prune() }) { Text("Prune") }
             }
             if (busy) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp))
@@ -204,9 +293,11 @@ fun ShortlistScreen(database: AppDatabase, tokenManager: TokenManager) {
                         headlineContent = { Text(item.item) },
                         supportingContent = {
                             Text(
-                                if (row != null) "${row.decision} · Margin ${fmtPct(row.margin)} · " +
-                                    "Profit/Unit ${fmtIsk(row.profitPerUnit)}"
-                                else "${item.category} · %.1f m3".format(item.volumeM3),
+                                if (row != null) {
+                                    val profitPerDay = row.profitPerUnit?.let { p -> row.avgDailyVolume?.let { v -> p * v } }
+                                    "${row.decision} · Margin ${fmtPct(row.margin)} · " +
+                                        "Profit/Unit ${fmtIsk(row.profitPerUnit)} · Profit/Day ${fmtIsk(profitPerDay)}"
+                                } else "${item.category} · %.1f m3".format(item.volumeM3),
                             )
                         },
                         leadingContent = {
