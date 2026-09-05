@@ -475,20 +475,27 @@ which "careful reading" alone had caught):
   gap Reprocessing Quote already has); the ore side prices from public
   Jita data alone.
 - Ore & Minerals -> Mineral Shopping List (`data/refining/
-  MineralShoppingList.kt`; `ui/screens/MineralShoppingListScreen.kt`) -
-  `refining/optimizer.py` turned out to be a genuine mixed-integer linear
-  program (`scipy.optimize.linprog`, both ore-portion and direct-mineral
-  variables integer, with its own documented fix for a relax-then-round
-  optimality-gap bug) - porting an equivalent MIP solver into a
-  phone-friendly Kotlin/JVM dependency was judged impractical for one
-  pass. This substitutes a documented simpler strategy instead: buy every
-  required mineral outright at its current cheapest Jita listing, with no
-  ore-refining alternative considered at all (that would need both a real
-  solver and the ore/ice yield engine Ore Shortlist just added - a
-  natural follow-up once both exist). Also missing vs. even that
-  direct-buy half of the desktop behavior: no haul-cost term (the SDE
-  cache has no mineral item-volume data cached in a form this screen
-  reads yet) and no Goonmetrics home-market comparison.
+  MineralShoppingList.kt`, `MineralShoppingListOptimizer.kt`; `ui/screens/
+  MineralShoppingListScreen.kt`) - `refining/optimizer.py` is a genuine
+  mixed-integer linear program (`scipy.optimize.linprog`, both ore-portion
+  and direct-mineral variables integer, with its own documented fix for a
+  relax-then-round optimality-gap bug). The first pass at this screen
+  called an equivalent solver impractical for a phone-friendly Kotlin/JVM
+  dependency without actually checking - that call was revisited and
+  found wrong: `org.ojalgo:ojalgo` resolves cleanly from Maven Central
+  (pure JVM, zero runtime dependencies, Java 11 target, no JNI), and
+  `MineralShoppingListOptimizer.kt` ports `optimizer.py`'s buy-vs-refine
+  MIP onto ojAlgo's `ExpressionsBasedModel` case-for-case, reusing Ore
+  Shortlist's candidate universe/yield formulas for the refining side.
+  `MineralShoppingListOptimizerTest.kt` ports the desktop suite's own
+  hand-computed cases (including its "greedy trap" case) plus random-plan
+  and realistic-scale checks - all pass, and the realistic-scale case
+  solves in well under a second. Still data-layer only as of this
+  writing: `MineralShoppingListScreen.kt` wires up only the original
+  direct-buy path, not this optimizer, so the UI has a real follow-up
+  left. Also still missing vs. desktop: no haul-cost term (the SDE cache
+  has no mineral item-volume data cached in a form this screen reads yet)
+  and no Goonmetrics home-market comparison.
 - Production -> Ship Margins & Market Status (`data/production/
   ProductionBuildCost.kt`; extends `ProductionConfig.kt`; `ui/screens/
   ShipMarginScreen.kt`) - Production's first real *build*-cost view,
@@ -571,6 +578,21 @@ which "careful reading" alone had caught):
   runs a much smaller per-line-item Buy-vs-Build estimate on the existing
   single-item `unitBuildCost`, clearly not a narrowed port of the real
   planner.
+- Production -> Logistics was investigated and confirmed genuinely
+  blocked, not just left as a placeholder without checking: desktop's
+  four Logistics report tabs (Logistics Status, Distribution
+  Recommendations, Invention Logistics, T1 BPC Invention Needs) each
+  call `engine.plan_production` first and feed its output into their own
+  report function - the same missing stock-target/multi-character-asset
+  buy/build engine already found blocking Planner and Special Orders.
+  Its two "cheap local config" panels (category-location assignments,
+  manual build/buy overrides) only exist as input to those
+  `plan_production`-dependent reports, so porting them here with nothing
+  on this platform to read them would be dead configuration. Its
+  "Resolve Structure Name" helper would need ESI endpoints
+  (`EsiClient.kt` has none for structure/corporation name resolution)
+  that only exist to label that same unportable config UI. Remains
+  `PlaceholderScreen`, correctly.
 - Every configured tool now has its own Settings tab (`ui/screens/
   SettingsScreen.kt` grew a `TabRow`: Trading, Station Trading,
   Production, Ore & Minerals - Doctrine has no config yet). Previously
@@ -581,15 +603,15 @@ which "careful reading" alone had caught):
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
 or Unlisted-Stock-&-Undercut check across multiple characters,
-`average_daily_sold_by_type`, a real MIP/LP solver for Mineral Shopping
-List's ore-refining alternative, a real contract-sync/matching engine (for
-Stockpile Status' contract-target multiplier and Contract History's
-permanent fitting-matched history), the rest of Production (Asset-Optimized
-Planner, Logistics, Invention Estimator - Planner, Special Orders, and
-Owned Blueprints are now ported, each documented above as a scoped
-substitute rather than a full port where the real desktop feature needed
-infrastructure this platform doesn't have), tests for anything beyond the
-pure logic already covered, an app icon, a Play Store listing.
+`average_daily_sold_by_type`, wiring the new ore-refining MIP solver into
+Mineral Shopping List's own screen (solver landed, UI still direct-buy
+only), a real contract-sync/matching engine (for Stockpile Status'
+contract-target multiplier and Contract History's permanent
+fitting-matched history), Production's Asset-Optimized Planner and
+Invention Estimator (Logistics was investigated and confirmed genuinely
+blocked on the same missing engine as Planner/Special Orders, not merely
+left undone - see above), tests for anything beyond the pure logic already
+covered, an app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

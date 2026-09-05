@@ -454,22 +454,40 @@ current scope.
   Reprocessing Quote already has); no Goonmetrics fallback for the
   home-structure side.
 - **Ore & Minerals -> Mineral Shopping List** (`data/refining/
-  MineralShoppingList.kt`; `ui/screens/MineralShoppingListScreen.kt`):
-  `refining/optimizer.py` turned out to be a genuine mixed-integer linear
-  program (`scipy.optimize.linprog`, method `"highs"`, with both
-  ore-portion and direct-mineral decision variables marked integer - its
-  own docstring documents a real optimality-gap bug a relax-then-round
-  approach used to have, which is exactly why it isn't relaxed-then-
-  rounded here either). Porting an equivalent MIP solver into a
-  phone-friendly Kotlin/JVM dependency was judged impractical for one
-  pass, so this substitutes a documented simpler strategy instead: buy
-  every required mineral outright at its current cheapest Jita listing,
-  with no ore-refining alternative considered at all - that would need
-  both a real solver and the ore/ice yield engine Ore Shortlist just
-  added, a natural follow-up now that both exist. Further simplified vs.
-  even that direct-buy half of the desktop behavior: no haul-cost term
-  (the SDE cache doesn't carry mineral item-volume data in a form this
-  screen reads) and no Goonmetrics home-market comparison.
+  MineralShoppingList.kt`, `MineralShoppingListOptimizer.kt`; `ui/screens/
+  MineralShoppingListScreen.kt`): `refining/optimizer.py` is a genuine
+  mixed-integer linear program (`scipy.optimize.linprog`, method
+  `"highs"`, with both ore-portion and direct-mineral decision variables
+  marked integer - its own docstring documents a real optimality-gap bug
+  a relax-then-round approach used to have, which is exactly why it isn't
+  relaxed-then-rounded here either). An earlier pass judged an equivalent
+  solver impractical for a phone-friendly Kotlin/JVM dependency without
+  actually checking Maven Central - that check has since been done, and
+  the call reversed: `org.ojalgo:ojalgo` resolves cleanly (pure JVM, zero
+  runtime dependencies, Java 11 target, no JNI), and
+  `MineralShoppingListOptimizer.kt` ports the real MIP onto ojAlgo's
+  `ExpressionsBasedModel`, case-for-case against `optimizer.py`'s own
+  test suite (including its "greedy trap" regression case) - all pass,
+  the realistic-scale case solving in well under a second. Reuses Ore
+  Shortlist's candidate universe and yield formulas for the refining
+  side. Still a data-layer-only landing as of this writing:
+  `MineralShoppingListScreen.kt` only wires up the original direct-buy
+  path, not this optimizer - UI wiring is a separate follow-up. Further
+  simplified vs. even that direct-buy half of the desktop behavior: no
+  haul-cost term (the SDE cache doesn't carry mineral item-volume data in
+  a form this screen reads) and no Goonmetrics home-market comparison.
+- **Production -> Logistics** was investigated, not just left as a
+  placeholder: all four of desktop's Logistics report tabs (Logistics
+  Status, Distribution Recommendations, Invention Logistics, T1 BPC
+  Invention Needs) call `engine.plan_production` first and feed its
+  output to their own report function - the same missing stock-target/
+  multi-character-asset buy/build engine already found blocking Planner
+  and Special Orders (see those entries above). Its two "cheap local
+  config" panels only serve as input to those same unportable reports,
+  and its structure-name-resolution helper only exists to label that
+  config UI and has no `EsiClient.kt` endpoint to call anyway. Confirmed
+  nothing meaningful is portable in isolation - remains
+  `PlaceholderScreen`, correctly, not for lack of trying.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters: a `TabRow` with one tab per tool that has a config on
   this platform - Trading, Station Trading, Production, Ore & Minerals
