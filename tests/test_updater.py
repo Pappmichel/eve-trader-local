@@ -392,7 +392,7 @@ def frozen_windows(monkeypatch):
     `subprocess.Popen` with a recorder rather than actually launching
     cmd.exe."""
     monkeypatch.setattr(updater, "is_frozen", lambda: True)
-    monkeypatch.setattr(updater.os, "name", "nt")
+    monkeypatch.setattr(updater, "is_windows", lambda: True)
     monkeypatch.setattr(updater.sys, "executable", "C:\\portable\\eve-trader-local.exe")
     calls: list[tuple] = []
     monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: calls.append((a, k)))
@@ -440,13 +440,13 @@ def test_download_and_apply_refuses_checksum_mismatch(frozen_windows, monkeypatc
 
 def test_download_and_apply_refuses_on_non_windows(monkeypatch):
     monkeypatch.setattr(updater, "is_frozen", lambda: True)
-    monkeypatch.setattr(updater.os, "name", "posix")
+    monkeypatch.setattr(updater, "is_windows", lambda: False)
     with pytest.raises(ActionError, match="only supported on the Windows build"):
         updater.download_and_apply_binary_update(_fake_release())
 
 
 def test_download_and_apply_refuses_when_not_frozen(monkeypatch):
     monkeypatch.setattr(updater, "is_frozen", lambda: False)
-    monkeypatch.setattr(updater.os, "name", "nt")
+    monkeypatch.setattr(updater, "is_windows", lambda: True)
     with pytest.raises(ActionError, match="packaged .exe"):
         updater.download_and_apply_binary_update(_fake_release())

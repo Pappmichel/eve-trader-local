@@ -31,6 +31,22 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def is_windows() -> bool:
+    """A thin wrapper around `os.name == "nt"`, so tests simulating a Windows
+    run (`updater.py`'s binary-update path is Windows-only) monkeypatch
+    *this* function rather than the real, process-global `os.name`.
+    Monkeypatching `os.name` directly once corrupted an unrelated pytest
+    internal (`pathlib.Path` picks `WindowsPath` vs `PosixPath` by reading
+    `os.name` at construction time, and a `WindowsPath` instance created
+    that way can't later be touched by pytest's own tmp-dir cleanup on a
+    real POSIX CI runner) - confirmed by reproducing the exact
+    `NotImplementedError: cannot instantiate 'WindowsPath' on your system`
+    failure, unrelated to and appearing after the offending test had
+    already passed. Never patch `os.name` itself in a test again; patch
+    this function instead."""
+    return os.name == "nt"
+
+
 def _default_data_dir() -> Path:
     if is_frozen():
         # sys.executable is the real, user-placed .exe path for a onefile

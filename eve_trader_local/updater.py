@@ -32,7 +32,7 @@ import requests
 
 from . import _version
 from .errors import ActionError
-from .paths import PROJECT_ROOT, config_path, data_dir, db_path, is_frozen
+from .paths import PROJECT_ROOT, config_path, data_dir, db_path, is_frozen, is_windows
 
 GITHUB_REPO = "pappmichel/eve-trader-local"
 COMMITS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
@@ -614,7 +614,7 @@ def download_and_apply_binary_update(release: ReleaseInfo) -> None:
     returns (see `gui/dialogs/update_dialog.py`) - the helper script is
     already waiting on this process's PID by the time control returns
     here."""
-    if os.name != "nt":
+    if not is_windows():
         raise ActionError(
             "automatic binary updates are only supported on the Windows build. "
             f"Download the new release manually from "
@@ -646,9 +646,22 @@ def download_and_apply_binary_update(release: ReleaseInfo) -> None:
         script_path = update_dir / _HELPER_SCRIPT_NAME
         script_path.write_text(_relaunch_script(os.getpid(), new_exe, target_exe), encoding="ascii")
 
+        # subprocess.DETACHED_PROCESS/CREATE_NEW_PROCESS_GROUP only exist on
+        # Windows at all - referencing them unconditionally would raise
+        # AttributeError just from evaluating the keyword argument, on any
+        # platform, before Popen (mocked or not) is even called. This
+        # function already only runs for real past the is_windows() guard
+        # above, so `getattr(..., 0)`'s fallback never actually applies in
+        # production - it exists purely so this module stays importable and
+        # this function stays callable in a test simulating Windows while
+        # actually running on Linux CI (confirmed necessary: this crashed
+        # with a real AttributeError before this fix, even with Popen itself
+        # mocked, since only the flag lookup - not the mocked call - was the
+        # problem).
         subprocess.Popen(
             ["cmd", "/c", str(script_path)],
             cwd=str(update_dir),
-            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            creationflags=(getattr(subprocess, "DETACHED_PROCESS", 0)
+                          | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)),
             close_fds=True,
         )
