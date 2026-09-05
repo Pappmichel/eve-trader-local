@@ -528,11 +528,49 @@ which "careful reading" alone had caught):
   `character_slot_overview` explicitly cannot (see that function's own
   docstring). Invention Estimator was evaluated and confirmed out of
   scope: it needs `industryActivityProbabilities`/`industryActivitySkills`
-  SDE tables this cache doesn't carry. Planner, Asset-Optimized Planner,
-  Logistics, Special Orders, and Owned Blueprints remain
-  `PlaceholderScreen` - each needs real additional infrastructure
-  (multi-level BOM explosion, character-asset cross-referencing, or ESI
+  SDE tables this cache doesn't carry. Asset-Optimized Planner and
+  Logistics remain `PlaceholderScreen` - each needs real additional
+  infrastructure (character-asset cross-referencing, or ESI
   endpoints/business rules not yet modeled here).
+- Production -> Owned Blueprints (new `EsiClient.characterBlueprints`;
+  `data/production/OwnedBlueprints.kt`; `ui/screens/
+  OwnedBlueprintsScreen.kt`) - a live ESI read ported from
+  `engine.list_owned_blueprints`, grouping by `(type_id, is_original, ME,
+  TE, runs)` case-for-case, including the `quantity`-is-usually-a-
+  sentinel guard and `runs == -1` BPO/BPC classification. Needs a new
+  `esi-characters.read_blueprints.v1` scope, added to the "Producer"
+  role. Simplified vs. desktop: a live per-visit read across logged-in
+  Producer characters, not a synced local cache spanning every character
+  ever synced.
+- Production -> Planner (`data/production/ProductionPlanner.kt`; `ui/
+  screens/ProductionPlannerScreen.kt`) - reading desktop's actual Planner
+  tab in full found it is a stock-target-driven, ESI-asset-aware
+  buy/build optimizer (`production_planner.py`/`engine.plan_production`),
+  not a recursive BOM-explosion feature - infrastructure this platform
+  has none of. The single-item BOM explosion this menu slot needed
+  instead is desktop's *Item Lookup -> Material Tree* view
+  (`engine.build_material_tree`), so that's what was ported here:
+  recursive explosion through manufacturable sub-components down to raw
+  materials, reusing `ProductionBuildCost.kt`'s existing
+  `ProductionBomSource`/`unitBuildCost` math, aggregating shared leaf
+  demand across branches, depth-capped as a defensive cycle guard (not
+  present in desktop's own algorithm, documented as a deliberate
+  addition). No manual-stock/asset offsetting, no per-node buy-vs-build
+  decision (every manufacturable node always expands), no T2/invention
+  (no Invention SDE data at all here).
+- Production -> Special Orders (`data/production/SpecialOrders.kt`; `ui/
+  screens/ProductionSpecialOrdersScreen.kt`) - ports the order-list half
+  in full (create/list/mark-done/reopen/remove a named order with line
+  items) as a settings-blob repository, same shape as
+  `DoctrineFittingRepository`. Does not port `engine.plan_special_order`'s
+  real buy/build planner - it reuses the entire `plan_production` engine
+  (job-run batching, live cost indices/EIV, T2 invention,
+  `manual_build_buy` overrides, ESI-synced asset stock netted against
+  `stock_targets` for `net_against_stock`'s overlap warning), none of
+  which exists here (the same gap Planner just found). "Compute" instead
+  runs a much smaller per-line-item Buy-vs-Build estimate on the existing
+  single-item `unitBuildCost`, clearly not a narrowed port of the real
+  planner.
 - Every configured tool now has its own Settings tab (`ui/screens/
   SettingsScreen.kt` grew a `TabRow`: Trading, Station Trading,
   Production, Ore & Minerals - Doctrine has no config yet). Previously
@@ -546,10 +584,12 @@ or Unlisted-Stock-&-Undercut check across multiple characters,
 `average_daily_sold_by_type`, a real MIP/LP solver for Mineral Shopping
 List's ore-refining alternative, a real contract-sync/matching engine (for
 Stockpile Status' contract-target multiplier and Contract History's
-permanent fitting-matched history), the rest of Production (Planner,
-Asset-Optimized Planner, Logistics, Special Orders, Invention Estimator,
-Owned Blueprints), tests for anything beyond the pure logic already
-covered, an app icon, a Play Store listing.
+permanent fitting-matched history), the rest of Production (Asset-Optimized
+Planner, Logistics, Invention Estimator - Planner, Special Orders, and
+Owned Blueprints are now ported, each documented above as a scoped
+substitute rather than a full port where the real desktop feature needed
+infrastructure this platform doesn't have), tests for anything beyond the
+pure logic already covered, an app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

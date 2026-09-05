@@ -312,11 +312,58 @@ current scope.
   such skill read wired up). Invention Estimator was evaluated and
   confirmed out of scope: `invention.py`'s recipe lookup needs
   `industryActivityProbabilities`/`industryActivitySkills` SDE tables
-  this cache doesn't carry. Planner, Asset-Optimized Planner, Logistics,
-  Special Orders, and Owned Blueprints remain `PlaceholderScreen` - each
-  needs real additional infrastructure (multi-level BOM explosion,
-  character-asset cross-referencing, or ESI endpoints/business rules not
-  yet modeled here).
+  this cache doesn't carry. Asset-Optimized Planner and Logistics remain
+  `PlaceholderScreen` - each needs real additional infrastructure
+  (character-asset cross-referencing, or ESI endpoints/business rules
+  not yet modeled here).
+- **Production -> Owned Blueprints** (new `EsiClient.characterBlueprints`
+  + `CharacterBlueprint`; `data/production/OwnedBlueprints.kt`; `ui/
+  screens/OwnedBlueprintsScreen.kt`): a live ESI read ported from
+  `engine.py`'s `list_owned_blueprints`, grouping raw blueprint rows by
+  `(type_id, is_original, ME, TE, runs)` exactly like that function's own
+  grouping loop, including its "`quantity` is usually an ESI sentinel
+  (-1/-2), not a real stack size" guard and its `runs == -1` BPO/BPC
+  classification. Requires the new `esi-characters.read_blueprints.v1`
+  scope, added to the existing "Producer" login role. Simplification:
+  a live per-visit read across currently logged-in Producer characters,
+  not desktop's synced local cache spanning every character ever synced
+  - same tradeoff Current Jobs & Slots already made.
+- **Production -> Planner** (`data/production/ProductionPlanner.kt`;
+  `ui/screens/ProductionPlannerScreen.kt`): reading desktop's actual
+  Planner tab (`production_planner.py`/`engine.plan_production`) in full
+  found it isn't a recursive BOM-explosion feature at all - it's a
+  stock-target-driven, ESI-asset-aware buy/build optimizer (nets
+  configured stock targets against owned assets/industry jobs, pools
+  demand across multiple targets, produces inventory/build/buy/
+  invention-needs tables), infrastructure this platform has none of. The
+  single-item recursive BOM explosion this menu slot actually needed is
+  desktop's *Item Lookup -> Material Tree* view instead
+  (`engine.build_material_tree`), so that's what got ported here:
+  `buildMaterialTree` explodes a target item/quantity down through any
+  manufacturable sub-component to raw materials, reusing the existing
+  `ProductionBomSource`/`unitBuildCost` math per node, aggregating shared
+  leaf-material demand across branches and pricing the result. Depth-
+  capped as a defensive cycle guard even though desktop's own algorithm
+  has no such cap (documented in the file's own docstring). Scoped out:
+  manual-stock/ESI-asset offsetting and any per-node buy-vs-build
+  decision (every manufacturable node is always expanded, matching
+  `build_material_tree`'s own semantics) - and, as ever, no Tech II/
+  invention modeling (no Invention data in this SDE cache).
+- **Production -> Special Orders** (`data/production/SpecialOrders.kt`;
+  `ui/screens/ProductionSpecialOrdersScreen.kt`): ports the desktop
+  order-list half in full - create/list/mark-done/reopen/remove a named,
+  one-off build order with its own line items - as a settings-blob
+  repository, the same shape `DoctrineFittingRepository` already
+  established. Does *not* port `engine.plan_special_order`'s real
+  buy/build planner: that function reuses the entire `plan_production`
+  engine (job-run batching, live cost indices/EIV, T2 invention,
+  `manual_build_buy` overrides, and ESI-synced asset stock netted
+  against `stock_targets` for `net_against_stock`, surfaced as a
+  `stock_overlap_warning`) - none of which exists on this platform (same
+  gap Planner just found). The screen's "Compute" button instead runs a
+  much smaller, clearly-labeled per-line-item Buy-vs-Build estimate on
+  top of the existing single-item `unitBuildCost`, not a narrowed port of
+  the real planner.
 - **Doctrine -> Fittings** (`data/doctrine/EftFittingParser.kt`,
   `DoctrineSdeResolver.kt`; `ui/screens/DoctrineFittingsScreen.kt`): a
   Kotlin port of `doctrine/parser.py`'s EFT fitting-text parser (paste a
