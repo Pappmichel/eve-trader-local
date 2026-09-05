@@ -42,6 +42,7 @@ import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
 import com.pappmichel.evetraderlocal.ui.screens.PriceHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.ProductionBuildCandidatesScreen
 import com.pappmichel.evetraderlocal.ui.screens.ProductionCurrentJobsScreen
+import com.pappmichel.evetraderlocal.ui.screens.ProductionPlannerScreen
 import com.pappmichel.evetraderlocal.ui.screens.RealizedTradesScreen
 import com.pappmichel.evetraderlocal.ui.screens.ReprocessingQuoteScreen
 import com.pappmichel.evetraderlocal.ui.screens.SdeDataScreen
@@ -73,6 +74,7 @@ private const val SHIP_MARGIN_ROUTE = "production/ship-margins"
 private const val BUILD_CANDIDATES_ROUTE = "production/build-candidates"
 private const val CURRENT_JOBS_ROUTE = "production/current-jobs"
 private const val OWNED_BLUEPRINTS_ROUTE = "production/owned-blueprints"
+private const val PLANNER_ROUTE = "production/planner"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
@@ -80,11 +82,19 @@ private const val OWNED_BLUEPRINTS_ROUTE = "production/owned-blueprints"
  * Trading/Unlisted Stock & Undercut Check, Trading/Price History,
  * Trading/Realized Trades & Transactions, Station Trading's own
  * Shortlist/Undercut & Skills, Production/Item Lookup, Production/Ship
- * Margins & Market Status, Production/Build Candidates, Production/Current
- * Jobs & Slots, Production/Owned Blueprints, Doctrine/Fittings, and
- * Ore & Minerals' own Reprocessing Quote, Mineral Shopping List, and Ore
- * Shortlist (see ROADMAP.md's Android section for what's ported so far).
- * Add a route here as each new screen replaces its placeholder. */
+ * Margins & Market Status, Production/Build Candidates, Production/Planner,
+ * Production/Current Jobs & Slots, Production/Owned Blueprints,
+ * Doctrine/Fittings, and Ore & Minerals' own Reprocessing Quote, Mineral
+ * Shopping List, and Ore Shortlist (see ROADMAP.md's Android section for
+ * what's ported so far). Add a route here as each new screen replaces its
+ * placeholder.
+ *
+ * Production/Planner routes to [ProductionPlannerScreen], a recursive
+ * BOM-explosion feature - NOT a port of desktop's actual Planner tab
+ * (`production_planner.py`/`engine.plan_production`, a stock-target-driven
+ * buy/build optimizer this app has no infrastructure for). See
+ * `data/production/ProductionPlanner.kt`'s own module docstring for the
+ * full finding and the substitution this makes. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -110,6 +120,8 @@ private fun routeFor(tool: String, view: String): String =
         CURRENT_JOBS_ROUTE
     } else if (tool == "Production" && view == "Owned Blueprints") {
         OWNED_BLUEPRINTS_ROUTE
+    } else if (tool == "Production" && view == "Planner") {
+        PLANNER_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Doctrine" && view == "Stockpile Status") {
@@ -248,6 +260,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(BUILD_CANDIDATES_ROUTE) { ProductionBuildCandidatesScreen(database, tokenManager) }
                 composable(CURRENT_JOBS_ROUTE) { ProductionCurrentJobsScreen(database, tokenManager) }
                 composable(OWNED_BLUEPRINTS_ROUTE) { OwnedBlueprintsScreen(database, tokenManager) }
+                composable(PLANNER_ROUTE) { ProductionPlannerScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(DOCTRINE_STOCKPILE_STATUS_ROUTE) { DoctrineStockpileStatusScreen(database, tokenManager) }
                 composable(DOCTRINE_SHOPPING_LIST_ROUTE) { DoctrineShoppingListScreen(database) }

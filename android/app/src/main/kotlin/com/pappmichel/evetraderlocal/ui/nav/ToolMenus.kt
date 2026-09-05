@@ -7,9 +7,14 @@ package com.pappmichel.evetraderlocal.ui.nav
  * PlaceholderScreen except Trading/Candidate Discovery, Trading/Shortlist,
  * Trading/Unlisted Stock & Undercut Check, Production/Item Lookup,
  * Production/Ship Margins & Market Status, Production/Build Candidates,
- * Production/Current Jobs & Slots, and Production/Owned Blueprints (see
- * ROADMAP.md's Android section for what's actually ported vs. still
- * pending). */
+ * Production/Planner, Production/Current Jobs & Slots, and
+ * Production/Owned Blueprints (see ROADMAP.md's Android section for what's
+ * actually ported vs. still pending).
+ *
+ * Production/Planner's real screen is a recursive BOM-explosion feature,
+ * not a port of desktop's actual Planner tab (a stock-target-driven buy/
+ * build optimizer this app has no infrastructure for) - see
+ * `data/production/ProductionPlanner.kt`'s own module docstring. */
 val TOOL_MENUS: List<Pair<String, List<String>>> = listOf(
     "Trading" to listOf(
         "Shortlist", "Candidate Discovery", "Realized Trades & Transactions",
