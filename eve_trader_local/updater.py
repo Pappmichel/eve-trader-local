@@ -34,10 +34,18 @@ from . import _version
 from .errors import ActionError
 from .paths import PROJECT_ROOT, config_path, data_dir, db_path, is_frozen, is_windows
 
-GITHUB_REPO = "pappmichel/eve-trader-local"
+GITHUB_REPO = "Pappmichel/eve-trader-local"
 COMMITS_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
 RELEASES_LATEST_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 UPDATE_BRANCH = "main"
+
+# The repo is private, so an unauthenticated request gets a 404 (GitHub's way
+# of not confirming a private repo's existence to an anonymous caller) rather
+# than a 403. A token here is a PAT (classic, `repo` scope is enough; or
+# fine-grained with this repo's Contents: Read-only) - never committed, read
+# from the environment/.env only, same rule config.OAuthConfig follows for
+# its own secrets.
+GITHUB_TOKEN_ENV_VAR = "EVE_TRADER_LOCAL_GITHUB_TOKEN"
 HTTP_TIMEOUT_SECONDS = 15
 GIT_TIMEOUT_SECONDS = 120
 PIP_TIMEOUT_SECONDS = 900
@@ -181,8 +189,21 @@ def _is_git_ignored(path: Path) -> bool:
 # version check (read-only, never fatal)
 # --------------------------------------------------------------------------
 
+def _github_headers(accept: str = "application/vnd.github+json") -> dict[str, str]:
+    """Common headers for every GitHub API/asset request. Adds an
+    `Authorization` header when `GITHUB_TOKEN_ENV_VAR` is set - required
+    since the repo is private (a request with no token gets a 404, not a
+    403, per GitHub's usual "don't confirm a private repo exists" behavior).
+    """
+    headers = {"Accept": accept, "User-Agent": "eve-trader-local-updater"}
+    token = os.getenv(GITHUB_TOKEN_ENV_VAR)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def latest_remote_commit() -> str:
-    """HEAD SHA of origin/main from the public GitHub API (no auth needed).
+    """HEAD SHA of origin/main from the GitHub API.
 
     Raises ActionError on anything that went wrong - callers that must not
     fail (the startup check) go through `check_for_update()` instead.
@@ -190,10 +211,7 @@ def latest_remote_commit() -> str:
     try:
         resp = requests.get(
             COMMITS_API_URL,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "eve-trader-local-updater",
-            },
+            headers=_github_headers(),
             timeout=HTTP_TIMEOUT_SECONDS,
         )
     except requests.RequestException as e:
@@ -203,6 +221,12 @@ def latest_remote_commit() -> str:
         raise ActionError(
             "GitHub rate-limited the update check (unauthenticated requests are "
             "capped per IP). Try again later."
+        )
+    if resp.status_code == 404 and not os.getenv(GITHUB_TOKEN_ENV_VAR):
+        raise ActionError(
+            f"GitHub returned HTTP 404 for the update check ({GITHUB_REPO} is "
+            f"private). Set {GITHUB_TOKEN_ENV_VAR} to a GitHub personal access "
+            "token with read access to this repo, in your .env file."
         )
     if resp.status_code != 200:
         raise ActionError(f"GitHub returned HTTP {resp.status_code} for the update check")
@@ -481,16 +505,12 @@ def installed_version() -> Optional[str]:
 
 
 def latest_release() -> ReleaseInfo:
-    """GET .../releases/latest, no auth needed for a public read. Raises
-    ActionError on anything that went wrong - same contract as
-    `latest_remote_commit()` above."""
+    """GET .../releases/latest. Raises ActionError on anything that went
+    wrong - same contract as `latest_remote_commit()` above."""
     try:
         resp = requests.get(
             RELEASES_LATEST_API_URL,
-            headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "eve-trader-local-updater",
-            },
+            headers=_github_headers(),
             timeout=HTTP_TIMEOUT_SECONDS,
         )
     except requests.RequestException as e:
@@ -500,6 +520,12 @@ def latest_release() -> ReleaseInfo:
         raise ActionError(
             "GitHub rate-limited the update check (unauthenticated requests are "
             "capped per IP). Try again later."
+        )
+    if resp.status_code == 404 and not os.getenv(GITHUB_TOKEN_ENV_VAR):
+        raise ActionError(
+            f"GitHub returned HTTP 404 for the update check ({GITHUB_REPO} is "
+            f"private). Set {GITHUB_TOKEN_ENV_VAR} to a GitHub personal access "
+            "token with read access to this repo, in your .env file."
         )
     if resp.status_code != 200:
         raise ActionError(f"GitHub returned HTTP {resp.status_code} for the update check")
@@ -546,7 +572,12 @@ def _download_to(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
     try:
-        with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp:
+        with requests.get(
+            url,
+            headers=_github_headers("application/octet-stream"),
+            stream=True,
+            timeout=DOWNLOAD_TIMEOUT_SECONDS,
+        ) as resp:
             if resp.status_code != 200:
                 raise ActionError(f"GitHub returned HTTP {resp.status_code} downloading {dest.name}")
             with open(tmp, "wb") as f:
