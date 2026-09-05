@@ -42,6 +42,26 @@ migration mechanism (`MIGRATIONS`, added 2026-09-04 - see README.md's own
 turns "a table needs a new column someday" from a theoretical gap into a
 real one, since it's specifically new code meeting an old database file.
 
+**Known live bug, found 2026-09-05, not yet fixed:** `eve_trader_local/
+updater.py` implements both stages already (Stage 1's commit-SHA check
+plus Stage 2's `releases/latest`/checksummed-`.exe` download machinery for
+the packaged Windows build - this section's own "doesn't exist yet" wording
+above about Stage 2 is stale), but every GitHub API call it makes is
+unauthenticated, on the stated assumption of "no auth needed for a public
+read." The actual repo (`Pappmichel/eve-trader-local`) is **private**
+(confirmed via the GitHub API), and a private repo returns a plain 404 to
+an unauthenticated `/repos/.../commits/main` or `/repos/.../releases/latest`
+request - indistinguishable from "repo doesn't exist" to this code, not a
+clean auth failure. The update check is very likely silently broken against
+the real repo right now. Fixing it needs a real decision (embed a read-only
+token in a distributed client vs. make the repo/its releases public - GitHub
+has no "public releases, private source" middle ground), deliberately not
+made yet - see this same date's discussion for the options considered.
+**Android has no updater of any kind** (git-based Stage 1 doesn't apply to
+an installed APK with no source checkout or git binary; an Android Stage 2
+would hit the identical private-repo auth problem) - building one is
+deferred until the auth question above is settled, not attempted around it.
+
 ## SDE (Static Data Export) strategy — decoupled from app updates
 
 This is the important design decision: **SDE refresh is its own,
