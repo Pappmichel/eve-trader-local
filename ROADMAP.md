@@ -240,14 +240,28 @@ which "careful reading" alone had caught):
   toggle-active here (tapping a row opens the same dialog Add uses,
   pre-filled), not auto-populated/pruned from Candidate Discovery the way
   desktop's `refresh-and-prune` does it (though a Candidate Discovery row
-  can now add itself here directly — see below) — and Profit / Day, the
-  Goonmetrics current-price fallback, and buyer-covered tracking aren't
-  ported either. See `android/README.md`'s own Shortlist entry for the
-  full list.
-- Candidate Discovery's own screen can add a candidate straight to the
-  Shortlist (`ui/screens/CandidateDiscoveryScreen.kt`'s per-row button) — a
-  manual stand-in for `refresh-and-prune`'s auto-add, with no
-  hit-rate/avg-movement filtering behind it.
+  can now add itself here directly — see below) — the Goonmetrics
+  current-price fallback and buyer-covered tracking aren't ported. See
+  `android/README.md`'s own Shortlist entry for the full list.
+- Trading → Profit / Day and the hit-rate/avg-movement auto-prune half of
+  `refresh-and-prune` are both now ported. Profit/Day
+  (`Shortlist.kt`'s `averageMarketDailyVolume`/`profitPerUnit x
+  avgDailyVolume`) sources its volume from Goonmetrics reference-region
+  history — never order-book depth, never the trader's own realized
+  sales, matching desktop's own two documented bug-fix issues (#51/#100)
+  on this exact point. The auto-prune half (`HistoryBacktest.
+  scoreCandidate`, ported from `history_backtest.py`'s
+  `_score_candidate`/`_latest_margin`) is split across two buttons rather
+  than one combined CLI action, matching how this platform already
+  splits Discovery and Shortlist into separate screens: Candidate
+  Discovery's own "Score & Add Recommended" button is the auto-*add*
+  half (this replaces the old plain per-row "Add to Shortlist" button's
+  no-filter description above — that manual override still exists
+  alongside it), and Shortlist's new "Prune" button is the auto-remove/
+  reactivate half. Missing vs. desktop: no skip-streak grace period and
+  no `max_active_shortlist_items` rank cap, since both need a persisted
+  skip-since table this platform doesn't have — pruning here acts
+  immediately on today's numbers instead of after a grace period.
 - Shortlist now reads both signals that make "Already ordered" reachable:
   the seller's own open sell orders at the structure, and buyer coverage
   (an open buy order in Jita/at the structure, or existing inventory at a
@@ -421,12 +435,11 @@ which "careful reading" alone had caught):
 - Doctrine -> Stockpile Status (`data/doctrine/DoctrineValidation.kt`,
   `StockpileStatus.kt`; `ui/screens/DoctrineStockpileStatusScreen.kt`) -
   `DoctrineValidation.kt` ports `validation.py`'s Soll/priority-allocation/
-  deviation math case-for-case (the contract-side matching functions are
-  deliberately not ported - no consumer without a full ESI contract-sync
-  engine); `StockpileStatus.kt` compares saved fittings' required
-  quantities against `EsiClient.characterAssets` (or manual entry when no
-  Doctrine character is registered). Simplified: no contract-target
-  multiplier (needs that same unported contract-sync engine) and no
+  deviation math case-for-case; `StockpileStatus.kt` compares saved
+  fittings' required quantities against `EsiClient.characterAssets` (or
+  manual entry when no Doctrine character is registered). The
+  contract-target multiplier (GitHub issue #36) is now wired for real via
+  the contract-sync engine below, instead of hardcoded to 0. Still no
   single fixed stockpile location (sums a character's whole asset list,
   or a location filter).
 - Doctrine -> Shopping List (`data/doctrine/ShoppingList.kt`; `ui/screens/
@@ -438,14 +451,39 @@ which "careful reading" alone had caught):
   comparison isn't available here.
 - Doctrine -> Contract History (new `EsiClient.characterContracts`/
   `characterContractItems`; `data/doctrine/ContractHistory.kt`; `ui/
-  screens/DoctrineContractHistoryScreen.kt`) - a simple read-only listing
-  of currently-visible finished contracts with resolved item names, not
-  the desktop's permanent fitting-matched history table (that needs the
-  same not-yet-ported contract-sync/matching engine Stockpile Status'
-  contract-target multiplier is also missing). A new "Doctrine" login
-  role requests the two new ESI scopes (`esi-assets.read_assets.v1`,
+  screens/DoctrineContractHistoryScreen.kt`) - now backed by the real
+  contract-sync engine below: `syncAndPersist`/`loadPermanentHistory`
+  read a genuinely permanent, fitting-matched history instead of the
+  original read-only "currently visible ESI contracts" listing (kept as
+  a secondary "Show Live ESI Listing" view). A new "Doctrine" login role
+  requests the two ESI scopes (`esi-assets.read_assets.v1`,
   `esi-contracts.read_character_contracts.v1`) this and Stockpile Status
   need.
+- Doctrine -> the contract-sync/matching engine itself (`data/doctrine/
+  ContractSync.kt`, `DoctrineContractHistoryEntity.kt`,
+  `DoctrineContractHistoryRepository.kt`; extends `DoctrineValidation.kt`)
+  - ports `doctrine/esi_sync.py`'s `sync_contracts`, `engine.py`'s
+  `match_and_validate_contract`/`load_match_candidates`, and the
+  contract-side half of `validation.py` (hull gate, Ist multiset,
+  weighted exact/consume overlap score, 0.5 threshold, title-hint
+  tiebreak, deviation table, wrong-variant pairing) that Stockpile
+  Status's own initial port had deliberately left out for lack of a
+  caller - 71 tests ported case-for-case against the desktop suite, all
+  passing. `DoctrineContractHistoryEntity`/`Repository` is a real Room
+  table (`doctrine_contract_history`, DB version 4 -> 5) rather than this
+  app's usual settings-blob-JSON list, since a permanently-growing history
+  log fits Room better - it's GitHub issue #19's answer to ESI's own
+  ~30-day contract-visibility window. Three scope decisions, each forced
+  by a concrete existing gap rather than invented: character contracts
+  only (this platform's "Doctrine" login role never requested
+  `esi-contracts.read_corporation_contracts.v1`, and `EsiClient` has no
+  corporation-contracts endpoint); no persisted "active contracts"
+  snapshot (a finished contract is re-matched directly from ESI's
+  still-served item list on each sync instead of reusing a prior
+  outstanding-match record - strictly more permissive than desktop, not
+  less correct); no acceptor-name resolution (`EsiClient` has no POST
+  request path at all, so `acceptorId` is stored but never resolved to a
+  name).
 - Ore & Minerals -> Reprocessing Quote (`data/refining/{PasteParser,
   ReprocessingYield,ReprocessingQuote,RefiningConfig}.kt`; `ui/screens/
   ReprocessingQuoteScreen.kt`) - a Kotlin port of `refining/quote.py` +
@@ -613,17 +651,22 @@ which "careful reading" alone had caught):
   Minerals' config classes existed with no UI to change them outside a
   hand-edited settings blob.
 
-Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
-Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
-or Unlisted-Stock-&-Undercut check across multiple characters,
-`average_daily_sold_by_type`, a real contract-sync/matching engine (for
-Stockpile Status' contract-target multiplier and Contract History's
-permanent fitting-matched history), Production's Invention Estimator
-(Logistics and Asset-Optimized Planner were both investigated and
-confirmed genuinely blocked on the same missing `plan_production`
-stock-target engine as Planner/Special Orders, not merely left undone -
-see above), tests for anything beyond the pure logic already covered, an
-app icon, a Play Store listing.
+Not started: pooling either Realized Trades or Unlisted-Stock-&-Undercut
+check across multiple characters, `average_daily_sold_by_type`,
+Production's Invention Estimator (Logistics and Asset-Optimized Planner
+were both investigated and confirmed genuinely blocked on the same missing
+`plan_production` stock-target engine as Planner/Special Orders, not
+merely left undone - see above), tests for anything beyond the pure logic
+already covered, an app icon, a Play Store listing.
+
+At this point every ROADMAP item that was still open going into this
+Android push has either landed for real or been investigated and
+confirmed genuinely blocked by a specific, documented missing piece of
+infrastructure (never just left alone without checking) - what remains
+above is either genuinely out of scope for a single-user phone app
+(multi-character pooling, a persisted daily-sold-by-type table),
+confirmed-blocked Production views, or non-feature work (broader test
+coverage, an icon, store packaging).
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

@@ -68,26 +68,43 @@ current scope.
   refresh token on either character degrades the same way (that one
   character's data is just unavailable) rather than aborting the whole
   refresh - it used to take down even the Jita-only pricing above, which
-  needs no login at all. Not ported yet:
-  Profit / Day (needs Goonmetrics region history for real average daily
-  volume), the Goonmetrics current-price fallback when no seller token is
-  available, and auto-add/prune from Candidate Discovery
-  (`refresh-and-prune` on desktop) - this screen is refresh-only,
-  membership is manual (though Candidate Discovery's own screen can now
-  add a candidate here directly - see below; there's just no automatic
-  hit-rate/movement-threshold filtering behind that button the way
-  `refresh-and-prune` has).
+  needs no login at all. Refresh now also fetches Goonmetrics
+  reference-region history for real Profit / Day
+  (`averageMarketDailyVolume` x `profitPerUnit`, from the `movement`
+  field - never order-book depth, never the trader's own realized sales,
+  matching desktop's own two documented bug-fix issues #51/#100 on this
+  point), best-effort like every other signal here (a Goonmetrics outage
+  leaves Profit/Day blank rather than failing the whole refresh). A new
+  "Prune" button runs the auto-*remove*/reactivate half of desktop's
+  `refresh-and-prune` (`HistoryBacktest.scoreCandidate`, the same
+  hit-rate/avg-movement/margin filter Candidate Discovery's own
+  auto-add button uses - see below), re-scoring every shortlist item
+  against fresh Goonmetrics history and deactivating what no longer
+  clears the bar. Scoped down from desktop's version: no skip-streak
+  grace period (a temporary Goonmetrics gap deactivates immediately here,
+  not after `skip_grace_period_days`) and no `max_active_shortlist_items`
+  rank cap - both need a persisted skip-since table this platform doesn't
+  have. Still not ported: the Goonmetrics current-price fallback when no
+  seller token is available.
 - **Candidate Discovery -> Shortlist** (`ui/screens/
-  CandidateDiscoveryScreen.kt`'s per-row Add button): a manual stand-in for
-  `refresh-and-prune`'s auto-add - adds one candidate to the Shortlist
-  membership list directly, so it doesn't have to be retyped by hand into
-  Shortlist's own Add dialog. No hit-rate/avg-movement filtering (desktop's
-  `min_hit_rate`/`min_avg_movement` thresholds) happens here - every click
-  adds unconditionally, same as manually typing it into Shortlist would.
-  Goes through `ShortlistRepository.addIfAbsent`, which serializes its
-  load-check-save sequence behind a `Mutex` - tapping Add on two different
-  rows in quick succession used to race (both reading the same snapshot,
-  the later save silently overwriting and dropping the earlier addition).
+  CandidateDiscoveryScreen.kt`): two ways to add a candidate to the
+  Shortlist. The per-row Add button is an unconditional manual override -
+  every click adds regardless of hit-rate/avg-movement, same as manually
+  typing it into Shortlist's own dialog would - going through
+  `ShortlistRepository.addIfAbsent`, which serializes its load-check-save
+  sequence behind a `Mutex` (tapping Add on two different rows in quick
+  succession used to race, the later save silently overwriting and
+  dropping the earlier addition). A separate "Score & Add Recommended"
+  button is the real auto-*add* half of desktop's `refresh-and-prune`:
+  it fetches Goonmetrics history for every not-yet-shortlisted candidate
+  and runs `HistoryBacktest.scoreCandidate` (desktop's own
+  `min_hit_rate`/`min_avg_movement`/margin filter, ported case-for-case),
+  auto-adding only what clears the bar. The auto-*remove*/reactivate half
+  of the same desktop action lives on Shortlist's own "Prune" button
+  instead (see that screen's entry above for why the port keeps that
+  split rather than one combined action, matching how this platform
+  already splits Discovery and Shortlist into separate screens where
+  desktop's `refresh-and-prune` is one CLI command).
 - **Trading -> Unlisted Stock & Undercut Check** (`data/trading/
   UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`): two
   independent, always-live one-shot checks (no saved snapshot to load on
@@ -383,15 +400,15 @@ current scope.
 - **Doctrine -> Stockpile Status** (`data/doctrine/DoctrineValidation.kt`,
   `StockpileStatus.kt`; `ui/screens/DoctrineStockpileStatusScreen.kt`):
   `DoctrineValidation.kt` ports `validation.py`'s Soll/priority-allocation/
-  deviation math case-for-case - the contract-side matching functions are
-  deliberately not ported, since there's no consumer for them without a
-  full ESI contract-sync engine. `StockpileStatus.kt` sums saved fittings'
+  deviation math case-for-case. `StockpileStatus.kt` sums saved fittings'
   required quantities and compares them against `EsiClient.
   characterAssets` for a registered Doctrine character, falling back to
   manual entry when none is registered (same "don't block on missing
   auth" pattern `RealizedTradesScreen.kt`/`UnlistedUndercutScreen.kt`
-  already use). Simplified vs. desktop: no contract-target multiplier
-  (needs that same unported contract-sync engine) and no single fixed
+  already use). A "Sync Contracts" action now wires the real
+  contract-target multiplier (GitHub issue #36) via the contract-sync
+  engine below, instead of the hardcoded-to-0 placeholder the initial
+  port shipped with. Still simplified vs. desktop: no single fixed
   stockpile location (sums a character's whole asset list, or a location
   filter, rather than one hangar).
 - **Doctrine -> Shopping List** (`data/doctrine/ShoppingList.kt`; `ui/
@@ -405,17 +422,47 @@ current scope.
   isn't available here yet.
 - **Doctrine -> Contract History** (new `EsiClient.characterContracts`/
   `characterContractItems`; `data/doctrine/ContractHistory.kt`; `ui/
-  screens/DoctrineContractHistoryScreen.kt`): a simple read-only listing
-  of currently-visible finished contracts with resolved item names -
-  not the desktop's permanent fitting-matched history table, which needs
-  the same not-yet-ported contract-sync/matching engine Stockpile
-  Status's contract-target multiplier is also missing. A new "Doctrine"
-  login role requests the two new ESI scopes this and Stockpile Status
-  need (`esi-assets.read_assets.v1`, `esi-contracts.read_character_
-  contracts.v1`) - kept as its own role/scope pair rather than folded
-  into "Seller" (which already carries `esi-assets.read_assets.v1` for
-  Ore & Minerals/Unlisted Stock), matching the desktop build's own
-  separate `doctrine` role prefix.
+  screens/DoctrineContractHistoryScreen.kt`): now backed by a real
+  permanent, fitting-matched history via the contract-sync engine below -
+  `syncAndPersist`/`loadPermanentHistory` replace what was originally
+  just a read-only listing of currently-visible finished contracts (that
+  original live-ESI listing is kept as a secondary "Show Live ESI
+  Listing" view). A "Doctrine" login role requests the two ESI scopes
+  this and Stockpile Status need (`esi-assets.read_assets.v1`,
+  `esi-contracts.read_character_contracts.v1`) - kept as its own
+  role/scope pair rather than folded into "Seller" (which already
+  carries `esi-assets.read_assets.v1` for Ore & Minerals/Unlisted Stock),
+  matching the desktop build's own separate `doctrine` role prefix.
+- **Doctrine's contract-sync/matching engine** (`data/doctrine/
+  ContractSync.kt`, `DoctrineContractHistoryEntity.kt`,
+  `DoctrineContractHistoryRepository.kt`; extends `DoctrineValidation.kt`)
+  - the piece Stockpile Status and Contract History were both built
+  around a documented gap in until now. Ports `doctrine/esi_sync.py`'s
+  `sync_contracts`, `engine.py`'s `match_and_validate_contract`/
+  `load_match_candidates`, and the contract-side half of `validation.py`
+  (hull gate, Ist multiset, weighted exact/consume overlap score, 0.5
+  match threshold, title-hint tiebreak, deviation table, wrong-variant
+  pairing) case-for-case - 71 tests ported against the desktop suite, all
+  passing in a standalone Kotlin/JVM harness. `DoctrineContractHistoryEntity`/
+  `Repository` is a real Room table (`doctrine_contract_history`, Room
+  version 4 -> 5) rather than this app's usual settings-blob-JSON list -
+  a permanently-growing history log is a better fit for Room than a
+  single JSON blob, and it's GitHub issue #19's answer to ESI's own
+  ~30-day contract-visibility window (a contract that's already scrolled
+  out of ESI's own listing stays in this table forever, once seen once).
+  Three scope decisions, each forced by reading the actual desktop code
+  rather than invented: character contracts only, since this platform's
+  "Doctrine" login role never requested
+  `esi-contracts.read_corporation_contracts.v1` and `EsiClient` has no
+  corporation-contracts endpoint at all; no persisted "active contracts"
+  snapshot table - a contract ESI now reports as finished is re-matched
+  directly from ESI's still-served item list on that same sync, rather
+  than reusing a prior outstanding-match record the way desktop's own
+  snapshot-then-diff approach does, which is strictly more permissive
+  (never misses a contract desktop's snapshot happened not to have
+  captured yet) not less correct; and no acceptor-name resolution, since
+  `EsiClient` has no POST request path at all yet - `acceptorId` is
+  stored on every history row but never resolved to a display name.
 - **Ore & Minerals -> Reprocessing Quote** (`data/refining/PasteParser.kt`,
   `ReprocessingYield.kt`, `ReprocessingQuote.kt`, `RefiningConfig.kt`;
   `ui/screens/ReprocessingQuoteScreen.kt`): a Kotlin port of
