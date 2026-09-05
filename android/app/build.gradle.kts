@@ -91,6 +91,19 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
 
+    // Ore & Minerals -> Mineral Shopping List's buy-vs-refine solver
+    // (MineralShoppingListOptimizer.kt): a real mixed-integer LP, the same
+    // shape desktop's `refining/optimizer.py` solves with scipy/HiGHS.
+    // ojAlgo is pure JVM (no JNI, no transitive runtime deps - verified via
+    // its own POM), targets Java 11 bytecode (well under this module's
+    // Java 17 `compileOptions`/`kotlinOptions`, and under minSdk 26's
+    // invokedynamic-capable runtime), and resolves cleanly from Maven
+    // Central the same way every other dependency here does (dl.google.com
+    // is blocked in this session's sandbox, Maven Central is not) - see
+    // that file's own module docstring for the full investigation this
+    // pinned version came out of.
+    implementation("org.ojalgo:ojalgo:57.2.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     // JVM unit tests only (src/test/, run via testDebugUnitTest) - for the

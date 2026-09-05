@@ -46,10 +46,17 @@ import kotlinx.coroutines.launch
  * A Kotlin port of the desktop build's `do_optimize_mineral_shopping_list`
  * (GitHub issue #93) - see `data/refining/MineralShoppingList.kt`'s module
  * docstring for the full finding on `optimizer.py` (a genuine mixed-integer
- * LP) and the scope decision this screen implements instead (buy each
- * mineral independently at its cheapest current Jita listing - no
- * ore-refining alternative in this pass). That file's docstring is the
- * canonical explanation; this screen is just its UI.
+ * LP).
+ *
+ * **This screen still only wires up the direct-buy half** (`buildMineral
+ * ShoppingList` - buy each mineral independently at its cheapest current
+ * Jita listing). The real joint buy-vs-refine solver now exists
+ * (`data/refining/MineralShoppingListOptimizer.kt`'s `optimizeShoppingList`,
+ * see that file's own module docstring for the investigation that made it
+ * practical) but has no UI wired to it yet on this screen - a UI-only gap,
+ * not the "no real solver exists" gap `MineralShoppingList.kt` originally
+ * (and wrongly) documented. That file's docstring is the canonical
+ * explanation of the solver itself; this screen is just direct-buy's UI.
  *
  * Unlike Reprocessing Quote (which parses an Inventory-window paste),
  * requirements are entered one at a time by item name + quantity - the
@@ -141,7 +148,7 @@ fun MineralShoppingListScreen(database: AppDatabase, @Suppress("UNUSED_PARAMETER
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Mineral Shopping List", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Buy-outright cost only - no ore-refining comparison yet, see this screen's own docstring.",
+            "Buy-outright cost only - the ore-refining alternative has a real solver now but no UI here yet, see this screen's own docstring.",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(bottom = 8.dp),
         )

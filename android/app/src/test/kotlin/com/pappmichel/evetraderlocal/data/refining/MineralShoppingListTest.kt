@@ -11,18 +11,19 @@ import org.junit.Test
  * desktop build's `tests/test_refining_optimizer.py`. That file exercises a
  * real mixed-integer LP (`optimize_shopping_list`, buy-vs-refine across
  * every ore/ice type at once - see `MineralShoppingList.kt`'s module
- * docstring for the full finding); this port deliberately substitutes a
- * simpler "buy each mineral outright at its own cheapest current Jita
- * listing" strategy instead, with no ore-refining alternative at all, so
- * the desktop suite's ore-vs-direct/mixed-plan/LP-vs-greedy cases
+ * docstring for the full finding, and `MineralShoppingListOptimizerTest`
+ * for that case-for-case port, now that `MineralShoppingListOptimizer.kt`
+ * implements the real joint solver); this file's own `buildMineralShoppingList`
+ * only ever covers the "buy each mineral outright at its own cheapest
+ * current Jita listing" half - the `allDirectCost`/`savingsVsAllDirect`
+ * baseline the real optimizer compares its own plan against - so the
+ * desktop suite's ore-vs-direct/mixed-plan/LP-vs-greedy cases
  * (`test_prefers_ore_when_refining_is_cheaper`,
  * `test_greedy_per_mineral_ranking_would_lose_to_the_lp`, etc.) exercise
- * behavior this file doesn't implement and can't meaningfully assert on.
- * These cases instead pin down THIS file's own documented behavior: whole-
- * unit rounding, the broker-fee markup, multiple independent lines, and the
- * "can't price it" (no Jita sell orders) case - the direct-buy-only slice
- * that desktop's own `all_direct_cost`/`savings_vs_all_direct` baseline
- * exists to compare against (see `optimizer.py`). */
+ * behavior that lives in that other file now, not this one. These cases
+ * instead pin down THIS file's own documented behavior: whole-unit
+ * rounding, the broker-fee markup, multiple independent lines, and the
+ * "can't price it" (no Jita sell orders) case. */
 class MineralShoppingListTest {
     private val tradingCfg = TradingConfig(jitaBuyBrokerFee = 0.0147)
 

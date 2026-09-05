@@ -26,15 +26,38 @@ import kotlin.math.ceil
  * gives the WRONG (more expensive) answer on ore that yields two wanted
  * minerals at once. This is not a case of an inflated name over simple logic.
  *
- * **Scope decision made from that finding:** porting an equivalent MIP
- * solver (HiGHS or similar) into a phone-friendly Kotlin/JVM dependency is
- * impractical for one pass - see `build.gradle.kts` before adding any
- * dependency; nothing pure-JVM and lightweight on Maven Central solves
- * general MIPs the way HiGHS does, and hand-rolling a branch-and-bound
- * solver is exactly the "notoriously easy to get subtly wrong" trap
- * `optimizer.py`'s own docstring cites scipy to avoid. So this file
- * deliberately substitutes a documented SIMPLER strategy instead of porting
- * the joint optimization faithfully:
+ * **UPDATE (this pass): the earlier "impractical" scope call below was
+ * wrong, and has been superseded.** An earlier pass reasoned that no
+ * lightweight pure-JVM MIP solver existed on Maven Central and that
+ * hand-rolling branch-and-bound was too risky to attempt, and shipped the
+ * direct-buy-only strategy this file originally documented (kept below,
+ * unedited, as the historical record of that reasoning). That "nothing
+ * suitable exists" premise was never actually verified against Maven
+ * Central - checking it this time found `org.ojalgo:ojalgo` (MIT-licensed,
+ * pure JVM, zero runtime dependencies per its own POM, Java 11 target), and
+ * a standalone Kotlin/JVM Gradle harness confirmed it both resolves cleanly
+ * and reproduces every one of `test_refining_optimizer.py`'s hand-computed
+ * cases exactly, including the greedy-trap case, at realistic scale in well
+ * under a second. The real joint-optimization solver now lives in
+ * `MineralShoppingListOptimizer.kt` (`optimizeShoppingList` +
+ * `fetchOreOptionsForMinerals`) - see that file's own module docstring for
+ * the full investigation and the ported LP/MIP itself, and
+ * `MineralShoppingListOptimizerTest` for the case-for-case port of the
+ * desktop suite. This file's own `buildMineralShoppingList` below still
+ * exists and is unchanged - it's the "buy everything outright" half the
+ * real optimizer's own `allDirectCost`/`savingsVsAllDirect` compares
+ * against (mirroring `optimizer.py`'s own `all_direct_cost`), not a
+ * superseded duplicate.
+ *
+ * **Original (now-superseded) scope decision, kept verbatim for the
+ * historical record:** porting an equivalent MIP solver (HiGHS or similar)
+ * into a phone-friendly Kotlin/JVM dependency is impractical for one pass -
+ * see `build.gradle.kts` before adding any dependency; nothing pure-JVM and
+ * lightweight on Maven Central solves general MIPs the way HiGHS does, and
+ * hand-rolling a branch-and-bound solver is exactly the "notoriously easy to
+ * get subtly wrong" trap `optimizer.py`'s own docstring cites scipy to
+ * avoid. So this file deliberately substitutes a documented SIMPLER strategy
+ * instead of porting the joint optimization faithfully:
  *
  *     For each required mineral, independently, buy it outright at its
  *     current Jita landed price.
@@ -62,11 +85,13 @@ import kotlin.math.ceil
  *    `all_direct_cost` baseline the desktop optimizer itself reports
  *    `savings_vs_all_direct` against - see `optimizer.py`).
  *
- * A future pass that ports the ore/ice yield engine (needed by Ore Shortlist
- * too - see that view's own scope note) can extend this file with an
- * ore-refining option alongside direct buying; until then this tool tells
- * the truth about being a "what does buying these outright cost right now"
- * calculator, not a refining-vs-buying optimizer.
+ * (Both load-bearing gaps above are now closed: the ore/ice yield formula
+ * landed with Ore Shortlist - `ReprocessingYield.kt`'s `oreIceYield` +
+ * `applyYield` - and `MineralShoppingListOptimizer.kt` is the real MIP
+ * solver this note originally said wasn't practical to port. This tool now
+ * tells the truth about being a joint buy-vs-refine optimizer, not merely a
+ * "what does buying these outright cost right now" calculator - see this
+ * docstring's UPDATE section above.)
  *
  * **Further simplification vs. even the direct-buy half of the desktop
  * behavior:** desktop's `landed_cost_per_unit` adds haul cost
