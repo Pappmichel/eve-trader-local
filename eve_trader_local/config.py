@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import os
+import sys
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,7 +29,18 @@ import yaml
 
 from . import storage
 from .errors import ConfigError
-from .paths import PROJECT_ROOT, config_path
+from .paths import PROJECT_ROOT, config_path, is_frozen
+
+
+def _default_dotenv_path() -> Path:
+    """`PROJECT_ROOT` (derived from `__file__`) resolves *inside* a frozen
+    PyInstaller onefile build's temp extraction dir, not next to the actual
+    portable .exe - the same "next to the real executable" distinction
+    `paths._default_data_dir()` already draws for the data dir. Without this,
+    a .env dropped beside the .exe would silently never be read."""
+    if is_frozen():
+        return Path(sys.executable).resolve().parent / ".env"
+    return PROJECT_ROOT / ".env"
 
 
 def load_dotenv(path: Optional[Path] = None) -> None:
@@ -36,7 +48,7 @@ def load_dotenv(path: Optional[Path] = None) -> None:
     be a dependency for ~15 lines. Existing environment variables always win,
     matching python-dotenv's own default (a real exported env var should beat
     a checked-out file)."""
-    path = path or PROJECT_ROOT / ".env"
+    path = path or _default_dotenv_path()
     if not path.exists():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
