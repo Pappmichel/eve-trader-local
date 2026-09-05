@@ -11,6 +11,7 @@ import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintProductEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeCategoryEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeDao
 import com.pappmichel.evetraderlocal.data.sde.SdeGroupEntity
+import com.pappmichel.evetraderlocal.data.sde.SdeInventionProbabilityEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeMarketGroupEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeRefreshStateEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeSolarSystemEntity
@@ -36,7 +37,12 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
  * table), the one Doctrine table that earns a real Room entity instead of
  * the settings-blob-JSON pattern every other Doctrine list uses - see that
  * entity's own docstring for why - for the real contract-sync/matching
- * engine (`data/doctrine/ContractSync.kt`). */
+ * engine (`data/doctrine/ContractSync.kt`). Version 6 adds
+ * `sde_invention_probability` and widens `sde_blueprint_products`/
+ * `sde_blueprint_materials` to also carry Invention (activityId=8) rows
+ * (previously Manufacturing-only - see those two entities' own docstrings
+ * for the primary-key change that required) for the real Invention
+ * Estimator port (`data/production/InventionEstimator.kt`). */
 @Database(
     entities = [
         TokenEntity::class, SettingsEntity::class,
@@ -44,9 +50,9 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
         SdeMarketGroupEntity::class, SdeSolarSystemEntity::class, SdeStationEntity::class,
         SdeRefreshStateEntity::class, SdeTypeMaterialEntity::class,
         SdeBlueprintProductEntity::class, SdeBlueprintMaterialEntity::class,
-        DoctrineContractHistoryEntity::class,
+        DoctrineContractHistoryEntity::class, SdeInventionProbabilityEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {

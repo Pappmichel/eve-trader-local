@@ -4,6 +4,8 @@ import androidx.room.withTransaction
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.production.BlueprintForProduct
 import com.pappmichel.evetraderlocal.data.production.CandidateType
+import com.pappmichel.evetraderlocal.data.production.InventionRecipe
+import com.pappmichel.evetraderlocal.data.production.InventionSdeSource
 import com.pappmichel.evetraderlocal.data.production.ProductionCandidateSource
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
@@ -28,23 +30,38 @@ enum class SdeFile(val filename: String, val table: String) {
     // it is - see this enum's own file-ordering note above for why TYPES is
     // first for the opposite reason (it is the biggest, and the ETag file).
     TYPE_MATERIALS("invTypeMaterials.csv", "sde_type_materials"),
-    // Manufacturing-only blueprint BOM (activityID=1 rows only - see
+    // Manufacturing (activityID=1) blueprint BOM - see
     // SdeBlueprintMaterialEntity/SdeBlueprintProductEntity's own docstrings
-    // for why Reaction/Invention/Copying are out of scope). Added for
+    // for why Reaction/Copying are still out of scope. Added for
     // Production's first real build-cost view
-    // (data/production/ProductionBuildCost.kt) - fetched last, same
+    // (data/production/ProductionBuildCost.kt) - fetched near the end, same
     // "every other table already works without it" reasoning
-    // TYPE_MATERIALS' own comment gives.
+    // TYPE_MATERIALS' own comment gives. Now also carries Invention
+    // (activityID=8) rows, added for the Invention Estimator port - see
+    // RELEVANT_ACTIVITY_IDS below.
     BLUEPRINT_PRODUCTS("industryActivityProducts.csv", "sde_blueprint_products"),
     BLUEPRINT_MATERIALS("industryActivityMaterials.csv", "sde_blueprint_materials"),
+    // Invention (activityID=8) success probabilities - the one piece of
+    // Invention Estimator data with no Manufacturing counterpart at all, so
+    // it gets its own table rather than reusing one of the two above.
+    // Fetched last for the same "every earlier table already works without
+    // it" reasoning as everything else at the end of this enum.
+    INVENTION_PROBABILITY("industryActivityProbabilities.csv", "sde_invention_probability"),
 }
 
-/** Manufacturing is CCP's `activityID` 1 - the only activity this cache
- * stores (see `SdeBlueprintMaterialEntity`'s docstring). Reaction (11),
- * Invention (8) and Copying (5) rows are filtered out at parse time, same
- * as `sde.py`'s own `_RELEVANT_ACTIVITIES` filter on desktop, just narrowed
- * further to the one activity this port's first build-cost consumer needs. */
-private const val MANUFACTURING_ACTIVITY_ID = 1
+/** Manufacturing is CCP's `activityID` 1, Invention is 8 - the two
+ * activities `BLUEPRINT_MATERIALS`/`BLUEPRINT_PRODUCTS` now carry (see
+ * `SdeBlueprintMaterialEntity`'s docstring for why Invention joined
+ * Manufacturing there for the Invention Estimator port). Reaction (11) and
+ * Copying (5) rows are still filtered out at parse time, same as `sde.py`'s
+ * own `_RELEVANT_ACTIVITIES` filter on desktop, just narrower still - no
+ * ported consumer needs either of those two yet. */
+private val RELEVANT_ACTIVITY_IDS = setOf(1, 8)
+
+/** The activity id `SdeDao.inventionProduct`/`inventionMaterials`/
+ * `inventionRecipeCandidates` filter to - CCP's Invention activity, the
+ * same constant desktop's `production/constants.ACTIVITY_INVENTION` names. */
+private const val INVENTION_ACTIVITY_ID = 8
 
 /** What a completed refresh reports back: row counts per table (the
  * counterpart of storage.py's `sde_row_counts`) and when it happened. */
@@ -66,15 +83,13 @@ data class SdeStaleness(
 /** The Android port of sde.py: download Fuzzwork's SDE CSVs, parse them, and
  * replace the local cache wholesale.
  *
- * **Scope: seven of the desktop build's twelve tables.** `refresh_sde()`
- * downloads twelve CSVs because the desktop build also backs Production
- * (blueprint materials/products/job time/invention probability), a future
- * Doctrine EFT parser (`dgmTypeEffects.csv`), and Tech II/Faction detection
- * (`invMetaTypes.csv`). None of those tools exist on Android yet - not the
+ * **Scope: eight of the desktop build's twelve tables.** `refresh_sde()`
+ * downloads twelve CSVs because the desktop build also backs a future
+ * Doctrine EFT parser (`dgmTypeEffects.csv`) and Tech II/Faction detection
+ * (`invMetaTypes.csv`). Neither of those exists on Android yet - not the
  * screens, not the business logic - so fetching their tables here would be
- * several extra megabytes of download and several extra tables of storage
- * that nothing on this platform can read. This port covers exactly the
- * tables Android's *existing* features could use today:
+ * extra download and storage nothing on this platform can read. This port
+ * covers exactly the tables Android's *existing* features could use today:
  *  - `invTypes` / `invGroups` / `invCategories` / `invMarketGroups` - the
  *    candidate universe and its real category names, i.e. the SDE-accelerated
  *    path CandidateDiscovery currently cannot take (see that object's own
@@ -86,9 +101,47 @@ data class SdeStaleness(
  *    the Ore & Minerals / Reprocessing Quote screen (see
  *    `data/refining/ReprocessingYield.kt`). Added after the fact, exactly as
  *    this docstring predicted: a CSV, an entity, and a Room version bump.
+ *  - `industryActivityMaterials` / `industryActivityProducts`, Manufacturing
+ *    (activityID=1) rows - for Production's build-cost view
+ *    (`data/production/ProductionBuildCost.kt`).
+ *  - The same two tables' Invention (activityID=8) rows, plus
+ *    `industryActivityProbabilities` in full - for the Invention Estimator
+ *    (`data/production/InventionEstimator.kt`). This is the one table pair
+ *    that grew *in place* rather than being added fresh: see
+ *    `SdeBlueprintMaterialEntity`/`SdeBlueprintProductEntity`'s own
+ *    docstrings for why Invention's rows share the Manufacturing tables
+ *    instead of getting their own, and every Manufacturing-only query below
+ *    (`blueprintForProduct`, `blueprintMaterials`, `manufacturableTypes`) for
+ *    why each needed an explicit `activityId = 1` the moment that happened.
+ *    Reaction (11) and Copying (5) are still out of scope - no ported
+ *    consumer needs either.
+ *
+ *    A correction, for the record: an earlier pass through this file's own
+ *    docstring described `industryActivityProbabilities`/
+ *    `industryActivitySkills` as data the Invention Estimator would need
+ *    that "the Android cache doesn't carry" and treated that as a genuine
+ *    blocker. That was wrong in its implication - both are plain Fuzzwork
+ *    CSVs, fetched through the exact same pipeline every other table here
+ *    already uses; nothing about them was unreachable, they just hadn't been
+ *    added yet (now one has been - see below on the other).
  * This mirrors how every other part of this Android build has been ported:
  * the shape now, the rest when the tool that needs it arrives. Adding a table
  * later is a CSV, an entity, and a Room version bump - not a redesign.
+ *
+ * **`industryActivitySkills.csv` was deliberately not added**, despite being
+ * named alongside `industryActivityProbabilities.csv` when this port was
+ * scoped. Checked against the desktop build itself first: `grep -rn
+ * industryActivitySkills` across `eve_trader_local/` and `tests/` returns
+ * nothing at all. `sde.py` never fetches it, `storage.py` never reads it,
+ * and `production/invention.py`'s real skill-bonus math
+ * (`skill_multiplier`) reads three flat `ProductionConfig` fields
+ * (`encryption_skill_level`/`datacore_skill_1_level`/`datacore_skill_2_
+ * level`) the user sets once, not a per-blueprint skill requirement looked
+ * up from the SDE. Desktop Invention simply has no consumer for this table
+ * either - so porting it here would be exactly the "several extra megabytes
+ * of download and a table nothing can read" this docstring already argues
+ * against for `invMetaTypes`/`dgmTypeEffects`, just for a table the *parent
+ * feature itself* doesn't use.
  *
  * `metaGroupID` is still skipped inside `invTypes` - it needs the separate
  * `invMetaTypes.csv` fetch that only Tech II/Faction detection would read.
@@ -113,7 +166,7 @@ data class SdeStaleness(
 class SdeRepository(
     private val db: AppDatabase,
     private val downloader: SdeDownloader = SdeDownloader(),
-) : ProductionCandidateSource {
+) : ProductionCandidateSource, InventionSdeSource {
     private val dao = db.sdeDao()
 
     /** Downloads the current Fuzzwork dump and replaces the cache. Safe to
@@ -251,7 +304,10 @@ class SdeRepository(
             blueprintProducts.clear()
             SdeCsv.readRows(reader) { row ->
                 val activityId = row.intOrNull("activityID") ?: return@readRows
-                if (activityId != MANUFACTURING_ACTIVITY_ID) return@readRows
+                // Manufacturing (1) and Invention (8) both matter now - see
+                // RELEVANT_ACTIVITY_IDS and SdeBlueprintProductEntity's own
+                // docstring for why the two share this one table.
+                if (activityId !in RELEVANT_ACTIVITY_IDS) return@readRows
                 val blueprintTypeId = row.intOrNull("typeID") ?: return@readRows
                 val productTypeId = row.intOrNull("productTypeID") ?: return@readRows
                 val quantity = row.doubleOrNull("quantity") ?: return@readRows
@@ -267,12 +323,31 @@ class SdeRepository(
             blueprintMaterials.clear()
             SdeCsv.readRows(reader) { row ->
                 val activityId = row.intOrNull("activityID") ?: return@readRows
-                if (activityId != MANUFACTURING_ACTIVITY_ID) return@readRows
+                if (activityId !in RELEVANT_ACTIVITY_IDS) return@readRows
                 val blueprintTypeId = row.intOrNull("typeID") ?: return@readRows
                 val materialTypeId = row.intOrNull("materialTypeID") ?: return@readRows
                 val quantity = row.doubleOrNull("quantity") ?: return@readRows
                 blueprintMaterials.add(
                     SdeBlueprintMaterialEntity(blueprintTypeId, activityId, materialTypeId, quantity)
+                )
+            }
+        }
+
+        onProgress(SdeFile.INVENTION_PROBABILITY, 10, total)
+        val inventionProbability = ArrayList<SdeInventionProbabilityEntity>(20_000)
+        downloader.fetchCsv(SdeFile.INVENTION_PROBABILITY.filename) { reader ->
+            inventionProbability.clear()
+            SdeCsv.readRows(reader) { row ->
+                // The whole file is Invention (8) rows in practice - sde.py
+                // filters explicitly too rather than assuming that, so this
+                // does the same.
+                val activityId = row.intOrNull("activityID") ?: return@readRows
+                if (activityId != INVENTION_ACTIVITY_ID) return@readRows
+                val t1BlueprintTypeId = row.intOrNull("typeID") ?: return@readRows
+                val productTypeId = row.intOrNull("productTypeID") ?: return@readRows
+                val probability = row.doubleOrNull("probability") ?: return@readRows
+                inventionProbability.add(
+                    SdeInventionProbabilityEntity(t1BlueprintTypeId, productTypeId, probability)
                 )
             }
         }
@@ -294,6 +369,7 @@ class SdeRepository(
             dao.clearTypeMaterials()
             dao.clearBlueprintProducts()
             dao.clearBlueprintMaterials()
+            dao.clearInventionProbability()
             dao.insertTypes(types)
             dao.insertGroups(groups)
             dao.insertCategories(categories)
@@ -303,6 +379,7 @@ class SdeRepository(
             dao.insertTypeMaterials(typeMaterials)
             dao.insertBlueprintProducts(blueprintProducts)
             dao.insertBlueprintMaterials(blueprintMaterials)
+            dao.insertInventionProbability(inventionProbability)
             dao.upsertRefreshState(SdeRefreshStateEntity(refreshedAt = refreshedAt, dumpEtag = dumpEtag))
         }
 
@@ -342,6 +419,7 @@ class SdeRepository(
             SdeFile.TYPE_MATERIALS.table to dao.countTypeMaterials(),
             SdeFile.BLUEPRINT_PRODUCTS.table to dao.countBlueprintProducts(),
             SdeFile.BLUEPRINT_MATERIALS.table to dao.countBlueprintMaterials(),
+            SdeFile.INVENTION_PROBABILITY.table to dao.countInventionProbability(),
         )
     }
 
@@ -356,8 +434,11 @@ class SdeRepository(
     // tracked follow-up left (see ROADMAP.md's Android section).
 
     /** The SDE name for a type id - what `/universe/types/{id}/` costs a
-     * network round-trip to answer. */
-    suspend fun typeName(typeId: Int): String? = withContext(Dispatchers.IO) { dao.typeName(typeId) }
+     * network round-trip to answer. Also the `InventionSdeSource.typeName`
+     * implementation - the Invention Estimator's own use of this same
+     * lookup (naming a T1 blueprint/relic and its invented product) needs
+     * nothing this general-purpose one doesn't already do. */
+    override suspend fun typeName(typeId: Int): String? = withContext(Dispatchers.IO) { dao.typeName(typeId) }
 
     /** The real SDE category name for a type (type -> group -> category), as
      * opposed to CandidateDiscovery's `guessCategory` string heuristic, which
@@ -473,4 +554,35 @@ class SdeRepository(
             CandidateType(typeId = t.typeId, typeName = name, volumeM3 = t.volume, metaLevel = t.metaLevel)
         }
     }
+
+    // -------------------------------------------------- invention lookups
+    // Implements InventionSdeSource for data/production/InventionEstimator.kt
+    // - see SdeDao's own "invention" section for the underlying queries.
+
+    /** The full Invention (activity 8) job definition for
+     * `t1BlueprintTypeId` - null if it invents nothing at all. Two separate
+     * DAO calls (product row, then materials) rather than one join: the
+     * product row's absence is the "invents nothing" signal, so it is
+     * checked first and short-circuits before the materials query runs. */
+    override suspend fun inventionRecipe(t1BlueprintTypeId: Int): InventionRecipe? =
+        withContext(Dispatchers.IO) {
+            val product = dao.inventionProduct(t1BlueprintTypeId) ?: return@withContext null
+            val baseProbability = dao.inventionProbability(t1BlueprintTypeId, product.productTypeId)
+            val datacores = dao.inventionMaterials(t1BlueprintTypeId).map { it.materialTypeId to it.quantity }
+            InventionRecipe(
+                productTypeId = product.productTypeId,
+                baseRuns = product.quantity.toInt(),
+                baseProbability = baseProbability,
+                datacores = datacores,
+            )
+        }
+
+    override suspend fun inventionRecipeCandidates(productBlueprintTypeId: Int): List<Int> =
+        withContext(Dispatchers.IO) { dao.inventionRecipeCandidates(productBlueprintTypeId) }
+
+    override suspend fun resolveInventionProductTypeId(productName: String): Int? =
+        withContext(Dispatchers.IO) { dao.resolveInventionProductTypeId(productName) }
+
+    override suspend fun categoryIdOf(typeId: Int): Int? =
+        withContext(Dispatchers.IO) { dao.categoryIdFor(typeId) }
 }

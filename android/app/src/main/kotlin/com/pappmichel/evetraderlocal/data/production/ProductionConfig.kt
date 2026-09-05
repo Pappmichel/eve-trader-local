@@ -89,6 +89,23 @@ data class ProductionConfig(
     // (see ProductionBuildCandidates.kt's own docstring) - this is the one
     // gate this port actually has.
     val minMargin: Double = 0.15,
+
+    // -- Added for the Invention Estimator (data/production/InventionEstimator.kt) --
+
+    // EVE's real invention skill bonus: the encryption skill is worth 1/40
+    // (2.5%) per level, each of the two datacore/science skills 1/30
+    // (~3.33%) per level - all three additive, never multiplied (see
+    // InventionEstimator.kt's `skillMultiplier`). Matches
+    // production/config.py's own defaults exactly (4/4/4 - a well-trained
+    // but not maxed-out inventor), not an optimistic all-5s guess. EVE
+    // skills only ever run 0-5; this port has no settings-screen field (or
+    // config-load validator) to range-check a bad override the way
+    // desktop's `validate_config_overrides` does, so a value outside 0-5
+    // here just produces a probability the real game could never give -
+    // not a crash, but not a real number either.
+    val encryptionSkillLevel: Int = 4,
+    val datacoreSkill1Level: Int = 4,
+    val datacoreSkill2Level: Int = 4,
 ) {
     companion object {
         const val SCOPE = "production"

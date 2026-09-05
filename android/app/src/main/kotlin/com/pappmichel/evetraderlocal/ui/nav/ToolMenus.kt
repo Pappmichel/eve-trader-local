@@ -8,7 +8,8 @@ package com.pappmichel.evetraderlocal.ui.nav
  * Trading/Unlisted Stock & Undercut Check, Production/Item Lookup,
  * Production/Ship Margins & Market Status, Production/Build Candidates,
  * Production/Planner, Production/Current Jobs & Slots,
- * Production/Owned Blueprints, and Production/Special Orders (see
+ * Production/Owned Blueprints, Production/Special Orders, and
+ * Production/Invention Estimator (see
  * ROADMAP.md's Android section for what's actually ported vs. still
  * pending, and see AppNavHost.kt's own routing docstring for the fuller,
  * more current list this comment doesn't fully track).

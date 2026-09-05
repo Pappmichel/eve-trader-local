@@ -74,28 +74,34 @@ data class SdeTypeMaterialEntity(
     val quantity: Double,
 )
 
-/** One `industryActivityMaterials.csv` row, Manufacturing only (`activityId`
- * is always 1 here - see `SdeFile.BLUEPRINT_MATERIALS`'s own comment for why
- * Reaction/Invention/Copying rows are never fetched at all): one run of
- * `blueprintTypeId` at ME 0 consumes `quantity` units of `materialTypeId`.
- * The desktop build's `sde_blueprint_materials` table (storage.py) carries
- * every activity id; this is a deliberately narrower slice added for
- * Production's first real build-cost view (see
- * `data/production/ProductionBuildCost.kt`) - every other activity
- * (Reaction, Invention, Copying) has no ported consumer on Android yet,
- * same "port only what's used" precedent `SdeTypeMaterialEntity` set for
- * the Reprocessing Quote port.
+/** One `industryActivityMaterials.csv` row, Manufacturing (activityId=1) OR
+ * Invention (activityId=8) - see `SdeFile.BLUEPRINT_MATERIALS`'s own comment
+ * for why Reaction/Copying rows are still never fetched at all: one run of
+ * `blueprintTypeId` (for activityId=1) or one invention attempt with it (for
+ * activityId=8, where the "materials" consumed are the datacores) requires
+ * `quantity` units of `materialTypeId`. The desktop build's
+ * `sde_blueprint_materials` table (storage.py) carries every activity id;
+ * this is a deliberately narrower slice, extended from Manufacturing-only to
+ * also carry Invention for the Invention Estimator port (see
+ * `data/production/InventionEstimator.kt`) - Reaction and Copying still have
+ * no ported consumer on Android, same "port only what's used" precedent
+ * `SdeTypeMaterialEntity` set for the Reprocessing Quote port.
  *
- * Composite primary key over (blueprintTypeId, materialTypeId): a real
- * Manufacturing formula never lists the same material twice, so this
- * reflects the true shape of the data instead of a synthetic id nothing
- * needs. `activityId` is still stored (rather than assumed) so a query
- * reads the same way the desktop schema's own WHERE clause does, and so a
- * later port of another activity id can reuse this table without a
- * migration that changes its shape, only one that loosens this key. */
+ * Composite primary key over (blueprintTypeId, activityId, materialTypeId) -
+ * `activityId` joined the key in this same change (it used to be
+ * (blueprintTypeId, materialTypeId) only, back when this table held
+ * Manufacturing rows exclusively and every blueprintTypeId only ever
+ * appeared under one activity): a genuine T1 blueprint has BOTH a
+ * Manufacturing formula for the item it builds AND an Invention formula for
+ * the datacores an attempt consumes, and there is no SDE guarantee the two
+ * activities' material lists never share a `materialTypeId` - without
+ * `activityId` in the key, such a row would collide and silently drop one of
+ * the two. A real formula (of either activity) never lists the same material
+ * twice, so this still reflects the true shape of the data, just widened by
+ * exactly the one column the new activity actually needs distinguished. */
 @Entity(
     tableName = "sde_blueprint_materials",
-    primaryKeys = ["blueprintTypeId", "materialTypeId"],
+    primaryKeys = ["blueprintTypeId", "activityId", "materialTypeId"],
     indices = [Index("blueprintTypeId")],
 )
 data class SdeBlueprintMaterialEntity(
@@ -105,20 +111,25 @@ data class SdeBlueprintMaterialEntity(
     val quantity: Double,
 )
 
-/** One `industryActivityProducts.csv` row, Manufacturing only (see
- * `SdeBlueprintMaterialEntity`'s docstring for why): running
- * `blueprintTypeId` produces `quantity` units of `productTypeId` per run.
- * The counterpart of `storage.get_blueprint_for_product`'s source table -
- * `SdeDao.blueprintForProduct` is the "which blueprint makes this item"
- * lookup this table exists for.
+/** One `industryActivityProducts.csv` row, Manufacturing (activityId=1) OR
+ * Invention (activityId=8) - see `SdeBlueprintMaterialEntity`'s docstring for
+ * why both activities are carried here now: running `blueprintTypeId`
+ * produces `quantity` units of `productTypeId` per run (Manufacturing), or
+ * one successful invention attempt with it produces `quantity` runs of the
+ * resulting T2/T3 BPC `productTypeId` (Invention). The counterpart of
+ * `storage.get_blueprint_for_product`/`get_invention_recipe`'s source table -
+ * `SdeDao.blueprintForProduct` (Manufacturing) and `SdeDao.inventionProduct`
+ * (Invention) are the two lookups this table now backs.
  *
- * Composite primary key over (blueprintTypeId, productTypeId): a real
- * Manufacturing blueprint has exactly one product per run (never two rows
- * for the same blueprint+product pair), matching
- * `SdeBlueprintMaterialEntity`'s same reasoning. */
+ * Composite primary key over (blueprintTypeId, activityId, productTypeId) -
+ * `activityId` joined the key for the same reason
+ * `SdeBlueprintMaterialEntity`'s own docstring gives: a real blueprint has
+ * exactly one product per run *per activity*, but a T1 blueprint's
+ * Manufacturing product (the T1 item itself) and its Invention product (the
+ * T2/T3 BPC) are two different rows that must not collide. */
 @Entity(
     tableName = "sde_blueprint_products",
-    primaryKeys = ["blueprintTypeId", "productTypeId"],
+    primaryKeys = ["blueprintTypeId", "activityId", "productTypeId"],
     indices = [Index("productTypeId")],
 )
 data class SdeBlueprintProductEntity(
@@ -126,6 +137,32 @@ data class SdeBlueprintProductEntity(
     val activityId: Int,
     val productTypeId: Int,
     val quantity: Double,
+)
+
+/** One `industryActivityProbabilities.csv` row, Invention (activityId=8)
+ * only - the SDE never lists a probability for any other activity, matching
+ * `sde.py`'s own `activity_id == ACTIVITY_INVENTION` filter exactly:
+ * attempting invention with `t1BlueprintTypeId` (a real T1 blueprint for
+ * Tech II, a Sleeper relic for Tech III - see
+ * `InventionEstimator.kt`'s own module docstring) against `productTypeId`
+ * succeeds at `probability` (already folded in EVE's own base rate; skill
+ * and decryptor bonuses are applied on top by `InventionEstimator.
+ * skillMultiplier`/decryptor lookup, never baked into this table).
+ * `productTypeId` is part of the key (not just `t1BlueprintTypeId`) purely
+ * for symmetry with `storage.get_invention_recipe`'s own two-column lookup;
+ * in practice one T1 blueprint/relic only ever invents one product. The
+ * counterpart of desktop's `sde_invention_probability` table - added
+ * entirely new for the Invention Estimator port, no prior narrower version
+ * of this table existed on Android (unlike the two tables above, which grew
+ * an activity rather than being created from nothing). */
+@Entity(
+    tableName = "sde_invention_probability",
+    primaryKeys = ["t1BlueprintTypeId", "productTypeId"],
+)
+data class SdeInventionProbabilityEntity(
+    val t1BlueprintTypeId: Int,
+    val productTypeId: Int,
+    val probability: Double,
 )
 
 @Entity(tableName = "sde_groups")
@@ -213,6 +250,7 @@ interface SdeDao {
     @Insert suspend fun insertTypeMaterials(rows: List<SdeTypeMaterialEntity>)
     @Insert suspend fun insertBlueprintMaterials(rows: List<SdeBlueprintMaterialEntity>)
     @Insert suspend fun insertBlueprintProducts(rows: List<SdeBlueprintProductEntity>)
+    @Insert suspend fun insertInventionProbability(rows: List<SdeInventionProbabilityEntity>)
 
     @Query("DELETE FROM sde_types") suspend fun clearTypes()
     @Query("DELETE FROM sde_groups") suspend fun clearGroups()
@@ -223,6 +261,7 @@ interface SdeDao {
     @Query("DELETE FROM sde_type_materials") suspend fun clearTypeMaterials()
     @Query("DELETE FROM sde_blueprint_materials") suspend fun clearBlueprintMaterials()
     @Query("DELETE FROM sde_blueprint_products") suspend fun clearBlueprintProducts()
+    @Query("DELETE FROM sde_invention_probability") suspend fun clearInventionProbability()
 
     // ------------------------------------------------------ refresh state
     @Upsert suspend fun upsertRefreshState(state: SdeRefreshStateEntity)
@@ -248,14 +287,18 @@ interface SdeDao {
      * market_group` + `classify_activity(type_id) is not None` filter,
      * narrowed the same "Manufacturing only" way every other query on this
      * cache already is - see `SdeBlueprintProductEntity`'s own docstring).
-     * `DISTINCT` guards a type whose product happens to appear in more than
-     * one blueprint row (shouldn't happen in real SDE data, but costs
-     * nothing to guard); unpublished types (removed/never-released items)
-     * are excluded the same way `oreIceCandidateTypes` excludes them. */
+     * `p.activityId = 1` is now a real filter rather than a given: this
+     * table also carries Invention (8) rows since the Invention Estimator
+     * port, and a T2/T3 item's *Invention* product row must not make it look
+     * Manufacturing-buildable here. `DISTINCT` guards a type whose product
+     * happens to appear in more than one blueprint row (shouldn't happen in
+     * real SDE data, but costs nothing to guard); unpublished types
+     * (removed/never-released items) are excluded the same way
+     * `oreIceCandidateTypes` excludes them. */
     @Query(
         "SELECT DISTINCT t.* FROM sde_types t " +
             "JOIN sde_blueprint_products p ON p.productTypeId = t.typeId " +
-            "WHERE t.published = 1"
+            "WHERE p.activityId = 1 AND t.published = 1"
     )
     suspend fun manufacturableTypes(): List<SdeTypeEntity>
 
@@ -372,29 +415,140 @@ interface SdeDao {
 
     /** "Which blueprint makes this item, and how many per run" - the Android
      * counterpart of `storage.get_blueprint_for_product`, narrowed to
-     * Manufacturing only (this table has no Reaction/Invention rows at all -
-     * see `SdeBlueprintProductEntity`'s docstring), so no `activityId`
-     * filter/preference ordering is needed the way the desktop query's own
-     * `ORDER BY activity_id` is. `LIMIT 1` is a defensive no-op in practice
-     * (a real product has exactly one Manufacturing blueprint), same
-     * reasoning as `resolveTypeByName`'s own LIMIT 1. Null for a type with no
+     * Manufacturing (`activityId = 1`) explicitly now that this table also
+     * carries Invention rows (see `SdeBlueprintProductEntity`'s docstring) -
+     * before that change the table only ever held Manufacturing rows, so the
+     * filter was implicit; it must be explicit now, or a T2/T3 item's
+     * Invention product row (same `productTypeId`, a T1 blueprint/relic's
+     * `blueprintTypeId`) could win the `LIMIT 1` instead of its real
+     * Manufacturing blueprint. No `activityId` preference ordering is needed
+     * beyond that single equality filter, unlike the desktop query's own
+     * `ORDER BY activity_id`. `LIMIT 1` is a defensive no-op in practice (a
+     * real product has exactly one Manufacturing blueprint), same reasoning
+     * as `resolveTypeByName`'s own LIMIT 1. Null for a type with no
      * Manufacturing blueprint at all - a raw material, or a type this cache
      * hasn't been refreshed to know how to build. */
     @Query(
         "SELECT blueprintTypeId, quantity FROM sde_blueprint_products " +
-            "WHERE productTypeId = :productTypeId LIMIT 1"
+            "WHERE productTypeId = :productTypeId AND activityId = 1 LIMIT 1"
     )
     suspend fun blueprintForProduct(productTypeId: Int): SdeBlueprintForProductRow?
 
     /** One run's Manufacturing materials at ME 0, before any ME reduction -
      * applying ME is the caller's job, matching `storage.
-     * get_blueprint_materials`'s own contract exactly. Empty (not null) for
-     * a blueprint id this cache has no material rows for. */
+     * get_blueprint_materials`'s own contract exactly. `activityId = 1` is
+     * now a real filter (see `blueprintForProduct`'s own doc for why): a
+     * blueprint that is also a genuine T1 Invention source has its datacore
+     * rows (`inventionMaterials`, activityId=8) stored under the same
+     * `blueprintTypeId` in this same table, and this query must not return
+     * those. Empty (not null) for a blueprint id this cache has no
+     * Manufacturing material rows for. */
     @Query(
         "SELECT materialTypeId, quantity FROM sde_blueprint_materials " +
-            "WHERE blueprintTypeId = :blueprintTypeId"
+            "WHERE blueprintTypeId = :blueprintTypeId AND activityId = 1"
     )
     suspend fun blueprintMaterials(blueprintTypeId: Int): List<TypeMaterialRow>
+
+    // -------------------------------------------------------- invention
+    // Backs InventionEstimator.kt (data/production/InventionEstimator.kt),
+    // the Android counterpart of storage.py's get_invention_recipe/
+    // find_invention_recipe_candidates_by_product_type_id/
+    // find_invention_recipe_by_product_name. All three query the same two
+    // tables this port's Invention Estimator addition widened
+    // (sde_blueprint_materials/products, now activityId=8 too) plus the
+    // brand new sde_invention_probability table.
+
+    /** Invention (activity 8) "product" row for one T1 blueprint/relic: the
+     * T2/T3 blueprint it can invent, and the base run count (before any
+     * decryptor bonus) a success produces. Null for a type that invents
+     * nothing at all (a real T1 item never invention-sourced, or a plain
+     * Manufacturing-only blueprint). Mirrors the `product_type_id`/
+     * `base_runs` half of `storage.get_invention_recipe`'s dict. */
+    @Query(
+        "SELECT productTypeId, quantity FROM sde_blueprint_products " +
+            "WHERE blueprintTypeId = :t1BlueprintTypeId AND activityId = 8"
+    )
+    suspend fun inventionProduct(t1BlueprintTypeId: Int): InventionProductRow?
+
+    /** The datacores one invention attempt with `t1BlueprintTypeId`
+     * consumes - activity 8's "materials" are datacores, not build
+     * materials (see `SdeBlueprintMaterialEntity`'s docstring). Mirrors the
+     * `datacores` half of `storage.get_invention_recipe`'s dict. Empty for a
+     * type with no cached Invention material rows. */
+    @Query(
+        "SELECT materialTypeId, quantity FROM sde_blueprint_materials " +
+            "WHERE blueprintTypeId = :t1BlueprintTypeId AND activityId = 8"
+    )
+    suspend fun inventionMaterials(t1BlueprintTypeId: Int): List<TypeMaterialRow>
+
+    /** EVE's base (pre-skill, pre-decryptor) success probability for one
+     * (t1 blueprint/relic, product) invention pair - null when the SDE has
+     * the recipe (an `inventionProduct` row exists) but no probability row
+     * for it, which callers must treat as "can't estimate", never as 0 -
+     * mirrors `storage.get_invention_recipe`'s own `base_probability`
+     * contract exactly. */
+    @Query(
+        "SELECT probability FROM sde_invention_probability " +
+            "WHERE t1BlueprintTypeId = :t1BlueprintTypeId AND productTypeId = :productTypeId"
+    )
+    suspend fun inventionProbability(t1BlueprintTypeId: Int, productTypeId: Int): Double?
+
+    /** Every valid invention source (a T1 blueprint for Tech II, a Sleeper
+     * relic for Tech III) for `productBlueprintTypeId`, best-probability-
+     * first - the Android counterpart of `storage.
+     * find_invention_recipe_candidates_by_product_type_id`. Empty for a type
+     * that isn't an invented product at all (a T1 item, or a BPO never
+     * invention-sourced) - this emptiness is what a caller uses to tell
+     * "not invented" apart from "invented but unpriceable". A `LEFT JOIN`
+     * (not `INNER`) keeps a candidate with an Invention product row but no
+     * probability row in the list (ordered last via `probability DESC`
+     * putting SQL NULL after every real value) rather than silently hiding
+     * it, matching the desktop query's own `LEFT JOIN` exactly - Tech III's
+     * up to three relic grades (Intact/Malfunctioning/Wrecked) is the real
+     * reason this can return more than one row; see
+     * `InventionEstimator.kt`'s module docstring. */
+    @Query(
+        "SELECT p.blueprintTypeId FROM sde_blueprint_products p " +
+            "LEFT JOIN sde_invention_probability prob " +
+            "  ON prob.t1BlueprintTypeId = p.blueprintTypeId " +
+            "  AND prob.productTypeId = p.productTypeId " +
+            "WHERE p.activityId = 8 AND p.productTypeId = :productBlueprintTypeId " +
+            "ORDER BY prob.probability DESC, p.blueprintTypeId"
+    )
+    suspend fun inventionRecipeCandidates(productBlueprintTypeId: Int): List<Int>
+
+    /** Given a T2/T3 blueprint's *name* (what the Invention Estimator screen
+     * takes as input, e.g. "Damage Control II Blueprint"), the invented
+     * product's own `productTypeId` - the Android counterpart of the
+     * `product_type_id` half of `storage.find_invention_recipe_by_product_
+     * name`'s returned pair (this port never needs that function's other
+     * half, an arbitrary single `t1_blueprint_type_id` - see that function's
+     * own docstring on why using it for anything but resolving the name
+     * would be a real, previously-confirmed bug). Case-insensitive,
+     * `COLLATE NOCASE` matching every other exact type-name lookup in this
+     * file. `LIMIT 1` is a defensive no-op (real EVE item names are unique
+     * regardless of case). Null when `productName` isn't a real invented
+     * blueprint's name at all. */
+    @Query(
+        "SELECT p.productTypeId FROM sde_blueprint_products p " +
+            "JOIN sde_types t ON t.typeId = p.productTypeId " +
+            "WHERE p.activityId = 8 AND t.typeName = :productName COLLATE NOCASE LIMIT 1"
+    )
+    suspend fun resolveInventionProductTypeId(productName: String): Int?
+
+    /** A type's SDE category id (type -> group -> category), e.g. to tell a
+     * genuine T1 blueprint (category 9) apart from a Tech III Sleeper relic
+     * (category 34, `ANCIENT_RELIC_CATEGORY_ID` in `InventionEstimator.kt`) -
+     * the two invention sources that must be priced differently (see that
+     * file's own module docstring). Distinct from `categoryNameFor`, which
+     * returns the *name* for display; invention pricing needs the numeric
+     * id to compare against the constant. */
+    @Query(
+        "SELECT g.categoryId FROM sde_types t " +
+            "JOIN sde_groups g ON g.groupId = t.groupId " +
+            "WHERE t.typeId = :typeId"
+    )
+    suspend fun categoryIdFor(typeId: Int): Int?
 
     // ------------------------------------------------------- row counts
     // The counterpart of storage.py's `sde_row_counts`: what the UI prints
@@ -409,6 +563,7 @@ interface SdeDao {
     @Query("SELECT COUNT(*) FROM sde_type_materials") suspend fun countTypeMaterials(): Int
     @Query("SELECT COUNT(*) FROM sde_blueprint_materials") suspend fun countBlueprintMaterials(): Int
     @Query("SELECT COUNT(*) FROM sde_blueprint_products") suspend fun countBlueprintProducts(): Int
+    @Query("SELECT COUNT(*) FROM sde_invention_probability") suspend fun countInventionProbability(): Int
 }
 
 /** Room's projection for `SdeDao.blueprintForProduct` - mirrors the
@@ -416,6 +571,10 @@ interface SdeDao {
  * tuple that a Manufacturing-only lookup still needs (its `activity_id` is
  * always 1 here, so unlike the desktop tuple this doesn't need to carry it). */
 data class SdeBlueprintForProductRow(val blueprintTypeId: Int, val quantity: Double)
+
+/** Room's projection for `SdeDao.inventionProduct` - the T2/T3 blueprint one
+ * invention attempt targets, and its base (pre-decryptor) run count. */
+data class InventionProductRow(val productTypeId: Int, val quantity: Double)
 
 /** Room's projection shape for `SdeDao.typeMaterials` - a `data class` (not
  * the entity itself) because the query selects two of its three columns,

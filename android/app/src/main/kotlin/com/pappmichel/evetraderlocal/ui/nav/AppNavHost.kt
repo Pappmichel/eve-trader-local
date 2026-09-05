@@ -34,6 +34,7 @@ import com.pappmichel.evetraderlocal.ui.screens.DoctrineContractHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineFittingsScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineStockpileStatusScreen
+import com.pappmichel.evetraderlocal.ui.screens.InventionEstimatorScreen
 import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
 import com.pappmichel.evetraderlocal.ui.screens.MineralShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.OreShortlistScreen
@@ -77,6 +78,7 @@ private const val CURRENT_JOBS_ROUTE = "production/current-jobs"
 private const val OWNED_BLUEPRINTS_ROUTE = "production/owned-blueprints"
 private const val PLANNER_ROUTE = "production/planner"
 private const val SPECIAL_ORDERS_ROUTE = "production/special-orders"
+private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
@@ -86,7 +88,8 @@ private const val SPECIAL_ORDERS_ROUTE = "production/special-orders"
  * Shortlist/Undercut & Skills, Production/Item Lookup, Production/Ship
  * Margins & Market Status, Production/Build Candidates, Production/Planner,
  * Production/Current Jobs & Slots, Production/Owned Blueprints,
- * Production/Special Orders, Doctrine/Fittings, and Ore & Minerals' own
+ * Production/Special Orders, Production/Invention Estimator,
+ * Doctrine/Fittings, and Ore & Minerals' own
  * Reprocessing Quote, Mineral Shopping List, and Ore Shortlist (see
  * ROADMAP.md's Android section for what's ported so far). Add a route here
  * as each new screen replaces its placeholder.
@@ -126,6 +129,8 @@ private fun routeFor(tool: String, view: String): String =
         PLANNER_ROUTE
     } else if (tool == "Production" && view == "Special Orders") {
         SPECIAL_ORDERS_ROUTE
+    } else if (tool == "Production" && view == "Invention Estimator") {
+        INVENTION_ESTIMATOR_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Doctrine" && view == "Stockpile Status") {
@@ -266,6 +271,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(OWNED_BLUEPRINTS_ROUTE) { OwnedBlueprintsScreen(database, tokenManager) }
                 composable(PLANNER_ROUTE) { ProductionPlannerScreen(database, tokenManager) }
                 composable(SPECIAL_ORDERS_ROUTE) { ProductionSpecialOrdersScreen(database, tokenManager) }
+                composable(INVENTION_ESTIMATOR_ROUTE) { InventionEstimatorScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(DOCTRINE_STOCKPILE_STATUS_ROUTE) { DoctrineStockpileStatusScreen(database, tokenManager) }
                 composable(DOCTRINE_SHOPPING_LIST_ROUTE) { DoctrineShoppingListScreen(database) }
