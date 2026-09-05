@@ -58,7 +58,7 @@ import kotlinx.coroutines.launch
  * filter as the desktop build's `do_find_new_candidates` +
  * `do_add_to_shortlist` pair, auto-adding only what the filter recommends.
  * This is the auto-*add* half of desktop's `refresh-and-prune`; the
- * auto-*remove*/deactivate half lives on ShortlistScreen.kt's "Prune"
+ * auto-remove/deactivate half lives on ShortlistScreen.kt's "Prune"
  * action instead (see that screen's own KDoc for why the port keeps that
  * split, rather than one combined action, matching how Android already
  * splits Discovery and Shortlist into separate screens/buttons where

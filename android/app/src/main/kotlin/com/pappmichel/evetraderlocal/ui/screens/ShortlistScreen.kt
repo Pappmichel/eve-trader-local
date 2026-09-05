@@ -67,7 +67,7 @@ private fun fmtIsk(value: Double?): String = if (value != null) "%,.2f".format(v
  *   reference-region history for Profit / Day (`averageMarketDailyVolume` -
  *   best-effort, same as desktop's `_refresh_shortlist_rows`: a Goonmetrics
  *   outage leaves Profit/Day blank rather than failing the whole refresh).
- * - "Prune": the auto-*remove*/reactivate half of desktop's
+ * - "Prune": the auto-remove/reactivate half of desktop's
  *   `refresh-and-prune`, scoring every active-or-inactive shortlist item
  *   with an item_id against its own Jita/reference-region history via
  *   `HistoryBacktest.scoreCandidate` (the same hit-rate/avg-movement/margin
