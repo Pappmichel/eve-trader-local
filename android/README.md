@@ -470,12 +470,14 @@ current scope.
   test suite (including its "greedy trap" regression case) - all pass,
   the realistic-scale case solving in well under a second. Reuses Ore
   Shortlist's candidate universe and yield formulas for the refining
-  side. Still a data-layer-only landing as of this writing:
-  `MineralShoppingListScreen.kt` only wires up the original direct-buy
-  path, not this optimizer - UI wiring is a separate follow-up. Further
-  simplified vs. even that direct-buy half of the desktop behavior: no
-  haul-cost term (the SDE cache doesn't carry mineral item-volume data in
-  a form this screen reads) and no Goonmetrics home-market comparison.
+  side. `MineralShoppingListScreen.kt` now wires up the optimizer as
+  well: an "Optimize" button alongside the original "Price" button, kept
+  side by side rather than one replacing the other - Price stays a free,
+  already-working direct-buy sanity check and fallback for whenever the
+  ore side can't fully cover a plan. Further simplified vs. even that
+  direct-buy half of the desktop behavior: no haul-cost term (the SDE
+  cache doesn't carry mineral item-volume data in a form this screen
+  reads) and no Goonmetrics home-market comparison.
 - **Production -> Logistics** was investigated, not just left as a
   placeholder: all four of desktop's Logistics report tabs (Logistics
   Status, Distribution Recommendations, Invention Logistics, T1 BPC
@@ -488,6 +490,14 @@ current scope.
   config UI and has no `EsiClient.kt` endpoint to call anyway. Confirmed
   nothing meaningful is portable in isolation - remains
   `PlaceholderScreen`, correctly, not for lack of trying.
+- **Production -> Asset-Optimized Planner** got the same investigation
+  and the same answer: `engine.plan_asset_optimized` is documented as
+  reusing `plan_production`'s own buy-vs-build decision function, just
+  netting real owned stock against demand at every level of the
+  recursive material tree - so it needs the identical stock-target/
+  manual-override storage and recursive buy-vs-build engine already
+  missing for Planner/Special Orders/Logistics, not a smaller standalone
+  asset-vs-material-tree feature. Remains `PlaceholderScreen`, correctly.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters: a `TabRow` with one tab per tool that has a config on
   this platform - Trading, Station Trading, Production, Ore & Minerals

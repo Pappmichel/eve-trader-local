@@ -490,12 +490,14 @@ which "careful reading" alone had caught):
   `MineralShoppingListOptimizerTest.kt` ports the desktop suite's own
   hand-computed cases (including its "greedy trap" case) plus random-plan
   and realistic-scale checks - all pass, and the realistic-scale case
-  solves in well under a second. Still data-layer only as of this
-  writing: `MineralShoppingListScreen.kt` wires up only the original
-  direct-buy path, not this optimizer, so the UI has a real follow-up
-  left. Also still missing vs. desktop: no haul-cost term (the SDE cache
-  has no mineral item-volume data cached in a form this screen reads yet)
-  and no Goonmetrics home-market comparison.
+  solves in well under a second. `MineralShoppingListScreen.kt` now wires
+  up the optimizer too: an "Optimize" button next to the original
+  "Price" button, kept side by side rather than replaced (Price stays a
+  free, already-working direct-buy sanity check/fallback; Optimize's
+  result subsumes it when the ore side can fully cover a plan). Still
+  missing vs. desktop: no haul-cost term (the SDE cache has no mineral
+  item-volume data cached in a form this screen reads yet) and no
+  Goonmetrics home-market comparison.
 - Production -> Ship Margins & Market Status (`data/production/
   ProductionBuildCost.kt`; extends `ProductionConfig.kt`; `ui/screens/
   ShipMarginScreen.kt`) - Production's first real *build*-cost view,
@@ -593,6 +595,17 @@ which "careful reading" alone had caught):
   (`EsiClient.kt` has none for structure/corporation name resolution)
   that only exist to label that same unportable config UI. Remains
   `PlaceholderScreen`, correctly.
+- Production -> Asset-Optimized Planner was investigated the same way and
+  found blocked for the identical reason: `engine.plan_asset_optimized`
+  is explicitly documented as reusing `plan_production`'s own buy-vs-
+  build decision function, just netting real owned stock against demand
+  at every level of the recursive bill of materials - so it needs the
+  same `stock_targets`/`manual_stock`/`manual_build_buy` storage, the
+  same recursive BOM/buy-vs-build engine, and the same live pricing/cost-
+  index/asset-sync machinery already missing for Planner, Special
+  Orders, and Logistics. No smaller portable subset exists - it isn't a
+  standalone asset-vs-material-tree cross-reference, it's a variant of
+  the same missing optimizer. Remains `PlaceholderScreen`, correctly.
 - Every configured tool now has its own Settings tab (`ui/screens/
   SettingsScreen.kt` grew a `TabRow`: Trading, Station Trading,
   Production, Ore & Minerals - Doctrine has no config yet). Previously
@@ -603,15 +616,14 @@ which "careful reading" alone had caught):
 Not started: hit-rate/avg-movement-filtered auto-prune from Candidate
 Discovery onto the shortlist, Profit / Day, pooling either Realized Trades
 or Unlisted-Stock-&-Undercut check across multiple characters,
-`average_daily_sold_by_type`, wiring the new ore-refining MIP solver into
-Mineral Shopping List's own screen (solver landed, UI still direct-buy
-only), a real contract-sync/matching engine (for Stockpile Status'
-contract-target multiplier and Contract History's permanent
-fitting-matched history), Production's Asset-Optimized Planner and
-Invention Estimator (Logistics was investigated and confirmed genuinely
-blocked on the same missing engine as Planner/Special Orders, not merely
-left undone - see above), tests for anything beyond the pure logic already
-covered, an app icon, a Play Store listing.
+`average_daily_sold_by_type`, a real contract-sync/matching engine (for
+Stockpile Status' contract-target multiplier and Contract History's
+permanent fitting-matched history), Production's Invention Estimator
+(Logistics and Asset-Optimized Planner were both investigated and
+confirmed genuinely blocked on the same missing `plan_production`
+stock-target engine as Planner/Special Orders, not merely left undone -
+see above), tests for anything beyond the pure logic already covered, an
+app icon, a Play Store listing.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling
