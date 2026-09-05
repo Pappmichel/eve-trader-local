@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -31,32 +32,58 @@ import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
+import com.pappmichel.evetraderlocal.data.refining.DirectMineralPurchase
 import com.pappmichel.evetraderlocal.data.refining.MineralRequirement
 import com.pappmichel.evetraderlocal.data.refining.MineralShoppingListLine
 import com.pappmichel.evetraderlocal.data.refining.MineralShoppingListPlan
+import com.pappmichel.evetraderlocal.data.refining.OrePurchase
+import com.pappmichel.evetraderlocal.data.refining.RefiningConfigRepository
+import com.pappmichel.evetraderlocal.data.refining.ShoppingListPlan
 import com.pappmichel.evetraderlocal.data.refining.buildMineralShoppingList
 import com.pappmichel.evetraderlocal.data.refining.fetchMineralShoppingListPrices
+import com.pappmichel.evetraderlocal.data.refining.fetchOreCandidateJitaStats
+import com.pappmichel.evetraderlocal.data.refining.fetchOreOptionsForMinerals
+import com.pappmichel.evetraderlocal.data.refining.optimizeShoppingList
 import com.pappmichel.evetraderlocal.data.refining.resolveTypeId
 import com.pappmichel.evetraderlocal.data.sde.SdeRepository
 import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
 import kotlinx.coroutines.launch
 
 /** Ore & Minerals -> Mineral Shopping List: enter the minerals (and
- * quantities) a build needs, get today's cost to buy them outright at Jita.
- * A Kotlin port of the desktop build's `do_optimize_mineral_shopping_list`
- * (GitHub issue #93) - see `data/refining/MineralShoppingList.kt`'s module
- * docstring for the full finding on `optimizer.py` (a genuine mixed-integer
- * LP).
+ * quantities) a build needs, then either see today's cost to buy them
+ * outright at Jita (**Price**) or run the real joint buy-vs-refine solver
+ * (**Optimize**). A Kotlin port of the desktop build's
+ * `do_optimize_mineral_shopping_list` (GitHub issue #93) - see
+ * `data/refining/MineralShoppingList.kt`'s module docstring for the full
+ * finding on `optimizer.py` (a genuine mixed-integer LP) and
+ * `data/refining/MineralShoppingListOptimizer.kt`'s own module docstring for
+ * the investigation that made porting that solver (`optimizeShoppingList`,
+ * on ojAlgo) practical after all.
  *
- * **This screen still only wires up the direct-buy half** (`buildMineral
- * ShoppingList` - buy each mineral independently at its cheapest current
- * Jita listing). The real joint buy-vs-refine solver now exists
- * (`data/refining/MineralShoppingListOptimizer.kt`'s `optimizeShoppingList`,
- * see that file's own module docstring for the investigation that made it
- * practical) but has no UI wired to it yet on this screen - a UI-only gap,
- * not the "no real solver exists" gap `MineralShoppingList.kt` originally
- * (and wrongly) documented. That file's docstring is the canonical
- * explanation of the solver itself; this screen is just direct-buy's UI.
+ * **Both paths are wired up, as two separate actions, not one replacing the
+ * other.** `optimizeShoppingList` already reports `savingsVsAllDirect`
+ * (the joint plan's saving vs. buying every required mineral outright), so
+ * its own output subsumes the "what does direct-buy alone cost" question
+ * numerically - but keeping **Price** as its own button, showing
+ * `buildMineralShoppingList`'s original per-mineral-independent breakdown,
+ * costs nothing (it was already a working, tested path) and gives a second,
+ * simpler answer to sanity-check the optimizer's plan against - useful the
+ * first time this screen is trusted with a real shopping trip, and whenever
+ * the optimizer can't fully price a plan (e.g. an ore candidate list that
+ * doesn't yet cover every requirement) but Jita can still price the
+ * minerals directly. Pressing one action leaves the other's last result
+ * on screen (each has its own state) until re-run or the requirement list
+ * changes underneath it (`removeRequirement` clears both).
+ *
+ * **Optimize needs the same `RefiningConfig` (structure/rig/security/
+ * implant/skills) Ore Shortlist reads** to compute ore yield
+ * (`fetchOreOptionsForMinerals` -> `oreIceYield`) - like
+ * `OreShortlistScreen.kt`, this screen does NOT collect those inline; it
+ * loads whatever is saved in Settings via `RefiningConfigRepository`,
+ * matching the existing convention that structure/rig/security/implant/
+ * skills are a single global Settings-page config, not re-entered per
+ * screen (see `RefiningConfig.kt`'s own docstring on why those are
+ * dropdowns instead of ESI-pulled).
  *
  * Unlike Reprocessing Quote (which parses an Inventory-window paste),
  * requirements are entered one at a time by item name + quantity - the
@@ -72,15 +99,18 @@ fun MineralShoppingListScreen(database: AppDatabase, @Suppress("UNUSED_PARAMETER
     val scope = rememberCoroutineScope()
     val sdeRepo = remember { SdeRepository(database) }
     val tradingConfigRepo = remember { TradingConfigRepository(database) }
+    val refiningConfigRepo = remember { RefiningConfigRepository(database) }
     val esi = remember { EsiClient() }
 
     var nameText by remember { mutableStateOf("") }
     var qtyText by remember { mutableStateOf("") }
     var requirements by remember { mutableStateOf<List<MineralRequirement>>(emptyList()) }
     var plan by remember { mutableStateOf<MineralShoppingListPlan?>(null) }
+    var optimizedPlan by remember { mutableStateOf<ShoppingListPlan?>(null) }
     var status by remember {
-        mutableStateOf("Add each mineral your build needs, then Price the list.")
+        mutableStateOf("Add each mineral your build needs, then Price or Optimize the list.")
     }
+    var optimizeStatus by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
 
     fun addRequirement() {
@@ -116,6 +146,8 @@ fun MineralShoppingListScreen(database: AppDatabase, @Suppress("UNUSED_PARAMETER
     fun removeRequirement(typeId: Int) {
         requirements = requirements.filterNot { it.typeId == typeId }
         plan = null
+        optimizedPlan = null
+        optimizeStatus = null
     }
 
     fun priceList() {
@@ -145,10 +177,59 @@ fun MineralShoppingListScreen(database: AppDatabase, @Suppress("UNUSED_PARAMETER
         }
     }
 
+    fun optimize() {
+        if (requirements.isEmpty()) {
+            optimizeStatus = "Add at least one mineral and quantity first."
+            return
+        }
+        busy = true
+        optimizeStatus = "Fetching ore/ice and mineral prices..."
+        scope.launch {
+            try {
+                val tradingCfg = tradingConfigRepo.load()
+                val refiningCfg = refiningConfigRepo.load()
+                val mineralTypeIds = requirements.filter { it.requiredQty > 0 }.map { it.typeId }
+
+                // Two independent price fetches, exactly like Ore
+                // Shortlist's own "ore side" vs "mineral side" split: Jita
+                // stats for every ore/ice candidate (to build yield-priced
+                // ore columns) and Jita stats for the required minerals
+                // themselves (for the direct-buy columns/comparison).
+                val oreJitaStatsById = fetchOreCandidateJitaStats(esi, tradingCfg, sdeRepo)
+                val oreOptions = fetchOreOptionsForMinerals(
+                    sde = sdeRepo,
+                    jitaStatsById = oreJitaStatsById,
+                    tradingCfg = tradingCfg,
+                    refiningCfg = refiningCfg,
+                    mineralTypeIds = mineralTypeIds,
+                )
+                val mineralStatsById = fetchMineralShoppingListPrices(esi, tradingCfg, requirements)
+                val directPriceById = mineralTypeIds.associateWith { typeId ->
+                    mineralStatsById[typeId]?.sellPercentile?.let { it * (1 + tradingCfg.jitaBuyBrokerFee) }
+                }
+
+                val result = optimizeShoppingList(requirements, oreOptions, directPriceById)
+                optimizedPlan = result
+                optimizeStatus = buildString {
+                    append("Optimized total: %,.2f ISK".format(result.totalCost))
+                    append(" (%,.2f ore + %,.2f direct).".format(result.oreCost, result.directCost))
+                    result.savingsVsAllDirect?.let { savings ->
+                        append(" Saves %,.2f ISK vs. buying everything outright.".format(savings))
+                    }
+                }
+            } catch (e: Exception) {
+                optimizedPlan = null
+                optimizeStatus = e.message ?: "Could not optimize the shopping list."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Text("Mineral Shopping List", style = MaterialTheme.typography.titleMedium)
         Text(
-            "Buy-outright cost only - the ore-refining alternative has a real solver now but no UI here yet, see this screen's own docstring.",
+            "Price: buy every mineral outright at Jita. Optimize: the real buy-vs-refine solver (may buy and refine ore instead).",
             style = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(bottom = 8.dp),
         )
@@ -169,19 +250,35 @@ fun MineralShoppingListScreen(database: AppDatabase, @Suppress("UNUSED_PARAMETER
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
             Button(enabled = !busy, onClick = { addRequirement() }) { Text("Add") }
             Button(enabled = !busy && requirements.isNotEmpty(), onClick = { priceList() }) { Text("Price") }
+            Button(enabled = !busy && requirements.isNotEmpty(), onClick = { optimize() }) { Text("Optimize") }
         }
         if (busy) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
         }
-        Text(status, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+        Text(status, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 4.dp))
+        optimizeStatus?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(bottom = 8.dp))
+        }
 
+        val optimized = optimizedPlan
         val lines = plan?.lines
-        if (lines != null) {
-            LazyColumn {
+        if (optimized != null) {
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                if (optimized.orePurchases.isNotEmpty()) {
+                    item { Text("Buy & refine", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp)) }
+                    items(optimized.orePurchases) { ore -> OrePurchaseLineItem(ore) }
+                }
+                if (optimized.directPurchases.isNotEmpty()) {
+                    item { Text("Buy direct", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 4.dp)) }
+                    items(optimized.directPurchases) { direct -> DirectPurchaseLineItem(direct) }
+                }
+            }
+        } else if (lines != null) {
+            LazyColumn(modifier = Modifier.weight(1f)) {
                 items(lines) { line -> MineralShoppingListLineItem(line) }
             }
         } else {
-            LazyColumn {
+            LazyColumn(modifier = Modifier.weight(1f)) {
                 items(requirements) { req ->
                     ListItem(
                         headlineContent = { Text(req.name) },
@@ -212,6 +309,27 @@ private fun MineralShoppingListLineItem(line: MineralShoppingListLine) {
         trailingContent = {
             Text(if (line.totalCost != null) "%,.2f".format(line.totalCost) else "-")
         },
+    )
+    HorizontalDivider()
+}
+
+@Composable
+private fun OrePurchaseLineItem(ore: OrePurchase) {
+    val subtitle = "${ore.portions} portion(s) · ${ore.units} unit(s) · %,.2f ISK/unit".format(ore.landedCostPerUnit)
+    ListItem(
+        headlineContent = { Text(ore.item) },
+        supportingContent = { Text(subtitle) },
+        trailingContent = { Text("%,.2f".format(ore.totalCost)) },
+    )
+    HorizontalDivider()
+}
+
+@Composable
+private fun DirectPurchaseLineItem(direct: DirectMineralPurchase) {
+    ListItem(
+        headlineContent = { Text(direct.name) },
+        supportingContent = { Text("qty ${direct.quantity} · %,.2f ISK/unit".format(direct.landedCostPerUnit)) },
+        trailingContent = { Text("%,.2f".format(direct.totalCost)) },
     )
     HorizontalDivider()
 }
