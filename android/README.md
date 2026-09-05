@@ -668,6 +668,17 @@ current scope.
   and this hasn't been exercised on a real device yet - Keystore behavior
   (especially key invalidation on lock-screen/biometric changes, which
   this doesn't opt into) is worth re-checking once it has been.
+- CI can now cut a tagged release, mirroring `build-windows.yml`'s own
+  shape: pushing a `vX.Y.Z` tag makes `build-android.yml` stamp that
+  version into `app/build.gradle.kts`'s `versionName`, build the APK,
+  compute a SHA-256 checksum, and attach both to a GitHub Release
+  (`softprops/action-gh-release`, `generate_release_notes: true`).
+  Deliberately still a *debug*-signed APK (2026-09-05 decision - no
+  release keystore/signing secret exists yet): this makes the same debug
+  APK CI already builds on every push easier to grab as a versioned,
+  changelog'd release, not a real Play-Store-grade signed release build.
+  `versionCode` is left untouched by the stamping step - it's a plain
+  manual counter in `build.gradle.kts`, not derived from the tag.
 - CI (`.github/workflows/build-android.yml`) runs JVM unit tests
   (`app/src/test/`, JUnit 4) then assembles the debug APK. Test coverage is
   `ShortlistTest.kt` (a Kotlin port of `tests/test_shortlist.py`'s

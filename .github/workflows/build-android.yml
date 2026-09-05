@@ -1,23 +1,38 @@
 name: Build Android debug APK
 
-# Runs whenever anything under android/ changes (push or PR) plus
-# workflow_dispatch for an on-demand sanity build. Counterpart of
-# build-windows.yml for the Android side of this repo (see
-# android/README.md's own "Honest limitations" section, which used to say
-# "no CI ... only builds the Windows desktop .exe" - this workflow is what
-# closes that gap). Debug-only, no signing/release/store upload: this is a
-# compile-and-unit-test gate, not a release pipeline (there is no Play
-# Store listing yet - see ROADMAP.md's Android section).
+# Three triggers:
+#   - anything under android/ changes on a push/PR - the everyday
+#     compile-and-unit-test gate.
+#   - a version tag (v1.2.3) - the release path, mirroring
+#     build-windows.yml's own shape: builds and attaches the debug APK to a
+#     GitHub Release. Still a *debug*-signed APK deliberately (2026-09-05
+#     decision) - no release keystore/signing secret exists yet, so this
+#     is "the same APK CI already produces, just attached to a tagged
+#     release" rather than a real Play-Store-grade release build. Revisit
+#     if this app ever needs a non-debuggable build or a Play Store listing
+#     (see ROADMAP.md's Android section).
+#   - workflow_dispatch - build on demand without cutting a release.
+# No signing beyond the automatic debug keystore, no store upload: this is
+# a compile-and-test gate plus an easy-to-grab APK, not a release pipeline
+# in the "real" sense build-windows.yml's tagged .exe releases are.
 on:
   push:
     paths:
       - "android/**"
       - ".github/workflows/build-android.yml"
+    tags:
+      - "v*.*.*"
   pull_request:
     paths:
       - "android/**"
       - ".github/workflows/build-android.yml"
   workflow_dispatch:
+
+# Only the tag-triggered run needs to create/attach to a release; every
+# other trigger still gets the build via actions/upload-artifact, no
+# elevated permissions required for that path.
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -45,6 +60,21 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Stamp the release version into the app
+        # Only meaningful on a tag push - github.ref_name is the tag itself
+        # ("v1.2.3") there, so app/build.gradle.kts's versionName tracks
+        # the actual release tag instead of staying frozen at whatever
+        # value was last hand-edited. Left untouched on every other
+        # trigger (branch push, PR, workflow_dispatch). versionCode is
+        # deliberately not touched here - it's a plain manual counter
+        # (see app/build.gradle.kts), and auto-deriving it from a tag isn't
+        # part of what was asked for.
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: android
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          sed -i "s/versionName = \".*\"/versionName = \"$TAG_VERSION\"/" app/build.gradle.kts
+
       - name: Run JVM unit tests
         # Only the pure-business-logic tests under src/test/ (Shortlist.kt
         # etc.) - no Android instrumentation/emulator needed, since that
@@ -57,7 +87,23 @@ jobs:
         working-directory: android
         run: gradle :app:assembleDebug --stacktrace
 
+      - name: Compute checksum
+        run: |
+          HASH=$(sha256sum android/app/build/outputs/apk/debug/app-debug.apk | cut -d' ' -f1)
+          echo "$HASH  app-debug.apk" > android/app/build/outputs/apk/debug/app-debug.apk.sha256
+
       - uses: actions/upload-artifact@v4
         with:
           name: eve-trader-local-android-debug
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/debug/app-debug.apk.sha256
+
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            android/app/build/outputs/apk/debug/app-debug.apk
+            android/app/build/outputs/apk/debug/app-debug.apk.sha256
+          generate_release_notes: true
