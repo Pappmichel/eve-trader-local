@@ -18,6 +18,16 @@ import org.junit.Test
  * ones that don't are its SDE/storage tests (no SDE cache and no persisted
  * run on this platform, see TradeReconciliation.kt's own note).
  *
+ * The pooled multi-character cases at the bottom (two buyers, two sellers)
+ * are not ported from a desktop test - desktop's own test suite never
+ * actually exercises `reconcile_realized_trades` with more than one
+ * (character_id, role) pair per side, even though the function accepts
+ * lists - so these are freshly written against this file's own docstring
+ * claim (any buyer's purchase can fund any seller's sale, pooled rather
+ * than paired 1:1) and against `RealizedTradesScreen.kt`'s actual pooling:
+ * concatenate every buyer's buys, concatenate every seller's sells and
+ * journal maps, then match once.
+ *
  * The config below uses round numbers so every expected figure is workable
  * by hand: no broker fee, no haircut, no freight - landed cost is exactly
  * the buy price, net sell exactly the sell price. */
@@ -335,5 +345,83 @@ class TradeReconciliationTest {
             RealizedTrade(TRITANIUM, "Tritanium", "d1", 1, 10.0, "d2", 1, 20.0, 1, 10.0, 1.0),
         )
         assertEquals(emptyMap<Int, Double>(), averageDailySoldByType(trades, lookbackDays = 0))
+    }
+
+    // ------------------------------------------------ pooled: multi-character
+    @Test
+    fun `two sellers' sells are pooled and both get matched, not just one`() {
+        // Two different sellers each sold Tritanium at the same structure;
+        // RealizedTradesScreen.kt concatenates both characters' fetched
+        // transactions before calling reconcile - reproduced directly here.
+        val sellerA = sell(4, 150.0, ago = 3, transactionId = 1)
+        val sellerB = sell(6, 160.0, ago = 2, transactionId = 2)
+        val trades = reconcile(listOf(buy(10, 100.0, ago = 9)), listOf(sellerA, sellerB))
+
+        assertEquals(2, trades.size)
+        assertEquals(setOf(4L, 6L), trades.map { it.matchedQty }.toSet())
+        // No double counting: together the two sells consume exactly the
+        // one buy's 10 units, no more.
+        assertEquals(10L, trades.sumOf { it.matchedQty })
+    }
+
+    @Test
+    fun `two buyers' buys are pooled - either can fund the same seller's sale`() {
+        // Desktop's reconcile_realized_trades pools every buyer's buys
+        // against every seller's sells - it does not pair a specific buyer
+        // to a specific seller. Buyer B's earlier buy should be usable as
+        // cost basis for a sale made by the (single) seller here, exactly
+        // as if buyer A had bought it themselves.
+        val buyerA = buy(4, 90.0, ago = 9, transactionId = 1)
+        val buyerB = buy(6, 100.0, ago = 8, transactionId = 2)
+        val trades = reconcile(listOf(buyerA, buyerB), listOf(sell(10, 150.0, ago = 2)))
+
+        assertEquals(2, trades.size) // FIFO still matches oldest-first across the pooled queue
+        assertEquals(listOf(4L, 6L), trades.map { it.matchedQty })
+        assertEquals(listOf(90.0, 100.0), trades.map { it.buyUnitPrice })
+        assertEquals(10L, trades.sumOf { it.matchedQty })
+    }
+
+    @Test
+    fun `pooling two buyers and two sellers matches without double counting`() {
+        val buyerA = buy(5, 80.0, ago = 9, transactionId = 1)
+        val buyerB = buy(5, 120.0, ago = 8, transactionId = 2)
+        val sellerA = sell(4, 200.0, ago = 3, transactionId = 1)
+        val sellerB = sell(6, 210.0, ago = 2, transactionId = 2)
+
+        val trades = reconcile(listOf(buyerA, buyerB), listOf(sellerA, sellerB))
+
+        // Every unit bought is matched to exactly one unit sold - 10 in,
+        // 10 out, never both fully re-used across sellers.
+        assertEquals(10L, trades.sumOf { it.matchedQty })
+        assertEquals(10L, trades.filter { it.buyUnitPrice == 80.0 }.sumOf { it.matchedQty } +
+            trades.filter { it.buyUnitPrice == 120.0 }.sumOf { it.matchedQty })
+        assertEquals(4L, trades.filter { it.sellUnitPrice == 200.0 }.sumOf { it.matchedQty })
+        assertEquals(6L, trades.filter { it.sellUnitPrice == 210.0 }.sumOf { it.matchedQty })
+    }
+
+    @Test
+    fun `journal amounts from two sellers are unioned by ref id`() {
+        // RealizedTradesScreen.kt merges every seller's fetchRecentJournalAmounts
+        // result into one map (`journalAmounts += ...`) before the single
+        // reconcile call - a ref id collision across sellers is not expected
+        // (ESI's journal entry ids are globally unique), so a plain union is
+        // correct and each seller's own sale still finds its own entry.
+        val sellerASale = sell(10, 200.0, ago = 3, transactionId = 1)
+        val sellerBSale = sell(5, 300.0, ago = 2, transactionId = 2)
+        val config = CONFIG.copy(structureSellHaircut = 0.9463)
+        val journal = mapOf(
+            sellerASale.journalRefId!! to 1800.0, // 180/unit net for seller A
+            sellerBSale.journalRefId!! to 1400.0, // 280/unit net for seller B
+        )
+        val trades = reconcile(
+            listOf(buy(15, 100.0, ago = 9)), listOf(sellerASale, sellerBSale),
+            journal = journal, config = config,
+        )
+
+        assertEquals(2, trades.size)
+        val netA = 180.0 * (0.9463 + ASSUMED_TAX_RATE_IN_DEFAULT_HAIRCUT)
+        val netB = 280.0 * (0.9463 + ASSUMED_TAX_RATE_IN_DEFAULT_HAIRCUT)
+        assertEquals((netA - 100.0) * 10, trades.first { it.sellQty == 10L }.realizedProfit, EPSILON)
+        assertEquals((netB - 100.0) * 5, trades.first { it.sellQty == 5L }.realizedProfit, EPSILON)
     }
 }

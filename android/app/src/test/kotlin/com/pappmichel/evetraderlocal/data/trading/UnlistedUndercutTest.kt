@@ -8,9 +8,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Ports the desktop build's `tests/test_own_orders.py` coverage of
- * `check_undercut`/`fetch_seller_stock_without_order` (single-seller only
- * - see `UnlistedUndercut.kt`'s own docstring for why the "_pooled"
- * multi-seller variants aren't ported). */
+ * `check_undercut`/`fetch_seller_stock_without_order`, including the
+ * "_pooled" multi-seller cases (`test_undercut_pooled_excludes_every_own_
+ * seller_not_just_the_checked_one`, `test_unlisted_stock_pools_quantity_
+ * and_coverage_across_sellers`) - `checkUndercut`/`findUnlistedStock`
+ * themselves are already pooled-shaped (flat order/asset lists, not
+ * per-character), so a pooled scenario here is exercised by simply passing
+ * in the concatenation of what would have been two sellers' own fetches,
+ * exactly like `UnlistedUndercutScreen.kt` itself now does. */
 class UnlistedUndercutTest {
     private val structure = 1234567890123L
     private val otherStructure = 9999999999999L
@@ -95,5 +100,50 @@ class UnlistedUndercutTest {
         )
         val rows = findUnlistedStock(assets, emptyMap(), setOf(trit, pyerite, mexallon), structure)
         assertTrue(rows.isEmpty())
+    }
+
+    // ----------------------------------------------------- pooled: multi-seller
+    @Test
+    fun `undercut pooled excludes every own seller not just the checked one`() {
+        // Issue #46: a cheaper order belonging to another of *my* seller
+        // characters must never count as being undercut - order_id is the
+        // only thing that identifies it, since the structure book has no
+        // owner field. The screen pools by concatenating every seller's own
+        // characterOrders() result before calling checkUndercut once, so
+        // that pooling is reproduced here by simply passing both sellers'
+        // orders together.
+        val mineA = sellOrder(10, trit, 100.0)
+        val mineB = sellOrder(11, trit, 80.0)
+        val pooledMyOrders = listOf(mineA, mineB) // seller 1's + seller 2's own orders
+        val book = listOf(mineA, mineB).map { bookOrder(it.orderId, it.typeId, it.price) }
+        assertTrue(checkUndercut(pooledMyOrders, book, structure).isEmpty())
+
+        // Checked with only seller 1's own orders (the un-pooled mistake),
+        // character 1 *is* beaten by character 2's own order - exactly the
+        // false positive pooling exists to prevent.
+        assertTrue(checkUndercut(listOf(mineA), book, structure).isNotEmpty())
+    }
+
+    @Test
+    fun `unlisted stock pools quantity and coverage across sellers`() {
+        // The structure hangar is shared: quantities add up across every
+        // registered seller, and one seller's sell order covers stock
+        // physically held by another (issue #46). The screen builds this by
+        // summing ownSellOrderRemaining across every seller's own orders and
+        // concatenating every seller's own assets before calling
+        // findUnlistedStock once - reproduced directly here.
+        val seller1Orders = emptyList<CharacterOrder>()
+        val seller2Orders = listOf(sellOrder(10, pyerite, 5.0, volumeRemain = 1.0))
+        val pooledOwnSellRemaining = (seller1Orders + seller2Orders)
+            .filter { !it.isBuyOrder && it.locationId == structure }
+            .groupBy { it.typeId }
+            .mapValues { (_, orders) -> orders.sumOf { it.volumeRemain } }
+
+        val seller1Assets = listOf(asset(trit, 100.0), asset(pyerite, 20.0))
+        val seller2Assets = listOf(asset(trit, 400.0))
+        val pooledAssets = seller1Assets + seller2Assets
+
+        val rows = findUnlistedStock(pooledAssets, pooledOwnSellRemaining, setOf(trit, pyerite), structure)
+        assertEquals(listOf(UnlistedStockResult(trit, 500.0, 500.0)), rows)
     }
 }

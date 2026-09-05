@@ -23,14 +23,20 @@ import java.time.temporal.ChronoUnit
  *
  * What is simplified vs. the desktop version, and why:
  *
- * - **One buyer and one seller character**, not desktop's pooled
- *   multi-character matching (`reconcile_realized_trades` takes *lists* of
+ * - **Pooled across every registered buyer and seller character**, matching
+ *   desktop's `reconcile_realized_trades`: that function takes *lists* of
  *   (character_id, auth_role) pairs and pools every buyer's buys against
- *   every seller's sells, for a setup where one alt buys and another
- *   sells). This port's callers use the first registered buyer/seller
- *   token; the matcher itself is already pooled-shaped (it takes flat buy
- *   and sell lists, not characters), so widening it later is a caller-side
- *   change only.
+ *   every seller's sells (ANY buyer's purchase can fund ANY seller's sale -
+ *   they are pooled, never paired 1:1 by character), for a setup where one
+ *   alt buys and another sells. This function itself is already
+ *   pooled-shaped (it takes flat buy and sell lists, not characters) - the
+ *   pooling happens entirely on the caller side, in
+ *   `RealizedTradesScreen.kt`, which now fetches every registered buyer's
+ *   and every registered seller's transactions (and every seller's wallet
+ *   journal, unioned by journal entry id) before calling this function once
+ *   with the combined lists. A character whose own fetch fails aborts the
+ *   whole run rather than being silently skipped, same as desktop (only the
+ *   wallet-journal fetch is best-effort there and here).
  * - **Buy-side location filter prefers the whole Jita region, falling back
  *   to just Jita's own solar system.** Desktop always filters buys to
  *   `storage.get_station_ids_in_region(cfg.jita_region_id)` - every station

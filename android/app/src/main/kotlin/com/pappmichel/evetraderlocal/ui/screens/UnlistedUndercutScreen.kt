@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.data.esi.CharacterAsset
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.trading.ShortlistRepository
 import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
@@ -37,13 +38,19 @@ private fun fmtIsk(value: Double): String = "%,.2f".format(value)
 
 /** Trading -> Unlisted Stock & Undercut Check: two independent, always-live
  * one-shot checks, mirroring the desktop build's trading_unlisted_undercut.py
- * view (single-seller only, unlike that view's pooled-across-every-seller
- * checks - see `UnlistedUndercut.kt`'s own docstring). Neither check has a
+ * view - pooled across every registered seller character, same as that
+ * desktop view's `check_undercut_pooled`/`fetch_seller_stock_without_order_
+ * pooled` (see `UnlistedUndercut.kt`'s own docstring for how the pooling is
+ * split between this screen and those pure functions). Neither check has a
  * saved snapshot to load on open - both always make a fresh ESI call, same
- * restraint the desktop view documents. Item names come from the shortlist
- * (the only local list of type_id -> name this platform has, no SDE cache
- * yet) - a flagged type_id not on the shortlist shows its bare number
- * instead (only reachable for Undercut Check, since Unlisted Stock is
+ * restraint the desktop view documents. A fetch failure for any one seller
+ * aborts the whole check rather than being silently skipped - same as
+ * desktop, where actions.do_check_undercut/do_check_seller_unlisted_stock
+ * let an ESIError from the pooled function surface as one ActionError for
+ * the whole run, never a per-character skip. Item names come from the
+ * shortlist (the only local list of type_id -> name this platform has, no
+ * SDE cache yet) - a flagged type_id not on the shortlist shows its bare
+ * number instead (only reachable for Undercut Check, since Unlisted Stock is
  * already scoped to shortlist item_ids). */
 @Composable
 fun UnlistedUndercutScreen(database: AppDatabase, tokenManager: TokenManager) {
@@ -61,18 +68,30 @@ fun UnlistedUndercutScreen(database: AppDatabase, tokenManager: TokenManager) {
 
     fun checkUndercutAction() {
         busy = true
-        status = "Checking your own sell orders against competing orders..."
+        status = "Checking every seller's sell orders against competing orders..."
         scope.launch {
             try {
                 val cfg = configRepo.load()
                 val structureId = cfg.structureId ?: error("No structure configured - set one in Settings first.")
-                val sellerRecord = tokenManager.listRecords("seller").firstOrNull()
-                    ?: error("No seller character is logged in yet.")
-                val sellerToken = tokenManager.getToken(sellerRecord.role)
+                val sellerRecords = tokenManager.listRecords("seller")
+                if (sellerRecords.isEmpty()) error("No seller character is logged in yet.")
                 itemNames = shortlistRepo.load().associate { it.itemId to it.item }
                 val esi = EsiClient()
-                val myOrders = esi.characterOrders(sellerToken.characterId, sellerToken.accessToken)
-                val book = esi.structureOrdersRaw(structureId, sellerToken.accessToken)
+                // Pooled across every registered seller character (issue #46:
+                // several sellers share the same structure's order slots) -
+                // myOrders is the union over all of them, so checkUndercut
+                // excludes every one of their own orders from the competitor
+                // comparison, not just whichever one would otherwise be
+                // checked alone. See UnlistedUndercut.kt's own docstring.
+                val myOrders = sellerRecords.flatMap { record ->
+                    val token = tokenManager.getToken(record.role)
+                    esi.characterOrders(token.characterId, token.accessToken)
+                }
+                // The structure's order book is one shared/global fetch - any
+                // one seller with docking access is enough, same as desktop's
+                // check_undercut_pooled.
+                val firstSellerToken = tokenManager.getToken(sellerRecords.first().role)
+                val book = esi.structureOrdersRaw(structureId, firstSellerToken.accessToken)
                 undercutRows = checkUndercut(myOrders, book, structureId)
                 status = if (undercutRows.isEmpty()) "None of your sell orders are currently undercut."
                 else "${undercutRows.size} order(s) currently undercut."
@@ -86,23 +105,36 @@ fun UnlistedUndercutScreen(database: AppDatabase, tokenManager: TokenManager) {
 
     fun checkUnlistedAction() {
         busy = true
-        status = "Checking structure stock against open sell orders..."
+        status = "Checking structure stock across every seller against open sell orders..."
         scope.launch {
             try {
                 val cfg = configRepo.load()
                 val structureId = cfg.structureId ?: error("No structure configured - set one in Settings first.")
-                val sellerRecord = tokenManager.listRecords("seller").firstOrNull()
-                    ?: error("No seller character is logged in yet.")
-                val sellerToken = tokenManager.getToken(sellerRecord.role)
+                val sellerRecords = tokenManager.listRecords("seller")
+                if (sellerRecords.isEmpty()) error("No seller character is logged in yet.")
                 val shortlistItems = shortlistRepo.load()
                 itemNames = shortlistItems.associate { it.itemId to it.item }
                 val shortlistItemIds = shortlistItems.mapNotNull { it.itemId.takeIf { id -> id != 0 } }.toSet()
                 val esi = EsiClient()
-                val ownSellRemaining = esi.characterOrders(sellerToken.characterId, sellerToken.accessToken)
-                    .filter { !it.isBuyOrder && it.locationId == structureId }
-                    .groupBy { it.typeId }
-                    .mapValues { (_, orders) -> orders.sumOf { it.volumeRemain } }
-                val assets = esi.characterAssets(sellerToken.characterId, sellerToken.accessToken)
+                // Pooled across every registered seller character (issue #46:
+                // the structure hangar is shared) - remaining sell volume is
+                // summed per type_id across all of them, and every seller's
+                // assets are combined, so "no sell order at all" and the
+                // quantity found reflect the whole team, not one character.
+                // See UnlistedUndercut.kt's own docstring.
+                val ownSellRemaining = mutableMapOf<Int, Double>()
+                val assets = mutableListOf<CharacterAsset>()
+                for (record in sellerRecords) {
+                    val token = tokenManager.getToken(record.role)
+                    esi.characterOrders(token.characterId, token.accessToken)
+                        .filter { !it.isBuyOrder && it.locationId == structureId }
+                        .groupBy { it.typeId }
+                        .mapValues { (_, orders) -> orders.sumOf { it.volumeRemain } }
+                        .forEach { (typeId, remaining) ->
+                            ownSellRemaining[typeId] = (ownSellRemaining[typeId] ?: 0.0) + remaining
+                        }
+                    assets += esi.characterAssets(token.characterId, token.accessToken)
+                }
                 unlistedRows = findUnlistedStock(assets, ownSellRemaining, shortlistItemIds, structureId)
                 status = if (unlistedRows.isEmpty()) "No unlisted stock found - everything at the structure is listed."
                 else "${unlistedRows.size} item(s) with unlisted stock."

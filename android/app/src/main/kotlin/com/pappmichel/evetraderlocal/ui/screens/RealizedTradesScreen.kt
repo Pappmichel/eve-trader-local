@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.data.esi.CharacterWalletTransaction
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.esi.JITA_SOLAR_SYSTEM_ID
 import com.pappmichel.evetraderlocal.data.sde.SdeRepository
@@ -60,9 +61,13 @@ import kotlinx.coroutines.launch
  *   the matched-P&L half only, and the menu entry keeps its full name so
  *   the missing half is visible rather than quietly renamed away.
  *
- * Single buyer + single seller: the first registered token of each role,
- * not every one of them (see TradeReconciliation.kt on why this port is
- * single-character where desktop pools). */
+ * Pooled across every registered buyer and seller character, matching
+ * desktop's `reconcile_realized_trades`: every buyer's Jita buys and every
+ * seller's structure sells are fetched and combined before FIFO-matching
+ * once (any buyer's purchase can fund any seller's sale - they are pooled,
+ * not paired 1:1 by character), and every seller's wallet-journal entries
+ * are unioned by journal entry id for the real-tax refinement. See
+ * TradeReconciliation.kt's own docstring for the full rationale. */
 @Composable
 fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
@@ -78,8 +83,8 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
     var dailySold by remember { mutableStateOf<List<Pair<String, Double>>>(emptyList()) }
     var status by remember {
         mutableStateOf(
-            "Not run yet - Reconcile matches the buyer character's Jita buys against the " +
-                "seller character's structure sells, live (nothing is saved between runs)."
+            "Not run yet - Reconcile matches every buyer character's Jita buys against " +
+                "every seller character's structure sells, live (nothing is saved between runs)."
         )
     }
     var busy by remember { mutableStateOf(false) }
@@ -98,17 +103,12 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
                     status = "No structure id configured yet - sells can't be located without one."
                     return@launch
                 }
-                val buyerRecord = tokenManager.listRecords("buyer").firstOrNull()
-                val sellerRecord = tokenManager.listRecords("seller").firstOrNull()
-                if (buyerRecord == null || sellerRecord == null) {
-                    status = "A buyer *and* a seller character must be logged in (see Characters)."
+                val buyerRecords = tokenManager.listRecords("buyer")
+                val sellerRecords = tokenManager.listRecords("seller")
+                if (buyerRecords.isEmpty() || sellerRecords.isEmpty()) {
+                    status = "At least one buyer *and* one seller character must be logged in (see Characters)."
                     return@launch
                 }
-                // Through getToken, not the stored record's own accessToken:
-                // a token sitting in the database is very often already
-                // expired, and refreshing is TokenManager's job.
-                val buyerToken = tokenManager.getToken(buyerRecord.role).accessToken
-                val sellerToken = tokenManager.getToken(sellerRecord.role).accessToken
 
                 status = "Resolving Jita's stations..."
                 // Prefer the whole Forge region's stations from the local
@@ -123,23 +123,43 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
                 val jitaStations = sdeRepo.stationIdsInRegion(config.jitaRegionId.toLong()).toSet()
                     .ifEmpty { client.solarSystemStationIds(JITA_SOLAR_SYSTEM_ID).toSet() }
 
-                status = "Fetching the buyer's wallet transactions..."
-                val rawBuys = fetchRecentTransactions(
-                    client, buyerRecord.characterId, buyerToken,
-                    config.lookbackDays.toLong() * BUY_LOOKBACK_MULTIPLIER,
-                )
-                status = "Fetching the seller's wallet transactions..."
-                val rawSells = fetchRecentTransactions(
-                    client, sellerRecord.characterId, sellerToken, config.lookbackDays.toLong(),
-                )
-
-                // Best-effort, exactly like the desktop version: no journal
-                // (missing scope, ESI outage) just means every sell falls back
-                // to the fully modeled post-tax price.
-                status = "Fetching the seller's wallet journal..."
-                val journalAmounts = fetchRecentJournalAmounts(
-                    client, sellerRecord.characterId, sellerToken, config.lookbackDays.toLong(),
-                )
+                // Pooled across every registered buyer/seller character (see
+                // this screen's own docstring and TradeReconciliation.kt):
+                // every buyer's buys and every seller's sells are combined
+                // into one flat list each before matching once. Unlike
+                // OwnedBlueprintsScreen/ProductionCurrentJobsScreen's
+                // per-character best-effort merge, a fetch failure for any
+                // one character here is allowed to abort the whole run -
+                // same as desktop's reconcile_realized_trades, which never
+                // catches fetch_recent_transactions' own exceptions either
+                // (only the wallet-journal fetch is best-effort, on both
+                // platforms).
+                status = "Fetching every buyer's wallet transactions..."
+                val rawBuys = mutableListOf<CharacterWalletTransaction>()
+                for (buyerRecord in buyerRecords) {
+                    val buyerToken = tokenManager.getToken(buyerRecord.role).accessToken
+                    rawBuys += fetchRecentTransactions(
+                        client, buyerRecord.characterId, buyerToken,
+                        config.lookbackDays.toLong() * BUY_LOOKBACK_MULTIPLIER,
+                    )
+                }
+                status = "Fetching every seller's wallet transactions..."
+                val rawSells = mutableListOf<CharacterWalletTransaction>()
+                val journalAmounts = mutableMapOf<Long, Double>()
+                for (sellerRecord in sellerRecords) {
+                    val sellerToken = tokenManager.getToken(sellerRecord.role).accessToken
+                    rawSells += fetchRecentTransactions(
+                        client, sellerRecord.characterId, sellerToken, config.lookbackDays.toLong(),
+                    )
+                    // Best-effort per seller, exactly like the desktop
+                    // version: no journal for one seller (missing scope, ESI
+                    // outage) just means that seller's sells fall back to the
+                    // fully modeled post-tax price, without blocking the
+                    // others'.
+                    journalAmounts += fetchRecentJournalAmounts(
+                        client, sellerRecord.characterId, sellerToken, config.lookbackDays.toLong(),
+                    )
+                }
 
                 val buys = buysAtStations(rawBuys, jitaStations)
                 val sells = sellsAtStructure(rawSells, structureId)
