@@ -102,10 +102,15 @@ fun DoctrineContractHistoryScreen(database: AppDatabase, tokenManager: TokenMana
                     ?: error("No structure configured yet (see Settings) - contract sync needs one to filter by.")
                 val token = tokenManager.getToken(record.role)
                 val candidates = ContractSync.loadCandidates(fittingRepo.listActive())
+                // groupIdOf is a plain (non-suspend) lookup - pairWrongVariants calls it from a
+                // sortedBy selector, which can't suspend - so resolve every candidate type's
+                // groupId up front into a synchronous map instead of querying the SDE cache lazily.
+                val candidateTypeIds = candidates.flatMap { it.exactSoll.keys + it.consumeSoll.keys }.toSet()
+                val groupIdByType = candidateTypeIds.associateWith { sdeRepo.type(it)?.groupId }
                 val outcome = ContractHistory.syncAndPersist(
                     esi = esi, historyRepo = historyRepo, characterId = token.characterId,
                     accessToken = token.accessToken, structureId = structureId, candidates = candidates,
-                    groupIdOf = { typeId -> sdeRepo.type(typeId)?.groupId },
+                    groupIdOf = { typeId -> groupIdByType[typeId] },
                 )
                 loadPermanent()
                 status = "Synced: ${outcome.historyRows.size} newly-finished matched contract(s) recorded, " +
