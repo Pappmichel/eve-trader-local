@@ -31,6 +31,7 @@ import com.pappmichel.evetraderlocal.data.trading.BUY_LOOKBACK_MULTIPLIER
 import com.pappmichel.evetraderlocal.data.trading.RealizedSummary
 import com.pappmichel.evetraderlocal.data.trading.RealizedTrade
 import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
+import com.pappmichel.evetraderlocal.data.trading.averageDailySoldByType
 import com.pappmichel.evetraderlocal.data.trading.buysAtStations
 import com.pappmichel.evetraderlocal.data.trading.fetchRecentJournalAmounts
 import com.pappmichel.evetraderlocal.data.trading.fetchRecentTransactions
@@ -71,6 +72,10 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
 
     var trades by remember { mutableStateOf<List<RealizedTrade>>(emptyList()) }
     var summary by remember { mutableStateOf<RealizedSummary?>(null) }
+    // {item name: average units sold per day}, this run's matched trades
+    // only - see averageDailySoldByType's own note on why a live run stands
+    // in for desktop's stored one here.
+    var dailySold by remember { mutableStateOf<List<Pair<String, Double>>>(emptyList()) }
     var status by remember {
         mutableStateOf(
             "Not run yet - Reconcile matches the buyer character's Jita buys against the " +
@@ -83,6 +88,7 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
         busy = true
         trades = emptyList()
         summary = null
+        dailySold = emptyList()
         status = "Loading configuration and characters..."
         scope.launch {
             try {
@@ -167,6 +173,9 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
                 )
                 trades = matched
                 summary = summarizeRealizedTrades(matched)
+                dailySold = averageDailySoldByType(matched, config.lookbackDays)
+                    .entries.sortedByDescending { it.value }
+                    .map { (typeId, qty) -> (itemNames[typeId] ?: typeId.toString()) to qty }
                 status = if (matched.isEmpty()) {
                     "No matched trades in the last ${config.lookbackDays} days " +
                         "(${buys.size} Jita buy(s), ${sells.size} structure sell(s) seen)."
@@ -205,6 +214,16 @@ fun RealizedTradesScreen(database: AppDatabase, tokenManager: TokenManager) {
                     modifier = Modifier.padding(bottom = 8.dp),
                 )
             }
+        }
+
+        if (dailySold.isNotEmpty()) {
+            Text(
+                "Avg daily sold (this run): " + dailySold.joinToString(", ") { (item, qty) ->
+                    "$item (%.1f/day)".format(qty)
+                },
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
         }
 
         LazyColumn {

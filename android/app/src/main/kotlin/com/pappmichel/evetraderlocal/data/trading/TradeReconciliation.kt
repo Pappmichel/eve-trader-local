@@ -58,10 +58,16 @@ import java.time.temporal.ChronoUnit
  * - **Nothing is persisted.** Desktop stores a run (`storage.save_realized_
  *   trades`) and its Realized Trades tab opens showing the last saved one;
  *   here a run is live-only, on a button press, the same "always fresh, no
- *   saved snapshot" stance the rest of this port's tool screens take. The
- *   one desktop feature that genuinely needs the stored run -
- *   `average_daily_sold_by_type`, which reads the last run's rows back out
- *   of SQLite - is therefore not ported at all rather than half-ported.
+ *   saved snapshot" stance the rest of this port's tool screens take.
+ *   Desktop's `average_daily_sold_by_type` reads that stored run's rows back
+ *   out of SQLite, but only so the figure survives an app restart without a
+ *   fresh ESI fetch - the underlying question ("matched_qty summed per
+ *   type_id, divided by lookback_days") is answered just as well by the
+ *   `List<RealizedTrade>` a live run already holds in memory, so
+ *   `averageDailySoldByType` below is a pure aggregation over that list
+ *   rather than a persisted-run reader. What genuinely isn't ported is
+ *   desktop's "tab opens already showing the last run" behavior, not this
+ *   metric.
  */
 
 /** ESI's fixed per-call cap for /characters/{id}/wallet/transactions/. */
@@ -282,6 +288,32 @@ fun summarizeRealizedTrades(trades: List<RealizedTrade>): RealizedSummary {
         averageMargin = averageMargin,
         top3ItemsByProfit = top3,
     )
+}
+
+/** Real average daily quantity *this trader personally sold*, per type_id -
+ * the direct port of desktop's `average_daily_sold_by_type`. Sums
+ * `matchedQty` (the actually-matched sale amount, never a whole
+ * transaction's buy/sell quantity, which can span several matched rows) and
+ * divides by `lookbackDays` - the same window `trades` was reconciled over.
+ *
+ * Deliberately *not* the shortlist's "Profit / Day" volume figure. That is a
+ * market-wide question ("how much of this trades in a day at all"); this one
+ * answers the narrower "how much have I moved of this" - stock/replenishment
+ * planning - and a type never actually sold is simply absent here rather
+ * than estimated from something else.
+ *
+ * Unlike desktop, `trades` is the live result of this run's own
+ * `reconcileRealizedTrades` call, not a stored run read back out of SQLite -
+ * see this file's own note on why that substitution is exact for this
+ * metric. Returns an empty map for an empty run (nothing matched, or
+ * reconciliation hasn't been run yet) or a non-positive lookback window. */
+fun averageDailySoldByType(trades: List<RealizedTrade>, lookbackDays: Int): Map<Int, Double> {
+    if (trades.isEmpty() || lookbackDays <= 0) return emptyMap()
+    val sold = mutableMapOf<Int, Double>()
+    for (trade in trades) {
+        sold[trade.typeId] = (sold[trade.typeId] ?: 0.0) + trade.matchedQty
+    }
+    return sold.mapValues { (_, qty) -> qty / lookbackDays }
 }
 
 /** Pages through `characterWalletTransactions` via `fromId` (cursor

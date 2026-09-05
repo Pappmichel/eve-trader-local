@@ -302,4 +302,38 @@ class TradeReconciliationTest {
     fun `summarize of nothing is zero not a division error`() {
         assertEquals(0.0, summarizeRealizedTrades(emptyList()).averageMargin, EPSILON)
     }
+
+    // ------------------------------------------- average daily sold by type
+    // Ported case-for-case from desktop's test_average_daily_sold_by_type,
+    // minus the two storage-specific cases (only the latest run counts;
+    // empty before any run) that don't apply here - this port takes the
+    // already-live List<RealizedTrade> directly rather than reading a
+    // persisted run back out of SQLite, so there is no "latest run" or
+    // "before any run" state to lose track of (see TradeReconciliation.kt's
+    // own note on why that substitution is exact for this metric).
+    @Test
+    fun `average daily sold sums matched qty per type over the lookback window`() {
+        val trades = listOf(
+            RealizedTrade(TRITANIUM, "Tritanium", "d1", 100, 10.0, "d2", 100, 20.0, 60, 600.0, 1.0),
+            RealizedTrade(TRITANIUM, "Tritanium", "d1", 100, 10.0, "d2", 100, 20.0, 40, 400.0, 1.0),
+            RealizedTrade(PYERITE, "Pyerite", "d1", 5, 10.0, "d2", 5, 20.0, 5, 50.0, 1.0),
+        )
+        assertEquals(
+            mapOf(TRITANIUM to 10.0, PYERITE to 0.5),
+            averageDailySoldByType(trades, lookbackDays = 10),
+        )
+    }
+
+    @Test
+    fun `average daily sold of nothing is empty not a division error`() {
+        assertEquals(emptyMap<Int, Double>(), averageDailySoldByType(emptyList(), lookbackDays = 10))
+    }
+
+    @Test
+    fun `average daily sold with a non-positive lookback is empty`() {
+        val trades = listOf(
+            RealizedTrade(TRITANIUM, "Tritanium", "d1", 1, 10.0, "d2", 1, 20.0, 1, 10.0, 1.0),
+        )
+        assertEquals(emptyMap<Int, Double>(), averageDailySoldByType(trades, lookbackDays = 0))
+    }
 }
