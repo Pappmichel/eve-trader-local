@@ -9,34 +9,21 @@ import com.pappmichel.evetraderlocal.data.esi.EsiClient
  * [DoctrineValidation]'s ported pure math and [DoctrineFittingRepository]'s
  * saved fittings.
  *
- * **Two deliberate simplifications vs. the desktop engine, both documented
- * here rather than silently baked in:**
+ * **One remaining deliberate simplification vs. the desktop engine (a second
+ * one - no contract-target multiplier - was removed once [ContractSync]
+ * landed; see [computeRows]'s own doc on how `validContractsByFitting` now
+ * feeds that multiplier for real):**
  *
- * 1. **No contract-target multiplier.** Desktop's `build_stockpile_soll`
- *    multiplies Soll by `stockpileTarget + max(0, contractTarget -
- *    validContracts)` - the second term needs a live count of currently
- *    "valid" synced+matched contracts, which needs the full contract-sync/
- *    matching engine (`esi_sync.py` + `validation.py`'s contract-side
- *    functions) this platform does not port (see `ContractHistory.kt`'s own
- *    docstring for why). [DoctrineValidation.buildStockpileSoll] still
- *    accepts `contractTarget`/`validContracts` (so the math is ready the day
- *    contract sync lands), but this file always calls it with
- *    `validContracts = 0` - i.e. `contractTarget` is currently active demand
- *    same as desktop shows before any contract has ever synced. A
- *    `SavedFitting.contractTarget` set to 0 (this platform's every current
- *    fitting, since nothing writes a nonzero one yet) makes this a no-op in
- *    practice; it stops being a no-op the moment a future contract-sync port
- *    starts writing real target values.
- * 2. **`availableByType` is caller-supplied, not a fixed single-location
- *    ESI/SDE read.** Desktop reads `storage.esi_stock_at_location` for one
- *    configured `stockpile_location_id`. This platform has no persisted
- *    Doctrine location config yet, so [fetchAvailableQuantities] below sums
- *    a character's *entire* asset list by type_id (every location the
- *    character has visibility into) unless a `locationId` filter is passed -
- *    a real multi-location, multi-character deployment could double-count
- *    stock sitting somewhere that isn't the actual stockpile hangar. The
- *    screen surfaces this plainly and offers manual entry as a fallback for
- *    exactly the cases where that matters (see [DoctrineStockpileStatusScreen]). */
+ * **`availableByType` is caller-supplied, not a fixed single-location
+ * ESI/SDE read.** Desktop reads `storage.esi_stock_at_location` for one
+ * configured `stockpile_location_id`. This platform has no persisted
+ * Doctrine location config yet, so [fetchAvailableQuantities] below sums
+ * a character's *entire* asset list by type_id (every location the
+ * character has visibility into) unless a `locationId` filter is passed -
+ * a real multi-location, multi-character deployment could double-count
+ * stock sitting somewhere that isn't the actual stockpile hangar. The
+ * screen surfaces this plainly and offers manual entry as a fallback for
+ * exactly the cases where that matters (see [DoctrineStockpileStatusScreen]). */
 object StockpileStatus {
 
     /** One (fitting, type_id) requirement/availability row - mirrors
@@ -77,19 +64,30 @@ object StockpileStatus {
      * convention `engine.load_match_candidates`'s own docstring documents),
      * and returns one [Row] per (fitting, type_id) with a real requirement.
      * `typeName` resolves display names; a lookup miss falls back to the
-     * bare type_id string. */
+     * bare type_id string.
+     *
+     * `validContractsByFitting` is the real contract-target multiplier
+     * (GitHub issue #36, `DoctrineValidation.buildStockpileSoll`'s own
+     * `validContracts` parameter) - a fitting's count of currently
+     * outstanding-and-`valid`-status matched contracts, from
+     * [ContractSync.SyncOutcome.activeContracts] (see
+     * [DoctrineStockpileStatusScreen]'s wiring). Missing/never-synced
+     * entries default to 0, same as `contractTarget`'s own "currently active
+     * demand as if nothing has synced yet" fallback before this multiplier
+     * existed. */
     fun computeRows(
         fittings: List<SavedFitting>,
         availableByType: Map<Int, Double>,
         typeName: (Int) -> String,
         cargoTolerancePctDefault: Double = 0.9,
+        validContractsByFitting: Map<String, Int> = emptyMap(),
     ): List<Row> {
         if (fittings.isEmpty()) return emptyList()
 
         val sollByFitting: List<Pair<String, Map<Int, Pair<Double, String>>>> = fittings.map { f ->
             f.fittingId to DoctrineValidation.buildStockpileSoll(
                 items = f.items, hullTypeId = f.hullTypeId, stockpileTarget = f.stockpileTarget,
-                contractTarget = f.contractTarget, validContracts = 0,
+                contractTarget = f.contractTarget, validContracts = validContractsByFitting[f.fittingId] ?: 0,
             )
         }
         val allocation = DoctrineValidation.allocateStockpile(sollByFitting, availableByType)

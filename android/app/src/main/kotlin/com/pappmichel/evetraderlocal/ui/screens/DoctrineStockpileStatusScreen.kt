@@ -27,41 +27,58 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.data.doctrine.ContractSync
 import com.pappmichel.evetraderlocal.data.doctrine.DoctrineFittingRepository
 import com.pappmichel.evetraderlocal.data.doctrine.SavedFitting
 import com.pappmichel.evetraderlocal.data.doctrine.StockpileStatus
 import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.sde.SdeRepository
+import com.pappmichel.evetraderlocal.data.trading.TradingConfigRepository
 import kotlinx.coroutines.launch
 
 /** Doctrine -> Stockpile Status: "how much of each saved fitting's items do
  * I have vs. need", ported from `doctrine/actions.py`'s
  * `do_get_stockpile_status` on top of [StockpileStatus]'s math (see that
- * file's own docstring for the two documented simplifications vs. the
- * desktop engine: no contract-target multiplier, and `availableByType` is
- * either an ESI asset-quantity read or manually entered here rather than a
- * single fixed stockpile location).
+ * file's own docstring for the one remaining documented simplification vs.
+ * the desktop engine: `availableByType` is either an ESI asset-quantity
+ * read or manually entered here rather than a single fixed stockpile
+ * location).
+ *
+ * **Real contract-target multiplier, wired via [ContractSync].** "Sync
+ * Contracts" runs the real matching engine against the Doctrine character's
+ * current contracts at the configured structure (`TradingConfig.structureId`,
+ * same fallback desktop's own `DoctrineConfig.effective_structure_id`
+ * documents - no separate Doctrine structure setting exists on this
+ * platform either) and feeds [ContractSync.validContractCounts] straight
+ * into [StockpileStatus.computeRows]'s `validContractsByFitting` - a
+ * fitting whose `contractTarget` isn't yet fully covered by valid
+ * outstanding contracts now pulls in the extra materials needed to close
+ * that gap, on top of its separate `stockpileTarget` buffer, exactly GitHub
+ * issue #36's additive rule.
  *
  * **"Don't block on missing auth" pattern, same as [RealizedTradesScreen]/
- * [UnlistedUndercutScreen]:** pressing "Refresh from Character Assets"
- * without a "Doctrine" character logged in (see `CharactersScreen`) just
- * surfaces that in the status line - rows still compute from whatever
- * `available` quantities are already on screen (all zero on first load), so
- * a user with no ESI token at all can still type owned quantities into each
- * row's editable field and press "Recompute" to see real shortfalls/ampels,
- * exactly the manual-entry fallback [MineralShoppingListScreen] establishes
- * for a not-yet-authenticated view. */
+ * [UnlistedUndercutScreen]:** pressing "Refresh from Character Assets" or
+ * "Sync Contracts" without a "Doctrine" character logged in (see
+ * `CharactersScreen`) just surfaces that in the status line - rows still
+ * compute from whatever `available`/valid-contract data is already on
+ * screen (all zero on first load), so a user with no ESI token at all can
+ * still type owned quantities into each row's editable field and press
+ * "Recompute" to see real shortfalls/ampels, exactly the manual-entry
+ * fallback [MineralShoppingListScreen] establishes for a not-yet-
+ * authenticated view. */
 @Composable
 fun DoctrineStockpileStatusScreen(database: AppDatabase, tokenManager: TokenManager) {
     val scope = rememberCoroutineScope()
     val fittingRepo = remember { DoctrineFittingRepository(database) }
     val sdeRepo = remember { SdeRepository(database) }
+    val tradingCfgRepo = remember { TradingConfigRepository(database) }
     val esi = remember { EsiClient() }
 
     var fittings by remember { mutableStateOf<List<SavedFitting>>(emptyList()) }
     var availableByType by remember { mutableStateOf<Map<Int, Double>>(emptyMap()) }
     var availableEditText by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
     var typeNames by remember { mutableStateOf<Map<Int, String>>(emptyMap()) }
+    var validContractsByFitting by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var aggregated by remember { mutableStateOf<List<StockpileStatus.AggregatedRow>>(emptyList()) }
     var assetsAvailable by remember { mutableStateOf(false) }
     var status by remember {
@@ -78,6 +95,7 @@ fun DoctrineStockpileStatusScreen(database: AppDatabase, tokenManager: TokenMana
         val rows = StockpileStatus.computeRows(
             fittings = fittings, availableByType = availableByType,
             typeName = { typeNames[it] ?: it.toString() },
+            validContractsByFitting = validContractsByFitting,
         )
         aggregated = StockpileStatus.aggregate(rows)
     }
@@ -128,6 +146,34 @@ fun DoctrineStockpileStatusScreen(database: AppDatabase, tokenManager: TokenMana
         }
     }
 
+    fun syncContracts() {
+        busy = true
+        status = "Syncing contracts..."
+        scope.launch {
+            try {
+                val record = tokenManager.listRecords("doctrine").firstOrNull()
+                    ?: error("No 'Doctrine' character is logged in yet (see Characters).")
+                val structureId = tradingCfgRepo.load().structureId
+                    ?: error("No structure configured yet (see Settings) - contract sync needs one to filter by.")
+                val token = tokenManager.getToken(record.role)
+                val candidates = ContractSync.loadCandidates(fittings)
+                val outcome = ContractSync.sync(
+                    esi = esi, characterId = token.characterId, accessToken = token.accessToken,
+                    structureId = structureId, candidates = candidates,
+                    groupIdOf = { typeId -> sdeRepo.type(typeId)?.groupId },
+                )
+                validContractsByFitting = ContractSync.validContractCounts(outcome.activeContracts)
+                recompute()
+                status = "${outcome.activeContracts.size} active matched contract(s), " +
+                    "${outcome.noHullMatchCount} not a doctrine sale - contract-target multiplier updated."
+            } catch (e: Exception) {
+                status = e.message ?: "Could not sync contracts."
+            } finally {
+                busy = false
+            }
+        }
+    }
+
     fun applyManualEntry() {
         val parsed = availableEditText.mapNotNull { (typeId, text) ->
             text.trim().toDoubleOrNull()?.let { typeId to it }
@@ -151,6 +197,7 @@ fun DoctrineStockpileStatusScreen(database: AppDatabase, tokenManager: TokenMana
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(bottom = 8.dp)) {
             Button(onClick = { loadFittings() }, enabled = !busy) { Text("Reload Fittings") }
             Button(onClick = { refreshFromAssets() }, enabled = !busy) { Text("Refresh from Character Assets") }
+            Button(onClick = { syncContracts() }, enabled = !busy) { Text("Sync Contracts") }
         }
 
         Text(

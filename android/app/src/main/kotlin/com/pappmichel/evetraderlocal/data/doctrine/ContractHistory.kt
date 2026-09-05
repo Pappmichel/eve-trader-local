@@ -4,35 +4,28 @@ import com.pappmichel.evetraderlocal.data.esi.EsiClient
 import com.pappmichel.evetraderlocal.data.esi.EsiContract
 import com.pappmichel.evetraderlocal.data.sde.SdeRepository
 
-/** Doctrine -> Contract History: "which of my contracts have actually
- * finished (sold), and what was in them" - a new authenticated ESI surface
- * for this Android build (`/characters/{id}/contracts/` +
- * `/characters/{id}/contracts/{id}/items/`, see [EsiClient.characterContracts]/
- * [EsiClient.characterContractItems]).
+/** Doctrine -> Contract History. **Now a real port of `doctrine/actions.py`'s
+ * `do_contract_history`**: [syncAndPersist] runs the real contract-sync/
+ * matching engine ([ContractSync.sync]) and writes every newly-finished,
+ * fitting-matched contract into the permanent
+ * [DoctrineContractHistoryRepository] store, and [loadPermanentHistory]
+ * reads that store back - `doctrine_contract_history`'s exact role on
+ * desktop (GitHub issue #19), not a live "what ESI still happens to
+ * retain" listing. See [ContractSync]'s own docstring for what matching
+ * means and the three scope decisions vs. desktop's fuller engine (no
+ * corp contracts, no persisted "active" snapshot, no acceptor-name
+ * resolution).
  *
- * **Deliberately NOT a port of `doctrine/actions.py`'s `do_contract_history`.**
- * That desktop action reads a *permanent, already-recorded* history table
- * (`doctrine_contract_history`) that only ever gets a row written into it by
- * the full contract-sync/matching pipeline (`esi_sync.sync_contracts` ->
- * `engine.match_and_validate_contract` -> `storage.
- * upsert_doctrine_contract_history`, see `test_doctrine_contract_history.py`)
- * the moment ESI first reports a previously-*matched* contract as finished.
- * Porting that faithfully needs: (1) the contract-sync loop itself
- * (`esi_sync.py`, ~300 lines, itself dependent on `engine.py`'s matching/
- * deviation math - `DoctrineValidation.kt` in this pass deliberately only
- * ports the stockpile-side half of that, see its own docstring), (2) a
- * persisted history table this platform's Room schema doesn't have, and (3)
- * "only a contract this app itself watched go outstanding -> finished
- * counts" - a genuinely different, much narrower feature than "list what ESI
- * currently reports". This screen instead answers the more modest, directly-
- * answerable-from-ESI-alone question: "of my currently-visible contracts,
- * which are done, and what did they contain" - every [finished] contract ESI
- * currently still retains (its own 30-day/still-in-progress retention rule,
- * not filtered further here), with item names resolved, but with no
- * matched-fitting/doctrine attribution at all (there is no persisted match
- * to attribute from). A future pass that ports the real sync/matching engine
- * can replace this with the faithful permanent-history version; this one is
- * a real, useful, honestly-scoped read-only view in the meantime. */
+ * [finishedOnly]/[fetch] are kept as a secondary, honestly-scoped live-ESI
+ * view: a permanent-history row only exists for a contract that matched
+ * some *saved, active* fitting well enough to clear
+ * [DoctrineValidation.MATCH_THRESHOLD] - a finished item_exchange contract
+ * that doesn't (wrong structure, no fitting saved yet, or a genuine
+ * near-miss) simply never appears there, the same way it never reaches
+ * desktop's own `doctrine_contract_history`. [fetch] still answers "what
+ * does ESI currently say is finished, regardless of any match" for anyone
+ * who wants to see that raw picture (e.g. while still building out their
+ * fitting library) - unchanged from before this pass. */
 object ContractHistory {
 
     // doctrine/constants.py's FINISHED_CONTRACT_STATUSES - ESI's own
@@ -92,4 +85,58 @@ object ContractHistory {
             )
         }.sortedByDescending { it.dateCompleted ?: it.dateIssued }
     }
+
+    /** Runs [ContractSync.sync] against `characterId`'s current contracts at
+     * `structureId` and merges any newly-finished, matched contracts into
+     * the permanent store via [historyRepo]. Returns the full
+     * [ContractSync.SyncOutcome] (active matched contracts too - the
+     * Stockpile Status screen's own multiplier read, see
+     * [StockpileStatus]'s docstring, uses this same call) so a caller
+     * doesn't have to sync twice to get both pieces. */
+    suspend fun syncAndPersist(
+        esi: EsiClient,
+        historyRepo: DoctrineContractHistoryRepository,
+        characterId: Long,
+        accessToken: String,
+        structureId: Long,
+        candidates: List<ContractSync.MatchCandidate>,
+        cargoTolerancePctDefault: Double = 0.9,
+        groupIdOf: (Int) -> Int? = { null },
+        slotOf: (Int) -> String? = { null },
+    ): ContractSync.SyncOutcome {
+        val outcome = ContractSync.sync(
+            esi, characterId, accessToken, structureId, candidates, cargoTolerancePctDefault, groupIdOf, slotOf,
+        )
+        historyRepo.upsertAll(outcome.historyRows)
+        return outcome
+    }
+
+    /** One permanent history row, ready for display - [DoctrineContractHistoryRepository.list]'s
+     * rows with a resolved fitting/hull name already denormalized onto them
+     * ([ContractSync.ContractHistoryRow.fittingName]/`hullTypeId` - only the
+     * hull's own display name needs a fresh [SdeRepository] lookup here). */
+    data class PermanentRow(
+        val contractId: Long,
+        val fittingName: String,
+        val hullName: String,
+        val title: String?,
+        val price: Double?,
+        val acceptorId: Long?,
+        val dateIssued: String,
+        val dateCompleted: String?,
+        val status: String,
+    )
+
+    /** Reads every permanently-recorded contract back, most-recently-
+     * completed first (the DAO's own ordering) - the Android counterpart of
+     * storage.py's `load_doctrine_contract_history`. */
+    suspend fun loadPermanentHistory(historyRepo: DoctrineContractHistoryRepository, sde: SdeRepository): List<PermanentRow> =
+        historyRepo.list().map { r ->
+            PermanentRow(
+                contractId = r.contractId, fittingName = r.fittingName,
+                hullName = sde.typeName(r.hullTypeId) ?: r.hullTypeId.toString(),
+                title = r.title, price = r.price, acceptorId = r.acceptorId,
+                dateIssued = r.dateIssued, dateCompleted = r.dateCompleted, status = r.status,
+            )
+        }
 }

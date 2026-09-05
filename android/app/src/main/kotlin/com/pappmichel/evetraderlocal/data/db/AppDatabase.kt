@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.pappmichel.evetraderlocal.data.doctrine.DoctrineContractHistoryDao
+import com.pappmichel.evetraderlocal.data.doctrine.DoctrineContractHistoryEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintMaterialEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintProductEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeCategoryEntity
@@ -29,7 +31,12 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
  * port (see SdeRepository's own docstring). Version 4 adds
  * `sde_blueprint_products`/`sde_blueprint_materials` (Manufacturing-only
  * blueprint BOM data) for Production's first real build-cost view - see
- * `data/production/ProductionBuildCost.kt`. */
+ * `data/production/ProductionBuildCost.kt`. Version 5 adds
+ * `doctrine_contract_history` (the desktop build's own GitHub issue #19
+ * table), the one Doctrine table that earns a real Room entity instead of
+ * the settings-blob-JSON pattern every other Doctrine list uses - see that
+ * entity's own docstring for why - for the real contract-sync/matching
+ * engine (`data/doctrine/ContractSync.kt`). */
 @Database(
     entities = [
         TokenEntity::class, SettingsEntity::class,
@@ -37,14 +44,16 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
         SdeMarketGroupEntity::class, SdeSolarSystemEntity::class, SdeStationEntity::class,
         SdeRefreshStateEntity::class, SdeTypeMaterialEntity::class,
         SdeBlueprintProductEntity::class, SdeBlueprintMaterialEntity::class,
+        DoctrineContractHistoryEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun tokenDao(): TokenDao
     abstract fun settingsDao(): SettingsDao
     abstract fun sdeDao(): SdeDao
+    abstract fun doctrineContractHistoryDao(): DoctrineContractHistoryDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null
