@@ -37,6 +37,7 @@ import com.pappmichel.evetraderlocal.ui.screens.DoctrineStockpileStatusScreen
 import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
 import com.pappmichel.evetraderlocal.ui.screens.MineralShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.OreShortlistScreen
+import com.pappmichel.evetraderlocal.ui.screens.OwnedBlueprintsScreen
 import com.pappmichel.evetraderlocal.ui.screens.PlaceholderScreen
 import com.pappmichel.evetraderlocal.ui.screens.PriceHistoryScreen
 import com.pappmichel.evetraderlocal.ui.screens.ProductionBuildCandidatesScreen
@@ -71,6 +72,7 @@ private const val ORE_SHORTLIST_ROUTE = "ore-minerals/ore-shortlist"
 private const val SHIP_MARGIN_ROUTE = "production/ship-margins"
 private const val BUILD_CANDIDATES_ROUTE = "production/build-candidates"
 private const val CURRENT_JOBS_ROUTE = "production/current-jobs"
+private const val OWNED_BLUEPRINTS_ROUTE = "production/owned-blueprints"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
@@ -79,10 +81,10 @@ private const val CURRENT_JOBS_ROUTE = "production/current-jobs"
  * Trading/Realized Trades & Transactions, Station Trading's own
  * Shortlist/Undercut & Skills, Production/Item Lookup, Production/Ship
  * Margins & Market Status, Production/Build Candidates, Production/Current
- * Jobs & Slots, Doctrine/Fittings, and Ore & Minerals' own Reprocessing
- * Quote, Mineral Shopping List, and Ore Shortlist (see ROADMAP.md's Android
- * section for what's ported so far). Add a route here as each new screen
- * replaces its placeholder. */
+ * Jobs & Slots, Production/Owned Blueprints, Doctrine/Fittings, and
+ * Ore & Minerals' own Reprocessing Quote, Mineral Shopping List, and Ore
+ * Shortlist (see ROADMAP.md's Android section for what's ported so far).
+ * Add a route here as each new screen replaces its placeholder. */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -106,6 +108,8 @@ private fun routeFor(tool: String, view: String): String =
         BUILD_CANDIDATES_ROUTE
     } else if (tool == "Production" && view == "Current Jobs & Slots") {
         CURRENT_JOBS_ROUTE
+    } else if (tool == "Production" && view == "Owned Blueprints") {
+        OWNED_BLUEPRINTS_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Doctrine" && view == "Stockpile Status") {
@@ -243,6 +247,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(SHIP_MARGIN_ROUTE) { ShipMarginScreen(database, tokenManager) }
                 composable(BUILD_CANDIDATES_ROUTE) { ProductionBuildCandidatesScreen(database, tokenManager) }
                 composable(CURRENT_JOBS_ROUTE) { ProductionCurrentJobsScreen(database, tokenManager) }
+                composable(OWNED_BLUEPRINTS_ROUTE) { OwnedBlueprintsScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(DOCTRINE_STOCKPILE_STATUS_ROUTE) { DoctrineStockpileStatusScreen(database, tokenManager) }
                 composable(DOCTRINE_SHOPPING_LIST_ROUTE) { DoctrineShoppingListScreen(database) }

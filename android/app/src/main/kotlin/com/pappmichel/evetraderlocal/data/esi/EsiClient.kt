@@ -156,6 +156,29 @@ data class IndustryJob(
     @SerialName("end_date") val endDate: String = "",
 )
 
+/** One row of `/characters/{character_id}/blueprints/` - the counterpart of
+ * esi_client.py's own blueprints read (see production/esi_sync.py's
+ * blueprint sync, and `OwnedBlueprints.kt`). `runs` is ESI's own "-1 means
+ * this is a BPO, not a copy" sentinel (a BPO has infinite runs so ESI never
+ * reports a real count for one) - **not** `quantity`, which is a *stack*
+ * count only when positive; for a blueprint item `quantity` itself is
+ * usually another ESI sentinel (-1 original / -2 copy) rather than a real
+ * stack size, exactly as `production/engine.py`'s own
+ * `list_owned_blueprints` documents and `OwnedBlueprints.kt` mirrors.
+ * `locationId` is left unresolved here (no structure-name lookup) - this
+ * port aggregates across every location the same way the desktop view's
+ * own `storage.load_owned_blueprints()` read does, not a location breakdown. */
+@Serializable
+data class CharacterBlueprint(
+    @SerialName("item_id") val itemId: Long = 0,
+    @SerialName("type_id") val typeId: Int = 0,
+    @SerialName("location_id") val locationId: Long = 0,
+    val quantity: Long = 0,
+    @SerialName("time_efficiency") val timeEfficiency: Int = 0,
+    @SerialName("material_efficiency") val materialEfficiency: Int = 0,
+    val runs: Int = 0,
+)
+
 @Serializable
 data class CharacterWalletTransaction(
     @SerialName("transaction_id") val transactionId: Long,
@@ -456,6 +479,31 @@ class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
                 accessToken,
             )
             val chunk: List<IndustryJob> = json.decodeFromString(body)
+            if (chunk.isEmpty()) break
+            out.addAll(chunk)
+            if (page >= totalPages) break
+            page++
+        }
+        return out
+    }
+
+    /** This character's owned blueprints (BPOs and BPCs, character *and*
+     * corp-hangar items the character can see - ESI itself decides which,
+     * not this method) - the counterpart of esi_client.py's own blueprints
+     * pull behind production/esi_sync.py's blueprint sync. Requires
+     * esi-characters.read_blueprints.v1. Paginated defensively like every
+     * other list endpoint here, though a well-stocked character's owned
+     * blueprint count rarely reaches a second page. */
+    suspend fun characterBlueprints(characterId: Long, accessToken: String): List<CharacterBlueprint> {
+        val out = mutableListOf<CharacterBlueprint>()
+        var page = 1
+        while (true) {
+            val (body, totalPages) = getBodyWithPages(
+                "/characters/$characterId/blueprints/",
+                mapOf("datasource" to "tranquility", "page" to page.toString()),
+                accessToken,
+            )
+            val chunk: List<CharacterBlueprint> = json.decodeFromString(body)
             if (chunk.isEmpty()) break
             out.addAll(chunk)
             if (page >= totalPages) break
