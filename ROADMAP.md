@@ -308,15 +308,19 @@ which "careful reading" alone had caught):
 - Trading → Unlisted Stock & Undercut Check (`data/trading/
   UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`) - two
   independent, always-live checks ported from `own_orders.py`'s
-  `check_undercut`/`fetch_seller_stock_without_order`, single-seller only
-  (unlike those functions' actual "_pooled" desktop callers, which pool
-  across every registered seller character sharing a structure's hangar).
-  Undercut Check cross-references the seller's own sell orders against the
-  structure's full order book by order id (ESI's structure book carries no
+  `check_undercut`/`fetch_seller_stock_without_order`. Undercut Check
+  cross-references the seller's own sell orders against the structure's
+  full order book by order id (ESI's structure book carries no
   owning-character field); Unlisted Stock cross-references shortlist
   item_ids against the seller's assets minus their own open sell-order
   volume. Item names come from the shortlist, since there's still no SDE
-  cache on this platform.
+  cache on this platform. Now pooled across every registered seller
+  character sharing the structure's hangar, matching `own_orders.py`'s
+  actual `_pooled` desktop callers (`check_undercut_pooled`/
+  `fetch_seller_stock_without_order_pooled`) instead of assuming exactly
+  one - a cheaper order or covering listing from one of your *own* other
+  sellers is no longer mistaken for a competitor undercutting you or
+  missing stock (the same GitHub issue #46 desktop already fixed).
 - Trading → Price History (`data/history/GoonmetricsClient.kt`,
   `data/trading/HistoryBacktest.kt`, `ui/screens/PriceHistoryScreen.kt`) - a
   Kotlin port of `goonmetrics_client.py`'s `price_history`/
@@ -337,17 +341,26 @@ which "careful reading" alone had caught):
   sells, including the buy-must-predate-sell rule (a matched buy dated after
   its sell is never used as that sale's cost basis - `break`, not `skip`,
   the same correctness fix already landed on desktop) and the
-  wallet-journal tax refinement via `journal_ref_id`. Simplified vs.
-  desktop: one buyer and one seller character rather than pooled
-  multi-character matching; buys are filtered to the whole Forge region via
-  the local SDE cache when it's populated (`SdeRepository.
-  stationIdsInRegion`, wired up once the SDE cache itself landed - see
-  below), falling back to just Jita's own solar system live via ESI on an
-  unrefreshed cache; item names/volumes for any non-shortlisted traded type
-  fall back to a live `/universe/types/` call;
-  nothing is persisted, so `average_daily_sold_by_type` (which needs a
-  saved run) isn't ported; there's no raw wallet-transaction listing, the
-  other half of the desktop tab.
+  wallet-journal tax refinement via `journal_ref_id`. Buys are filtered to
+  the whole Forge region via the local SDE cache when it's populated
+  (`SdeRepository.stationIdsInRegion`, wired up once the SDE cache itself
+  landed - see below), falling back to just Jita's own solar system live
+  via ESI on an unrefreshed cache; item names/volumes for any
+  non-shortlisted traded type fall back to a live `/universe/types/` call.
+  Now pools *every* registered buyer and seller character rather than
+  assuming exactly one of each - `reconcile_realized_trades` pools ANY
+  buyer's buys against ANY seller's sells (confirmed by reading the
+  source; never paired 1:1 by character), and every seller's
+  wallet-journal entries are unioned by ref id before the one combined
+  FIFO match. `average_daily_sold_by_type` (matched-quantity-per-type
+  divided by the lookback window) is also now ported - it turned out to
+  need only the run's own trade list, not desktop's persisted-snapshot
+  table (`storage.py`'s `save_realized_trades`/`latest_realized_trades`
+  is just a single-row cache of the last run for the GUI's convenience on
+  restart, not a real historical-runs store) - so it's a pure aggregation
+  over the same live `List<RealizedTrade>` this screen already holds
+  after every Reconcile press, with no new storage needed. There's still
+  no raw wallet-transaction listing, the other half of the desktop tab.
 - The SDE cache itself (`data/sde/` - `SdeCsv.kt`, `SdeEntities.kt`,
   `SdeDownloader.kt`, `SdeRepository.kt`; reachable from the drawer as its
   own "SDE Data" screen, `ui/screens/SdeDataScreen.kt`) - a Kotlin port of
@@ -651,22 +664,27 @@ which "careful reading" alone had caught):
   Minerals' config classes existed with no UI to change them outside a
   hand-edited settings blob.
 
-Not started: pooling either Realized Trades or Unlisted-Stock-&-Undercut
-check across multiple characters, `average_daily_sold_by_type`,
-Production's Invention Estimator (Logistics and Asset-Optimized Planner
-were both investigated and confirmed genuinely blocked on the same missing
-`plan_production` stock-target engine as Planner/Special Orders, not
-merely left undone - see above), tests for anything beyond the pure logic
-already covered, an app icon, a Play Store listing.
+Not started: Production's Invention Estimator (confirmed genuinely
+blocked - needs `industryActivityProbabilities`/`industryActivitySkills`
+SDE tables this cache doesn't carry; Logistics and Asset-Optimized Planner
+were likewise investigated and confirmed genuinely blocked on the same
+missing `plan_production` stock-target engine as Planner/Special Orders -
+see above for all four), tests for anything beyond the pure logic already
+covered, an app icon, a Play Store listing.
 
-At this point every ROADMAP item that was still open going into this
-Android push has either landed for real or been investigated and
-confirmed genuinely blocked by a specific, documented missing piece of
-infrastructure (never just left alone without checking) - what remains
-above is either genuinely out of scope for a single-user phone app
-(multi-character pooling, a persisted daily-sold-by-type table),
-confirmed-blocked Production views, or non-feature work (broader test
-coverage, an icon, store packaging).
+At this point every ROADMAP item that was open going into this Android
+push has either landed for real or been investigated and confirmed
+genuinely blocked by a specific, documented missing piece of
+infrastructure - never just left alone without checking. That includes
+items that looked like they might be permanently out of reach going in:
+multi-character pooling for Realized Trades and Unlisted Stock &
+Undercut Check, and `average_daily_sold_by_type`, both turned out to be
+straightforwardly portable once someone actually read the desktop source
+instead of assuming from the ROADMAP's own earlier (and, in hindsight,
+imprecise) description of what they needed. What remains above is
+genuinely down to one confirmed-blocked Production view family and
+non-feature work (broader test coverage, an icon, store packaging) - the
+real feature backlog for this Android port is exhausted.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

@@ -109,11 +109,8 @@ current scope.
   UnlistedUndercut.kt`, `ui/screens/UnlistedUndercutScreen.kt`): two
   independent, always-live one-shot checks (no saved snapshot to load on
   open, matching the desktop view's own restraint), ported from
-  `own_orders.py`'s `check_undercut`/`fetch_seller_stock_without_order` -
-  single-seller only, unlike those functions' actual desktop callers,
-  which pool across every registered seller character sharing a
-  structure's hangar (see `UnlistedUndercut.kt`'s own docstring). Undercut
-  Check cross-references the seller's own sell orders (`EsiClient.
+  `own_orders.py`'s `check_undercut`/`fetch_seller_stock_without_order`.
+  Undercut Check cross-references the seller's own sell orders (`EsiClient.
   characterOrders`) against the structure's full order book
   (`structureOrdersRaw`, already used by Shortlist) by order id, since
   ESI's structure order book carries no owning-character field. Unlisted
@@ -121,7 +118,15 @@ current scope.
   (`EsiClient.characterAssets`, excluding `NON_STOCK_LOCATION_FLAGS`) minus
   their own open sell-order volume there. Item names come from the
   shortlist (no SDE cache exists yet), so a flagged type_id not on the
-  shortlist shows its bare number.
+  shortlist shows its bare number. Now pooled across every registered
+  seller character sharing the structure's hangar, matching
+  `own_orders.py`'s actual `check_undercut_pooled`/
+  `fetch_seller_stock_without_order_pooled` desktop callers: the screen
+  builds the union of every seller's own orders and sums every seller's
+  remaining sell volume/assets before calling the (already
+  pooled-shaped) matching functions once - a cheaper order or covering
+  listing from one of your *own* other sellers is no longer mistaken for
+  a competitor undercutting you or missing stock (GitHub issue #46).
 - **Trading -> Price History** (`data/history/GoonmetricsClient.kt`,
   `data/trading/HistoryBacktest.kt`, `ui/screens/PriceHistoryScreen.kt`): a
   Kotlin port of `goonmetrics_client.py`'s `price_history`/
@@ -146,16 +151,27 @@ current scope.
   estimate whenever the journal has it). New `EsiClient` methods:
   `characterWalletTransactions` (from_id cursor pagination over ESI's
   2500-per-page cap) and `characterWalletJournal` (page/X-Pages, same
-  scheme as `characterAssets`). Simplified vs. desktop: one buyer and one
-  seller character rather than pooled multi-character matching; the buy-side
-  location filter prefers the whole Forge region via the local SDE cache
-  when it's populated (`SdeRepository.stationIdsInRegion`), falling back to
-  just Jita's own solar system via a live `solarSystemStationIds` call on
-  an unrefreshed cache; item names/volumes for any traded type_id fall back
-  to a live `/universe/types/`
-  call (no shortlist coverage guarantee, unlike Price History); nothing is
-  persisted between runs, so `average_daily_sold_by_type` (which needs a
-  saved run to read back) isn't ported at all; there's no raw
+  scheme as `characterAssets`). The buy-side location filter prefers the
+  whole Forge region via the local SDE cache when it's populated
+  (`SdeRepository.stationIdsInRegion`), falling back to just Jita's own
+  solar system via a live `solarSystemStationIds` call on an unrefreshed
+  cache; item names/volumes for any traded type_id fall back to a live
+  `/universe/types/` call (no shortlist coverage guarantee, unlike Price
+  History). Now pools *every* registered buyer and seller character:
+  `reconcile_realized_trades` pools any buyer's buys against any seller's
+  sells rather than pairing them 1:1 by character (confirmed by reading
+  `trade_reconciliation.py` directly), so the screen fetches every
+  registered buyer's and seller's transactions - and unions every
+  seller's wallet-journal entries by ref id - before one combined FIFO
+  match, the same way `TradeReconciliation.kt`'s matching functions were
+  already shaped to accept. `average_daily_sold_by_type` is also now
+  ported: it looked like it needed desktop's persisted-snapshot table
+  (`storage.py`'s `save_realized_trades`/`latest_realized_trades`), but
+  reading that code shows it's just a single-row cache of the last run
+  for GUI convenience across restarts, not a real historical-runs store -
+  the metric itself only needs a run's own trade list, which this screen
+  already holds in memory after every Reconcile press, so it's a pure
+  aggregation with no new storage. There's still no raw
   wallet-transaction listing, the other half of the desktop tab.
 - **The SDE cache** (`data/sde/`: `SdeCsv.kt`, `SdeEntities.kt`,
   `SdeDownloader.kt`, `SdeRepository.kt`; `ui/screens/SdeDataScreen.kt`,
