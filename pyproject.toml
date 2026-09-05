@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "eve-trader-local"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first, server-less variant of eve-trader: embedded SQLite, single user, EVE SSO login."
 requires-python = ">=3.10"
 dependencies = [
