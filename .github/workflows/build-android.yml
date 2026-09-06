@@ -17,6 +17,14 @@ name: Build Android debug APK
 # in the "real" sense build-windows.yml's tagged .exe releases are.
 on:
   push:
+    # GitHub's own documented gotcha: specifying `tags` without `branches`
+    # makes a push trigger match ONLY tag pushes, silently dropping every
+    # ordinary branch push (this bit real CI here on 2026-09-05 - several
+    # pushes to this branch built nothing, no error, just no run at all,
+    # until this was diagnosed and fixed). `branches: ["**"]` restores
+    # "any branch" alongside the tag pattern.
+    branches:
+      - "**"
     paths:
       - "android/**"
       - ".github/workflows/build-android.yml"
