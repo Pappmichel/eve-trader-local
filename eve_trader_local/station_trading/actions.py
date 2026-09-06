@@ -13,15 +13,24 @@ import datetime as dt
 from typing import Optional
 
 from .. import storage
-from ..config import OAUTH_CONFIG, OAuthConfig
+from ..config import OAUTH_CONFIG, TRADING_CONFIG, OAuthConfig
 from ..errors import ActionError, ConfigError
-from ..esi_client import ESIClient, ESIError
+from ..esi_client import ESIClient, ESIError, OrderStats
 from ..auth import TokenManager
 from . import esi_sync
 from .candidate_discovery import confirm_live, discover_candidates
 from .config import STATION_TRADING_CONFIG, StationTradingConfig, save_config_overrides
 from .constants import SKILL_LABELS, order_slots_from_skills
 from .undercut import check_buy_undercut_pooled, check_undercut_pooled
+
+_UNDERCUT_CACHE_KEY = "station_trading:undercut"
+_SKILLS_CACHE_KEY = "station_trading:skills"
+
+
+def _jita_market() -> str:
+    # Read fresh, not a module-level constant - TRADING_CONFIG.jita_region_id
+    # can change via config.reload() after this module is first imported.
+    return f"region:{TRADING_CONFIG.jita_region_id}"
 
 
 def now_ts() -> str:
@@ -56,14 +65,30 @@ def _profit(live_buy: Optional[float], live_sell: Optional[float],
     return profit_per_unit, margin
 
 
+def _cache_order_book_stats(market: str, stats_by_id: dict[int, OrderStats]) -> None:
+    if not stats_by_id:
+        return
+    cache_rows = {tid: (s.buy_percentile, s.sell_percentile, s.buy_volume, s.sell_volume)
+                 for tid, s in stats_by_id.items()}
+    storage.save_order_book_stats(market, cache_rows, now_ts())
+
+
+def _order_stats_from_cache(market: str, type_ids: list[int]) -> dict[int, OrderStats]:
+    cached = storage.load_order_book_stats(market, type_ids)
+    return {tid: OrderStats(sell_percentile=sell_pct, sell_volume=sell_vol or 0.0,
+                            buy_percentile=buy_pct, buy_volume=buy_vol or 0.0)
+            for tid, (buy_pct, sell_pct, buy_vol, sell_vol) in cached.items()}
+
+
 def _build_shortlist_rows(rows: list[tuple[int, float, float, str, bool]],
                            cfg: StationTradingConfig) -> list[dict]:
-    """Shared by do_get_shortlist/do_refresh_shortlist - live-confirms every
-    row's price in one bounded confirm_live call (never per-row) and derives
-    category/profit/margin from that live price, not the persisted
-    discovery-time spread (see _profit's own docstring)."""
+    """Shared by do_get_shortlist/do_refresh_shortlist - reads every row's
+    price from storage.order_book_cache (see do_refresh_shortlist, the only
+    place that actually calls confirm_live now) and derives category/profit/
+    margin from it, not the persisted discovery-time spread (see _profit's
+    own docstring)."""
     type_ids = [type_id for type_id, *_rest in rows]
-    live = confirm_live(type_ids)
+    live = _order_stats_from_cache(_jita_market(), type_ids)
     category_names = storage.load_sde_category_names()
     result = []
     for type_id, spread_pct, avg_daily_volume, discovered_at, active in rows:
@@ -101,19 +126,29 @@ def do_remove_trader_character(role_key: str) -> dict:
 
 # ---------------------------------------------------------------- shortlist
 def do_refresh_shortlist(cfg: StationTradingConfig = STATION_TRADING_CONFIG) -> dict:
-    """Re-runs candidate discovery (Goonmetrics-based, see
-    candidate_discovery.discover_candidates) and persists the result -
-    newly-discovered rows all start active; a previously-deactivated
-    type_id stays deactivated (see storage.upsert_station_trading_shortlist).
-    Returns the same live-confirmed, profit-annotated shape do_get_shortlist
-    does (_build_shortlist_rows), so a "Refresh" action's result updates
-    immediately without a second round-trip."""
+    """Part of the esi_update.py "Market Prices" scope group. Re-runs
+    candidate discovery (Goonmetrics-based, see candidate_discovery.discover_
+    candidates) and persists the result - newly-discovered rows all start
+    active; a previously-deactivated type_id stays deactivated (see
+    storage.upsert_station_trading_shortlist). Live-confirms every row on
+    the (now possibly-updated) shortlist via confirm_live and caches the
+    result into storage.order_book_cache - the only place this tool still
+    calls confirm_live; do_get_shortlist/_build_shortlist_rows only ever read
+    that cache back now. Undercut checks and skill summaries are their own
+    scope groups (Market Orders/Skills - see _cache_undercut/
+    _cache_skill_summary), not part of this function anymore. Returns the
+    same live-confirmed, profit-annotated shape do_get_shortlist does, so a
+    sync's result can be inspected immediately without a second round-trip."""
     candidates = discover_candidates(cfg)
     run_ts = now_ts()
     storage.upsert_station_trading_shortlist(
         [(c["type_id"], c["spread_pct"], c["avg_daily_volume"], run_ts) for c in candidates]
     )
-    storage.set_esi_sync_time("station_trading", run_ts)
+
+    all_rows = storage.load_station_trading_shortlist()
+    type_ids = [type_id for type_id, *_rest in all_rows]
+    _cache_order_book_stats(_jita_market(), confirm_live(type_ids))
+
     rows = do_get_shortlist(cfg)
     return {"discovered": len(candidates), "rows": rows}
 
@@ -144,12 +179,16 @@ def _undercut_row_to_dict(r: dict) -> dict:
             "competitor_price": r["competitor_price"], "difference": r["difference"]}
 
 
-def do_check_undercut(cfg: StationTradingConfig = STATION_TRADING_CONFIG,
-                       oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    """Bidirectional: flags any of the trader's own Jita trade-hub orders -
-    buy or sell - that a genuinely different market participant now beats.
-    See undercut.py's own docstring for why both sides need their own live
-    ESI order-book fetch rather than a Goonmetrics snapshot."""
+def _cache_undercut(cfg: StationTradingConfig = STATION_TRADING_CONFIG,
+                    oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """The real live fetch behind do_check_undercut - called only from
+    do_refresh_shortlist. Bidirectional: flags any of the trader's own Jita
+    trade-hub orders - buy or sell - that a genuinely different market
+    participant now beats. See undercut.py's own docstring for why both
+    sides need their own live ESI order-book fetch rather than a Goonmetrics
+    snapshot. Caches the raw (pre-name-resolution) rows - do_check_undercut
+    resolves names at read time against whatever the SDE cache currently
+    has, same as before."""
     tm = TokenManager(oauth_cfg)
     traders = [(character_id, role) for role, character_id, _name in esi_sync.list_trader_characters(tm)]
     if not traders:
@@ -161,18 +200,30 @@ def do_check_undercut(cfg: StationTradingConfig = STATION_TRADING_CONFIG,
         buy_rows = check_buy_undercut_pooled(traders, client, cfg)
     except ESIError as e:
         raise ActionError(f"Could not fetch order-book data ({e}).") from e
+    storage.save_result_cache(_UNDERCUT_CACHE_KEY, {"sell": sell_rows, "buy": buy_rows}, now_ts())
+    return {"sell": len(sell_rows), "buy": len(buy_rows)}
+
+
+def do_check_undercut() -> dict:
+    """Last cached undercut check - see _cache_undercut, run only from
+    do_refresh_shortlist."""
+    cached = storage.load_result_cache(_UNDERCUT_CACHE_KEY)
+    if cached is None:
+        raise ActionError("No cached undercut check yet - run Update Data for Station Trading first.")
+    payload, _computed_at = cached
     return {
-        "sell": [_undercut_row_to_dict(r) for r in sell_rows],
-        "buy": [_undercut_row_to_dict(r) for r in buy_rows],
+        "sell": [_undercut_row_to_dict(r) for r in payload["sell"]],
+        "buy": [_undercut_row_to_dict(r) for r in payload["buy"]],
     }
 
 
 # ------------------------------------------------------------------ skills
-def do_get_skill_summary(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> list[dict]:
-    """Live-pulled trade-skill levels per registered trader character, plus
-    the derived order-slot count - informational only (see constants.py's
-    own docstring for why fee/tax discounts are deliberately NOT derived
-    from these levels)."""
+def _cache_skill_summary(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """The real live fetch behind do_get_skill_summary - called only from
+    do_refresh_shortlist. Trade-skill levels per registered trader
+    character, plus the derived order-slot count - informational only (see
+    constants.py's own docstring for why fee/tax discounts are deliberately
+    NOT derived from these levels)."""
     tm = TokenManager(oauth_cfg)
     client = ESIClient(tokens=tm)
     summaries = []
@@ -188,7 +239,18 @@ def do_get_skill_summary(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> list[dict]:
             "levels": {label: levels.get(skill_id, 0) for skill_id, label in SKILL_LABELS.items()},
             "order_slots": order_slots_from_skills(levels),
         })
-    return summaries
+    storage.save_result_cache(_SKILLS_CACHE_KEY, summaries, now_ts())
+    return {"count": len(summaries)}
+
+
+def do_get_skill_summary() -> list[dict]:
+    """Last cached skill summary - see _cache_skill_summary, run only from
+    do_refresh_shortlist."""
+    cached = storage.load_result_cache(_SKILLS_CACHE_KEY)
+    if cached is None:
+        raise ActionError("No cached skill summary yet - run Update Data for Station Trading first.")
+    payload, _computed_at = cached
+    return payload
 
 
 # ----------------------------------------------------------------- settings

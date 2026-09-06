@@ -8,14 +8,15 @@ own three-way grouping.
   characters' own Jita orders (sell *or* buy) that a genuinely different
   market participant now beats. Shown as two tables (sell/buy), since a row
   is either one or the other, never both.
-- `do_get_skill_summary` - live-pulled trade-skill levels per registered
-  trader character plus the derived order-slot count. One row per
-  character; a character whose skill pull failed shows an error note
-  instead of levels rather than being silently dropped.
+- `do_get_skill_summary` - trade-skill levels per registered trader
+  character plus the derived order-slot count. One row per character; a
+  character whose skill pull failed shows an error note instead of levels
+  rather than being silently dropped.
 
-Neither has a genuinely local read to load on tab-open (both always make a
-live ESI call) - same restraint the Shortlist view documents, so this
-starts empty until a button is clicked."""
+Both are cache-only reads now (see esi_update.py's own docstring) - the live
+ESI fetch only happens inside App > Update Data...'s Station Trading scope.
+Neither loads on tab-open (nothing may have been cached yet), so this starts
+empty until a button is clicked."""
 from __future__ import annotations
 
 import functools
@@ -59,10 +60,10 @@ class UndercutSkillsView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        undercut_btn = QPushButton("Check Undercuts")
+        undercut_btn = QPushButton("Show Undercuts")
         undercut_btn.clicked.connect(self._check_undercut)
         toolbar.addWidget(undercut_btn)
-        skills_btn = QPushButton("Refresh Trader Skills")
+        skills_btn = QPushButton("Show Trader Skills")
         skills_btn.clicked.connect(self._refresh_skills)
         toolbar.addWidget(skills_btn)
         toolbar.addStretch(1)
@@ -77,24 +78,27 @@ class UndercutSkillsView(BaseView):
         self.tabs.addTab(self.skills_table, "Trader Skills")
         self.root_layout.addWidget(self.tabs)
 
+        self._add_staleness_label(["market_orders", "skills"])
         self._finish_status_row()
 
     def _check_undercut(self) -> None:
         self.run_action(functools.partial(station_trading_actions.do_check_undercut), self._on_undercut,
-                        busy_message="Fetching your own and competing Jita orders...")
+                        busy_message="Loading the last cached undercut check...")
 
     def _on_undercut(self, result: dict) -> None:
         populate(self.sell_table, [_undercut_row(r) for r in result["sell"]], default_sort=_UNDERCUT_SORT)
         populate(self.buy_table, [_undercut_row(r) for r in result["buy"]], default_sort=_UNDERCUT_SORT)
         total = len(result["sell"]) + len(result["buy"])
+        self._refresh_staleness_label()
         self.show_info(f"{len(result['sell'])} sell order(s) undercut, {len(result['buy'])} buy order(s) outbid."
                        if total else "None of your Jita orders are currently undercut/outbid.")
 
     def _refresh_skills(self) -> None:
         self.run_action(functools.partial(station_trading_actions.do_get_skill_summary), self._on_skills,
-                        busy_message="Pulling trade-skill levels for every registered trader character...")
+                        busy_message="Loading the last cached trade-skill summary...")
 
     def _on_skills(self, summaries: list[dict]) -> None:
         populate(self.skills_table, [_skill_row(s) for s in summaries])
+        self._refresh_staleness_label()
         self.show_info(f"{len(summaries)} trader character(s)." if summaries else
                        "No trader characters registered yet. Run: eve-trader-local auth --role trader")

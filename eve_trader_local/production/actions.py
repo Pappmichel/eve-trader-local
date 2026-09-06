@@ -48,16 +48,55 @@ def do_remove_producer_character(role_key: str, oauth_cfg: OAuthConfig = OAUTH_C
     return {"removed": role_key}
 
 
-def do_sync_esi(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    """Refreshes every producer character's (and their corps') assets,
-    blueprints and industry jobs from ESI.
+def _sync_assets_jobs_blueprints(oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """Every producer character's (and their corps') assets, blueprints and
+    industry jobs. Backs all three of esi_update.py's Assets/Industry Jobs/
+    Blueprints scope groups - ESI has no per-scope fetch for these that's
+    cheaper than the one combined per-character pass esi_sync.sync_esi
+    already does, so checking any one of the three in the "Update Data"
+    dialog refreshes all three together (a deliberate, documented
+    simplification - independent *timers* for these three specifically
+    aren't worth a 3x-slower sync).
 
     This is what puts real owned-BPO ME/TE behind engine._owned_bpo_mods, so it
     covers every case that can change a Tech I build cost: a newly registered
     character's first sync, a BPO finishing research, or a blueprint changing
     hands. Registering or removing a character changes no stored blueprint data
     by itself - only this does."""
-    result = esi_sync.sync_esi(oauth_cfg)
+    return esi_sync.sync_esi(oauth_cfg)
+
+
+def _sync_cost_indices(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Part of the esi_update.py "Cost Indices / Adjusted Prices" scope
+    group: system cost indices and adjusted (EIV) prices job-cost modeling
+    needs."""
+    return {
+        "component": pricing.refresh_system_cost_indices(cfg.component_system_id) or None,
+        "manufacturing": pricing.refresh_system_cost_indices(cfg.manufacturing_system_id) or None,
+        "adjusted_prices": len(pricing.refresh_adjusted_prices()),
+    }
+
+
+def _sync_market_prices(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Part of the esi_update.py "Market Prices" scope group: home/Jita
+    price refresh for engine.production_price_universe() (every ship + stock
+    target, material-closure expanded) - see that function's own docstring
+    for why margins/build-tree/stock-value read prices from cache instead of
+    a live ESI call now."""
+    priced_type_ids = engine.production_price_universe()
+    return {"home_prices": len(pricing.refresh_home_prices(priced_type_ids, cfg)),
+            "jita_prices": len(pricing.refresh_jita_prices(priced_type_ids))}
+
+
+def do_sync_esi(oauth_cfg: OAuthConfig = OAUTH_CONFIG, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """The CLI's own "do everything Production needs, in one command"
+    convenience wrapper - unrelated to esi_update.py's per-scope-group
+    "Update Data" dialog (see that module's own docstring), which triggers
+    _sync_assets_jobs_blueprints/_sync_cost_indices/_sync_market_prices
+    independently instead."""
+    result = _sync_assets_jobs_blueprints(oauth_cfg)
+    result["cost_indices"] = _sync_cost_indices(cfg)
+    result["market_prices"] = _sync_market_prices(cfg)
     storage.set_esi_sync_time(SYNC_SCOPE, datetime.now(timezone.utc).isoformat())
     return result
 
@@ -237,16 +276,16 @@ def do_search_item_locations(type_id_or_name: str) -> dict:
 
 
 def do_get_system_cost_indices(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
-    """Live ESI cost indices for the configured component/manufacturing
-    systems - a display-only hint for Settings' manual override fields (so
-    "what's a sane value here" doesn't require guessing). Never raises -
-    pricing.system_cost_indices_for already degrades to {} on any ESI
-    failure or unset system_id; {} is normalized to None here so a caller
-    can treat "no data" as one falsy value."""
-    esi_client = ESIClient()
+    """Cached cost indices for the configured component/manufacturing
+    systems (see esi_sync.sync_esi, which now also refreshes these) - a
+    display-only hint for Settings' manual override fields (so "what's a
+    sane value here" doesn't require guessing). Never raises -
+    pricing.cached_system_cost_indices already degrades to {} on an unset
+    system_id or nothing cached yet; {} is normalized to None here so a
+    caller can treat "no data" as one falsy value."""
     return {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id) or None,
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id) or None,
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id) or None,
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id) or None,
     }
 
 

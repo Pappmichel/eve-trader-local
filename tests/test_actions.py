@@ -172,19 +172,28 @@ def test_remove_trading_character_delegates_to_the_token_manager(monkeypatch, db
 
 
 # ------------------------------------------------------------------ wallet
-def test_wallet_balance_reads_the_live_value(monkeypatch, db, cfg):
+def test_cache_wallet_balances_writes_the_live_value(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager([StubRecord("buyer:1", 1, "Buyer One")]),
             client=StubClient(balance=1234.5))
-    assert actions.do_wallet_balance("buyer:1", cfg)["balance"] == 1234.5
+    result = actions._cache_wallet_balances(cfg)
+    assert result == {"cached": 1, "characters": 1}
+    assert actions.do_wallet_balance("buyer:1")["balance"] == 1234.5
 
 
 def test_wallet_balance_for_an_unknown_character_is_an_action_error(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager(), client=StubClient())
     with pytest.raises(ActionError, match="not logged in"):
-        actions.do_wallet_balance("buyer:9", cfg)
+        actions.do_wallet_balance("buyer:9")
 
 
-def test_wallet_transactions_are_labelled_and_newest_first(monkeypatch, db, cfg):
+def test_wallet_balance_needs_a_prior_sync(monkeypatch, db, cfg):
+    install(monkeypatch, tokens=StubTokenManager([StubRecord("buyer:1", 1, "Buyer One")]),
+            client=StubClient())
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_wallet_balance("buyer:1")
+
+
+def test_cache_wallet_transactions_labels_and_writes_the_live_value(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager([StubRecord("buyer:1", 1, "Buyer One")]),
             client=StubClient())
     storage.replace_sde_data(types=[(TRIT, 18, "Tritanium", 0.01, 1, 1857, 0, None, 1)],
@@ -196,11 +205,20 @@ def test_wallet_transactions_are_labelled_and_newest_first(monkeypatch, db, cfg)
         {"transaction_id": 2, "date": "2026-08-05T00:00:00Z", "type_id": PYERITE, "is_buy": False,
          "quantity": 2, "unit_price": 7.0, "location_id": 60003760},
     ])
+    result = actions._cache_wallet_transactions(cfg)
+    assert result == {"cached": 1, "characters": 1}
     rows = actions.do_wallet_transactions("buyer:1", cfg=cfg)
     assert [r["transaction_id"] for r in rows] == [2, 1]
     assert rows[1]["item"] == "Tritanium"
     assert rows[0]["item"] == str(PYERITE)     # not in the SDE cache - id, never a guess
     assert rows[1]["total"] == pytest.approx(50.0)
+
+
+def test_wallet_transactions_needs_a_prior_sync(monkeypatch, db, cfg):
+    install(monkeypatch, tokens=StubTokenManager([StubRecord("buyer:1", 1, "Buyer One")]),
+            client=StubClient())
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_wallet_transactions("buyer:1", cfg=cfg)
 
 
 # ---------------------------------------------------------------- settings
@@ -310,6 +328,9 @@ def test_refresh_shortlist_needs_a_shortlist(monkeypatch, db, cfg):
 
 
 def test_refresh_shortlist_prices_every_item_and_saves_a_snapshot(monkeypatch, db, cfg):
+    """_cache_shortlist_market_prices (Market Prices scope) does the live
+    fetch; do_refresh_shortlist (pure local, see esi_update.py's own
+    docstring) then recomputes from that cache alone."""
     storage.upsert_shortlist([ShortlistItem(item="Tritanium", item_id=TRIT, category="Material",
                                             volume_m3=1.0, meta_level=0)])
     client = StubClient(structure_stats={TRIT: stats(200.0)}, jita_stats={TRIT: stats(100.0)})
@@ -319,12 +340,12 @@ def test_refresh_shortlist_prices_every_item_and_saves_a_snapshot(monkeypatch, d
                                                       date="2026-08-01", min_price=1.0,
                                                       max_price=2.0, avg_price=1.5,
                                                       movement=1000.0, num_orders=4)]))
+    actions._cache_shortlist_market_prices(cfg)
     result = actions.do_refresh_shortlist(cfg)
     assert result["summary"]["import_candidates"] == 1
     assert result["top_imports"][0]["max_profit_per_day"] == pytest.approx(100_000.0)
     saved = storage.latest_shortlist_snapshot()
     assert [(r.item_id, r.decision) for r in saved] == [(TRIT, "Import")]
-    assert storage.get_esi_sync_time("trading") is not None
 
 
 def test_refresh_shortlist_turns_a_structure_failure_into_a_clear_error(monkeypatch, db, cfg):
@@ -334,11 +355,12 @@ def test_refresh_shortlist_turns_a_structure_failure_into_a_clear_error(monkeypa
             client=StubClient(structure_error=ESIError("403 Forbidden")),
             goonmetrics=StubGoonmetrics())
     with pytest.raises(ActionError, match="docking access"):
-        actions.do_refresh_shortlist(cfg)
+        actions._cache_shortlist_market_prices(cfg)
 
 
 def test_refresh_shortlist_survives_a_history_outage(monkeypatch, db, cfg):
-    """A Goonmetrics outage must degrade Profit/Day to "no data", not abort."""
+    """A Goonmetrics outage must degrade Profit/Day to "no data", not abort
+    the price cache step."""
     storage.upsert_shortlist([ShortlistItem(item="Tritanium", item_id=TRIT, category="Material",
                                             volume_m3=1.0, meta_level=0)])
 
@@ -349,6 +371,7 @@ def test_refresh_shortlist_survives_a_history_outage(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager([StubRecord("seller:2", 2, "Seller")]),
             client=StubClient(structure_stats={TRIT: stats(200.0)}, jita_stats={TRIT: stats(100.0)}),
             goonmetrics=BrokenGoonmetrics())
+    actions._cache_shortlist_market_prices(cfg)
     result = actions.do_refresh_shortlist(cfg)
     assert result["top_imports"] == []
     assert storage.latest_shortlist_snapshot()[0].avg_daily_volume is None
@@ -361,19 +384,22 @@ def test_meta_levels_are_backfilled_and_persisted(monkeypatch, db, cfg):
             client=StubClient(structure_stats={TRIT: stats(200.0)},
                               jita_stats={TRIT: stats(100.0)}, meta_levels={TRIT: 5}),
             goonmetrics=StubGoonmetrics())
-    result = actions.do_refresh_shortlist(cfg)
+    result = actions._cache_shortlist_market_prices(cfg)
     assert result["meta_level_backfill"]["fetched"] == 1
     assert storage.load_shortlist()[0].meta_level == 5
 
 
 # ------------------------------------------------------ live one-shot checks
-def test_unlisted_stock_needs_a_seller(monkeypatch, db, cfg):
+# do_check_seller_unlisted_stock/do_check_undercut are cache-only reads now
+# (see esi_update.py's own docstring) - the private _fetch_*/_cache_* below
+# are the real live fetch, exercised the same way the old do_* tests did.
+def test_fetch_seller_unlisted_stock_needs_a_seller(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager(), client=StubClient())
     with pytest.raises(ActionError, match="No seller character"):
-        actions.do_check_seller_unlisted_stock(cfg)
+        actions._fetch_seller_unlisted_stock(cfg)
 
 
-def test_unlisted_stock_is_enriched_with_name_and_margin(monkeypatch, db, cfg):
+def test_fetch_seller_unlisted_stock_is_enriched_with_name_and_margin(monkeypatch, db, cfg):
     storage.upsert_shortlist([ShortlistItem(item="Tritanium", item_id=TRIT, category="Material",
                                             volume_m3=1.0)])
     storage.replace_sde_data(types=[(TRIT, 18, "Tritanium", 2.0, 1, 1857, 0, None, 1)],
@@ -384,7 +410,7 @@ def test_unlisted_stock_is_enriched_with_name_and_margin(monkeypatch, db, cfg):
                         structure_stats={TRIT: stats(200.0, sell_volume=12.0)},
                         jita_stats={TRIT: stats(100.0)})
     install(monkeypatch, tokens=StubTokenManager([StubRecord("seller:2", 2, "Seller")]), client=client)
-    rows = actions.do_check_seller_unlisted_stock(cfg)["rows"]
+    rows = actions._fetch_seller_unlisted_stock(cfg)["rows"]
     assert len(rows) == 1
     assert rows[0].item == "Tritanium"
     assert rows[0].unlisted_quantity == 40
@@ -392,7 +418,7 @@ def test_unlisted_stock_is_enriched_with_name_and_margin(monkeypatch, db, cfg):
     assert rows[0].margin == pytest.approx(1.0)      # net sell 200 vs landed cost 100
 
 
-def test_unlisted_stock_asks_for_a_re_login_when_the_assets_scope_is_missing(monkeypatch, db, cfg):
+def test_fetch_seller_unlisted_stock_asks_for_a_re_login_when_the_assets_scope_is_missing(monkeypatch, db, cfg):
     storage.upsert_shortlist([ShortlistItem(item="Tritanium", item_id=TRIT, category="Material",
                                             volume_m3=1.0)])
     install(monkeypatch, tokens=StubTokenManager([StubRecord("seller:2", 2, "Seller")]),
@@ -400,35 +426,70 @@ def test_unlisted_stock_asks_for_a_re_login_when_the_assets_scope_is_missing(mon
     monkeypatch.setattr(own_orders, "fetch_seller_stock_without_order_pooled",
                         lambda *a, **k: (_ for _ in ()).throw(ESIError("403 Forbidden")))
     with pytest.raises(ActionError, match="esi-assets.read_assets.v1"):
-        actions.do_check_seller_unlisted_stock(cfg)
+        actions._fetch_seller_unlisted_stock(cfg)
 
 
-def test_check_undercut_resolves_item_names(monkeypatch, db, cfg):
+def test_unlisted_stock_needs_a_prior_sync(db):
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_check_seller_unlisted_stock()
+
+
+def test_fetch_undercut_resolves_item_names(monkeypatch, db, cfg):
     storage.replace_sde_data(types=[(TRIT, 18, "Tritanium", 0.01, 1, 1857, 0, None, 1)],
                              groups=[], market_groups=[], blueprint_time=[],
                              blueprint_materials=[], blueprint_products=[])
     client = StubClient(orders={2: [sell_order(10, TRIT, 100.0)]},
                         book=[sell_order(10, TRIT, 100.0), sell_order(99, TRIT, 90.0)])
     install(monkeypatch, tokens=StubTokenManager([StubRecord("seller:2", 2, "Seller")]), client=client)
-    rows = actions.do_check_undercut(cfg)["rows"]
+    rows = actions._fetch_undercut(cfg)["rows"]
     assert [(r.item, r.my_price, r.competitor_price) for r in rows] == [("Tritanium", 100.0, 90.0)]
 
 
-def test_check_undercut_needs_a_seller(monkeypatch, db, cfg):
+def test_fetch_undercut_needs_a_seller(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager(), client=StubClient())
     with pytest.raises(ActionError, match="No seller character"):
-        actions.do_check_undercut(cfg)
+        actions._fetch_undercut(cfg)
+
+
+def test_check_undercut_needs_a_prior_sync(db):
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_check_undercut()
+
+
+def test_cache_unlisted_stock_and_undercut_isolates_failures_and_caches_rows(monkeypatch, db, cfg):
+    # TRIT: unlisted stock (asset sitting at the structure, no sell order at
+    # all). PYERITE: undercut (my own order beaten by a cheaper competitor) -
+    # two different items, since "has an open order" and "has no open order
+    # at all" are mutually exclusive for the same type_id.
+    storage.upsert_shortlist([ShortlistItem(item="Tritanium", item_id=TRIT, category="Material",
+                                            volume_m3=1.0)])
+    storage.replace_sde_data(types=[(TRIT, 18, "Tritanium", 2.0, 1, 1857, 0, None, 1),
+                                    (PYERITE, 18, "Pyerite", 2.0, 1, 1857, 0, None, 1)],
+                             groups=[], market_groups=[], blueprint_time=[],
+                             blueprint_materials=[], blueprint_products=[])
+    client = StubClient(assets={2: [{"type_id": TRIT, "quantity": 40, "location_id": STRUCTURE,
+                                     "location_flag": "Hangar"}]},
+                        orders={2: [sell_order(10, PYERITE, 100.0)]},
+                        book=[sell_order(10, PYERITE, 100.0), sell_order(99, PYERITE, 90.0)],
+                        structure_stats={TRIT: stats(200.0, sell_volume=12.0)},
+                        jita_stats={TRIT: stats(100.0)})
+    install(monkeypatch, tokens=StubTokenManager([StubRecord("seller:2", 2, "Seller")]), client=client)
+    result = actions._cache_unlisted_stock_and_undercut(cfg)
+    assert result["unlisted_stock"] == {"count": 1}
+    assert result["undercut"] == {"count": 1}
+    assert actions.do_check_seller_unlisted_stock()["rows"][0].item == "Tritanium"
+    assert actions.do_check_undercut()["rows"][0].item == "Pyerite"
 
 
 # --------------------------------------------------------- realized trades
-def test_reconcile_trades_needs_both_roles(monkeypatch, db, cfg):
+def test_cache_reconcile_trades_needs_both_roles(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager([StubRecord("buyer:1", 1, "Buyer")]),
             client=StubClient())
     with pytest.raises(ActionError, match="buyer and one seller"):
-        actions.do_reconcile_trades(cfg)
+        actions._cache_reconcile_trades(cfg)
 
 
-def test_reconcile_trades_persists_the_matched_pairs(monkeypatch, db, cfg):
+def test_cache_reconcile_trades_persists_the_matched_pairs(monkeypatch, db, cfg):
     install(monkeypatch, tokens=StubTokenManager([StubRecord("buyer:1", 1, "Buyer"),
                                                   StubRecord("seller:2", 2, "Seller")]),
             client=StubClient())
@@ -437,10 +498,17 @@ def test_reconcile_trades_persists_the_matched_pairs(monkeypatch, db, cfg):
                           sell_qty=10, sell_unit_price=8.0, matched_qty=10,
                           realized_profit=30.0, margin=0.6)
     monkeypatch.setattr(actions, "reconcile_realized_trades", lambda *a, **k: [trade])
-    result = actions.do_reconcile_trades(cfg)
+    result = actions._cache_reconcile_trades(cfg)
     assert result["matched_trades"] == 1
     assert result["total_realized_profit"] == pytest.approx(30.0)
     assert [t.type_id for t in storage.latest_realized_trades()] == [TRIT]
+    # do_reconcile_trades is the cache-read counterpart - same result, no network.
+    assert actions.do_reconcile_trades()["matched_trades"] == 1
+
+
+def test_reconcile_trades_needs_a_prior_sync(db):
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_reconcile_trades()
 
 
 # ------------------------------------------------------ pruning / reactivation
@@ -471,9 +539,8 @@ def test_reactivation_needs_volume_profit_and_margin(cfg):
 def test_refresh_and_prune_deactivates_and_reflects_it_in_the_snapshot(monkeypatch, db, cfg):
     items = [ShortlistItem(item="Item 1", item_id=1, category="Material", volume_m3=1.0)]
     rows = [row(1, decision="Skip")]
-    monkeypatch.setattr(actions, "do_find_new_candidates", lambda **k: {"evaluated": 0, "recommended": 0})
     monkeypatch.setattr(actions, "do_add_to_shortlist", lambda: {"added": 0})
-    monkeypatch.setattr(actions, "_refresh_shortlist_rows", lambda *a, **k: (items, rows, {}))
+    monkeypatch.setattr(actions, "_compute_shortlist_rows", lambda *a, **k: (items, rows))
     storage.upsert_shortlist(items)
     storage.start_shortlist_skip_streak([1], "2026-01-01T00:00:00")
 
@@ -490,9 +557,8 @@ def test_refresh_and_prune_starts_and_clears_streaks(monkeypatch, db, cfg):
     items = [ShortlistItem(item="Item 1", item_id=1, category="Material", volume_m3=1.0),
              ShortlistItem(item="Item 2", item_id=2, category="Material", volume_m3=1.0)]
     rows = [row(1, decision="Skip"), row(2, decision="Import")]
-    monkeypatch.setattr(actions, "do_find_new_candidates", lambda **k: {"evaluated": 0, "recommended": 0})
     monkeypatch.setattr(actions, "do_add_to_shortlist", lambda: {"added": 0})
-    monkeypatch.setattr(actions, "_refresh_shortlist_rows", lambda *a, **k: (items, rows, {}))
+    monkeypatch.setattr(actions, "_compute_shortlist_rows", lambda *a, **k: (items, rows))
     storage.upsert_shortlist(items)
     storage.start_shortlist_skip_streak([2], "2026-01-01T00:00:00")
 
@@ -516,7 +582,10 @@ def test_pipeline_isolates_a_failing_step(monkeypatch, db, cfg):
         raise ActionError("shortlist is empty")
 
     monkeypatch.setattr(actions, "do_refresh_and_prune_candidates", boom)
-    monkeypatch.setattr(actions, "do_reconcile_trades", lambda *a, **k: {"matched_trades": 3})
+    monkeypatch.setattr(actions, "_cache_reconcile_trades", lambda *a, **k: {"matched_trades": 3})
+    monkeypatch.setattr(actions, "_cache_wallet_balances", lambda *a, **k: {"cached": 0})
+    monkeypatch.setattr(actions, "_cache_wallet_transactions", lambda *a, **k: {"cached": 0})
+    monkeypatch.setattr(actions, "_cache_unlisted_stock_and_undercut", lambda *a, **k: {})
     results = actions.do_pipeline(cfg=cfg)
     assert results["refresh_and_prune_candidates"] == {"error": "shortlist is empty"}
     # The later step still ran - that is the whole point of the isolation.
@@ -528,7 +597,10 @@ def test_pipeline_isolates_an_esi_failure_too(monkeypatch, db, cfg):
         raise ESIError("503 Service Unavailable")
 
     monkeypatch.setattr(actions, "do_refresh_and_prune_candidates", lambda **k: {"ok": True})
-    monkeypatch.setattr(actions, "do_reconcile_trades", boom)
+    monkeypatch.setattr(actions, "_cache_reconcile_trades", boom)
+    monkeypatch.setattr(actions, "_cache_wallet_balances", lambda *a, **k: {"cached": 0})
+    monkeypatch.setattr(actions, "_cache_wallet_transactions", lambda *a, **k: {"cached": 0})
+    monkeypatch.setattr(actions, "_cache_unlisted_stock_and_undercut", lambda *a, **k: {})
     results = actions.do_pipeline(cfg=cfg)
     assert results["refresh_and_prune_candidates"] == {"ok": True}
     assert "503" in results["reconcile_trades"]["error"]
@@ -539,7 +611,10 @@ def test_pipeline_skips_the_universe_rebuild_unless_asked(monkeypatch, db, cfg):
     monkeypatch.setattr(actions, "do_build_universe", lambda *a, **k: calls.append("universe") or {"count": 1})
     monkeypatch.setattr(actions, "do_build_focused", lambda *a, **k: calls.append("focused") or {"count": 1})
     monkeypatch.setattr(actions, "do_refresh_and_prune_candidates", lambda **k: {"ok": True})
-    monkeypatch.setattr(actions, "do_reconcile_trades", lambda *a, **k: {"matched_trades": 0})
+    monkeypatch.setattr(actions, "_cache_reconcile_trades", lambda *a, **k: {"matched_trades": 0})
+    monkeypatch.setattr(actions, "_cache_wallet_balances", lambda *a, **k: {"cached": 0})
+    monkeypatch.setattr(actions, "_cache_wallet_transactions", lambda *a, **k: {"cached": 0})
+    monkeypatch.setattr(actions, "_cache_unlisted_stock_and_undercut", lambda *a, **k: {})
 
     actions.do_pipeline(cfg=cfg)
     assert calls == []

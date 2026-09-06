@@ -32,7 +32,7 @@ def test_main_window_has_an_app_menu_with_settings_and_characters(qapp, db):
 
     app_menu = window.menuBar().actions()[menu_labels.index("App")].menu()
     action_labels = [action.text() for action in app_menu.actions()]
-    assert action_labels == ["Settings...", "Characters...", "Check for Updates..."]
+    assert action_labels == ["Settings...", "Characters...", "Update Data...", "Check for App Updates..."]
 
 
 def test_settings_dialog_opens_and_shows_all_five_tool_tabs(qapp, db):

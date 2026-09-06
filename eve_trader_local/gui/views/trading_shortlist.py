@@ -1,22 +1,12 @@
-"""Trading's Shortlist tab: the live import/sell decision table plus the two
-actions that (re)compute it. Groups three CLI commands into one view, since
-they all operate on the same on-screen table:
-
-- `refresh-shortlist` (`do_refresh_shortlist`) - re-fetches live prices and
-  recomputes every row's decision, no candidate search.
-- `refresh-and-prune` (`do_refresh_and_prune_candidates`) - the daily-driver
-  one-button action: finds new candidates, adds recommended ones, refreshes,
-  then deactivates/reactivates per the grace-period and cap rules.
-- On open, loads the last saved snapshot from storage directly (no network
-  call) via `storage.latest_shortlist_snapshot` - the CLI's own
-  `list-shortlist` equivalent - so the view shows *something* immediately
-  rather than an empty table until the user clicks Refresh.
-
-Candidate-universe building (`build-universe`/`build-focused`, an occasional
-setup step, not a daily one - see `actions.do_pipeline`'s own docstring) is
-deliberately not on this tab; it belongs with Trading's Settings/setup view
-once that exists, matching the CLI's own framing of it as setup rather than
-routine shortlist work.
+"""Trading's Shortlist tab: the import/sell decision table. `do_refresh_
+shortlist` is a pure local recompute now (no network - see esi_update.py's
+own docstring): it reads whatever the Market Orders/Assets/Market Prices
+scopes last cached and re-evaluates every row, so "Reload" here is cheap and
+always safe to click, unlike the live ESI/Goonmetrics fetch that only ever
+happens via App > Update Data... On open, the last saved snapshot loads
+directly from storage first (`storage.latest_shortlist_snapshot`, the CLI's
+own `list-shortlist` equivalent) so the tab shows something immediately,
+then a Reload recomputes it.
 """
 from __future__ import annotations
 
@@ -59,40 +49,33 @@ class TradingShortlistView(TableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_toolbar([
-            ("Refresh", self._refresh),
-            ("Refresh && Prune", self._refresh_and_prune),
+            ("Reload", self._reload),
         ])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
+        self._add_staleness_label(["market_orders", "assets", "market_prices"])
         self._finish_status_row()
         self._load_last_snapshot()
 
     def _load_last_snapshot(self) -> None:
         try:
             rows = storage.latest_shortlist_snapshot()
-        except Exception as e:  # noqa: BLE001 - best-effort initial fill, Refresh recovers from any real problem
+        except Exception as e:  # noqa: BLE001 - best-effort initial fill, Reload recovers from any real problem
             self.show_error(f"Could not load the last saved snapshot: {e!r}")
             return
         self.populate_table([_row_to_cells(r) for r in rows])
+        self._refresh_staleness_label()
         if rows:
-            self.show_info(f"Showing the last saved snapshot ({len(rows)} items). Click Refresh for live data.")
+            self.show_info(f"Showing the last saved snapshot ({len(rows)} items). "
+                           "Click Reload to recompute it, or App > Update Data... to refresh the prices first.")
 
-    def _refresh(self) -> None:
-        self.run_action(functools.partial(actions.do_refresh_shortlist), self._on_refreshed,
-                        busy_message="Fetching live prices and recomputing decisions...")
+    def _reload(self) -> None:
+        self.run_action(functools.partial(actions.do_refresh_shortlist), self._on_reloaded,
+                        busy_message="Recomputing the shortlist from cached prices/orders...")
 
-    def _refresh_and_prune(self) -> None:
-        self.run_action(functools.partial(actions.do_refresh_and_prune_candidates), self._on_refreshed,
-                        busy_message="Searching new candidates, refreshing, and pruning the shortlist...")
-
-    def _on_refreshed(self, result: dict) -> None:
+    def _on_reloaded(self, result: dict) -> None:
         rows = storage.latest_shortlist_snapshot()
         self.populate_table([_row_to_cells(r) for r in rows])
+        self._refresh_staleness_label()
         summary = result.get("summary", {})
         parts = [f"{k}: {v}" for k, v in summary.items()]
-        deactivated = result.get("deactivated_count")
-        reactivated = result.get("reactivated_count")
-        if deactivated is not None:
-            parts.append(f"deactivated: {deactivated}")
-        if reactivated is not None:
-            parts.append(f"reactivated: {reactivated}")
-        self.show_info("Refreshed - " + ", ".join(parts) if parts else "Refreshed.")
+        self.show_info("Recomputed - " + ", ".join(parts) if parts else "Recomputed.")

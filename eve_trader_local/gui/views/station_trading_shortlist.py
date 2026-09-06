@@ -1,23 +1,11 @@
-"""Station Trading's Shortlist tab: groups the two shortlist CLI commands
-into one view, same "one table, buttons that (re)build it" shape as
-trading_shortlist.py/refining_ore_shortlist.py -
-
-- `refresh-station-shortlist` (`do_refresh_shortlist`) - re-runs the
-  Goonmetrics-driven Jita-wide spread/volume candidate scan, persists the
-  result (newly-discovered rows start active, a previously-deactivated
-  type_id stays deactivated), and returns the same live-confirmed rows
-  `do_get_shortlist` does.
-- `list-station-shortlist` (`do_get_shortlist`) - the persisted shortlist,
-  live-confirmed against the real ESI order book on every read.
-
-Unlike trading_shortlist.py/refining_ore_shortlist.py, there is no
-genuinely local (no-network) read to load on tab-open here:
-`do_get_shortlist` always makes a live ESI order-book call to confirm
-prices, even for an already-persisted row (see
-`station_trading/actions.py`'s `_build_shortlist_rows` docstring) - so
-unlike those two views, this one starts empty and waits for a button click,
-same restraint `production_margins_market.py`'s `MarginsMarketView` uses
-for its own network-only reports."""
+"""Station Trading's Shortlist tab: the persisted shortlist
+(`do_get_shortlist`), live-price-confirmed at cache-write time now, not on
+every read - see esi_update.py's own docstring. The Goonmetrics-driven
+Jita-wide spread/volume candidate scan that used to sit behind a "Discover &&
+Refresh" button here (`do_refresh_shortlist`) only runs from App > Update
+Data...'s Station Trading scope now; this view just displays whatever that
+last run cached, same "one table, a Reload button" shape as
+trading_shortlist.py/refining_ore_shortlist.py."""
 from __future__ import annotations
 
 import functools
@@ -50,27 +38,19 @@ class StationShortlistView(TableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_toolbar([
-            ("Show Shortlist", self._show),
-            ("Discover && Refresh", self._refresh),
+            ("Reload", self._show),
         ])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
+        self._add_staleness_label("market_prices")
         self._finish_status_row()
+        self._show()
 
     def _show(self) -> None:
         self.run_action(functools.partial(station_trading_actions.do_get_shortlist), self._on_shown,
-                        busy_message="Live-confirming the persisted shortlist against the real order book...")
+                        busy_message="Loading the last cached shortlist...")
 
     def _on_shown(self, rows: list[dict]) -> None:
         self.populate_table([_row_to_cells(r) for r in rows])
+        self._refresh_staleness_label()
         self.show_info(f"{len(rows)} item(s)." if rows else
-                       "Shortlist is empty - click Discover && Refresh to scan Jita for candidates.")
-
-    def _refresh(self) -> None:
-        self.run_action(functools.partial(station_trading_actions.do_refresh_shortlist), self._on_refreshed,
-                        busy_message="Scanning the whole Jita market for spread/volume candidates "
-                                     "(this can take a while)...")
-
-    def _on_refreshed(self, result: dict) -> None:
-        rows = result["rows"]
-        self.populate_table([_row_to_cells(r) for r in rows])
-        self.show_info(f"Discovered {result['discovered']:,} candidate(s); {len(rows)} in the shortlist.")
+                       "Shortlist is empty - use App > Update Data... to discover candidates.")

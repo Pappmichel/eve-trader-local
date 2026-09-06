@@ -24,7 +24,7 @@ from .. import storage
 from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, TRADING_CONFIG, OAuthConfig, TradingConfig
 from ..errors import ActionError, ConfigError
-from ..esi_client import ESIClient, ESIError
+from ..esi_client import ESIClient, ESIError, OrderStats
 from ..goonmetrics_client import GoonmetricsClient
 from ..production.config import PRODUCTION_CONFIG, ProductionConfig
 from .candidate_discovery import build_ore_candidate_universe
@@ -52,6 +52,25 @@ def _seller_role(tm: TokenManager) -> Optional[str]:
     return records[0].role if records else None
 
 
+# storage.order_book_cache is shared across every tool (see esi_update.py's
+# own docstring) - do_refresh_ore_shortlist below is the only place in this
+# module allowed to write into it; do_quote_reprocessing/do_optimize_
+# mineral_shopping_list only ever read it back through these two helpers.
+def _cache_order_book_stats(market: str, stats_by_id: dict[int, OrderStats]) -> None:
+    if not stats_by_id:
+        return
+    rows = {tid: (s.buy_percentile, s.sell_percentile, s.buy_volume, s.sell_volume)
+            for tid, s in stats_by_id.items()}
+    storage.save_order_book_stats(market, rows, now_ts())
+
+
+def _order_stats_from_cache(market: str, type_ids: list[int]) -> dict[int, OrderStats]:
+    cached = storage.load_order_book_stats(market, type_ids)
+    return {tid: OrderStats(sell_percentile=sell_pct, sell_volume=sell_vol or 0.0,
+                            buy_percentile=buy_pct, buy_volume=buy_vol or 0.0)
+            for tid, (buy_pct, sell_pct, buy_vol, sell_vol) in cached.items()}
+
+
 # --------------------------------------------------------------- Ore Shortlist
 def do_add_ore_to_shortlist() -> dict:
     """Adds every candidate from the fixed SDE-derived universe not already on
@@ -68,11 +87,62 @@ def do_add_ore_to_shortlist() -> dict:
     return {"added": len(new_rows), "already_tracked": len(candidates) - len(new_rows)}
 
 
-def do_refresh_ore_shortlist(trading_cfg: TradingConfig = TRADING_CONFIG,
-                              refining_cfg: RefiningConfig = REFINING_CONFIG,
+def _cache_ore_mineral_prices(trading_cfg: TradingConfig = TRADING_CONFIG,
+                              production_cfg: ProductionConfig = PRODUCTION_CONFIG,
                               oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    """Re-fetches live market data for every shortlist item and recomputes
-    each one's profit/decision, then saves a new snapshot."""
+    """Part of the esi_update.py "Market Prices" scope group - live Jita/C-J
+    prices for the *whole* ore/ice + mineral universe (not just the tracked
+    shortlist), cached into storage.order_book_cache, plus the home-market
+    Goonmetrics snapshot production_cfg.home_market: this is what lets
+    do_refresh_ore_shortlist/do_quote_reprocessing/do_optimize_mineral_
+    shopping_list answer without a live call of their own (see
+    esi_update.py's own docstring)."""
+    candidates = build_ore_candidate_universe()
+    if not candidates:
+        return {"priced": 0}
+
+    tm = TokenManager(oauth_cfg)
+    seller_role = _seller_role(tm)
+    client = ESIClient(trading_cfg, tm)
+
+    all_ore_type_ids = [c.type_id for c in candidates]
+    all_mineral_ids = mineral_type_ids_for(candidates)
+
+    jita_stats_by_id = client.region_order_stats_bulk(trading_cfg.jita_region_id, all_ore_type_ids)
+    _cache_order_book_stats(f"region:{trading_cfg.jita_region_id}", jita_stats_by_id)
+
+    try:
+        # Falls back to a Goonmetrics current-price snapshot when no seller is
+        # logged in or the real call fails - see
+        # structure_order_stats_bulk_or_goonmetrics's own docstring.
+        mineral_stats_by_id, priced_via_fallback = client.structure_order_stats_bulk_or_goonmetrics(
+            trading_cfg.structure_id, all_mineral_ids, auth_role=seller_role,
+            goonmetrics_market_slug=trading_cfg.structure_market_slug)
+    except ESIError as e:
+        raise ActionError(f"Could not fetch the structure's order book ({e}). "
+                           f"Does the seller character still have docking access?") from e
+    _cache_order_book_stats(f"structure:{trading_cfg.structure_id}", mineral_stats_by_id)
+
+    if production_cfg.home_market:
+        try:
+            home_quotes = GoonmetricsClient(trading_cfg).current_prices(production_cfg.home_market)
+        except requests.RequestException:
+            log.warning("Goonmetrics home-market fetch failed - leaving the cached home-market "
+                       "snapshot as it was.")
+        else:
+            _cache_order_book_stats(
+                f"goonmetrics:{production_cfg.home_market}",
+                {p.type_id: OrderStats(sell_percentile=p.sell, sell_volume=0.0,
+                                       buy_percentile=p.buy, buy_volume=0.0) for p in home_quotes})
+
+    return {"priced": len(all_ore_type_ids) + len(all_mineral_ids), "priced_via_fallback": priced_via_fallback}
+
+
+def do_refresh_ore_shortlist(trading_cfg: TradingConfig = TRADING_CONFIG,
+                              refining_cfg: RefiningConfig = REFINING_CONFIG) -> dict:
+    """Pure local recompute of every ore-shortlist row from whatever
+    _cache_ore_mineral_prices last cached - no network call of its own (see
+    esi_update.py's own docstring)."""
     candidates = build_ore_candidate_universe()
     shortlist = storage.load_ore_shortlist()
     if not shortlist:
@@ -81,33 +151,18 @@ def do_refresh_ore_shortlist(trading_cfg: TradingConfig = TRADING_CONFIG,
     tracked_ids = set(active_by_id)
     tracked_candidates = [c for c in candidates if c.type_id in tracked_ids]
 
-    tm = TokenManager(oauth_cfg)
-    seller_role = _seller_role(tm)
-    client = ESIClient(trading_cfg, tm)
-
     ore_type_ids = [c.type_id for c in tracked_candidates]
-    jita_stats_by_id = client.region_order_stats_bulk(trading_cfg.jita_region_id, ore_type_ids)
-
     mineral_ids = mineral_type_ids_for(tracked_candidates)
-    try:
-        # Falls back to a Goonmetrics current-price snapshot when no seller is
-        # logged in or the real call fails - see
-        # structure_order_stats_bulk_or_goonmetrics's own docstring.
-        mineral_stats_by_id, priced_via_fallback = client.structure_order_stats_bulk_or_goonmetrics(
-            trading_cfg.structure_id, mineral_ids, auth_role=seller_role,
-            goonmetrics_market_slug=trading_cfg.structure_market_slug)
-    except ESIError as e:
-        raise ActionError(f"Could not fetch the structure's order book ({e}). "
-                           f"Does the seller character still have docking access?") from e
+    jita_stats_by_id = _order_stats_from_cache(f"region:{trading_cfg.jita_region_id}", ore_type_ids)
+    mineral_stats_by_id = _order_stats_from_cache(f"structure:{trading_cfg.structure_id}", mineral_ids)
 
     rows = evaluate_ore_shortlist(tracked_candidates, active_by_id, jita_stats_by_id, mineral_stats_by_id,
                                    trading_cfg, refining_cfg)
     run_ts = now_ts()
     storage.save_ore_shortlist_snapshot([_row_to_tuple(r) for r in rows], run_ts)
-    storage.set_esi_sync_time("refining", run_ts)
 
     import_count = sum(1 for r in rows if r.decision == "Import")
-    return {"evaluated": len(rows), "import_candidates": import_count, "priced_via_fallback": priced_via_fallback}
+    return {"evaluated": len(rows), "import_candidates": import_count}
 
 
 def _row_to_tuple(r: OreShortlistRow) -> tuple:
@@ -146,13 +201,18 @@ def do_activate_ore_shortlist_items(item_ids: list[int]) -> dict:
 
 # ---------------------------------------------------------- Reprocessing quote
 def do_quote_reprocessing(paste_text: str, trading_cfg: TradingConfig = TRADING_CONFIG,
-                           refining_cfg: RefiningConfig = REFINING_CONFIG,
-                           oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+                           refining_cfg: RefiningConfig = REFINING_CONFIG) -> dict:
     """Parses an EVE inventory "Copy As" paste, quotes each item (sell-as-is
     vs. scrapmetal-reprocessed), and returns both the per-item rows and a
     totals summary. Both the item's own sell price and its mineral yield's
     sell price are C-J-only (consistent with the Ore Shortlist and
-    Production's own established rule)."""
+    Production's own established rule).
+
+    Prices come from storage.order_book_cache - whatever the last "Update
+    Data" run for Ore & Minerals cached (see do_refresh_ore_shortlist) -
+    never a live call: an item outside that run's known ore/mineral universe
+    simply shows as unpriced until some sync happens to cover it (see
+    esi_update.py's own docstring)."""
     if not paste_text or not paste_text.strip():
         raise ActionError("Paste is empty - copy items from an Inventory window's list view first.")
 
@@ -162,20 +222,10 @@ def do_quote_reprocessing(paste_text: str, trading_cfg: TradingConfig = TRADING_
     if not parsed and not error_lines:
         raise ActionError("Could not parse any items from the paste.")
 
-    tm = TokenManager(oauth_cfg)
-    seller_role = _seller_role(tm)
-    client = ESIClient(trading_cfg, tm)
-
     type_ids = [tid for tid in (resolve_type_id(line.name) for line in parsed) if tid is not None]
     mineral_ids = mineral_type_ids_for_lines(type_ids)
     all_ids = sorted(set(type_ids) | set(mineral_ids))
-    try:
-        stats_by_id, priced_via_fallback = client.structure_order_stats_bulk_or_goonmetrics(
-            trading_cfg.structure_id, all_ids, auth_role=seller_role,
-            goonmetrics_market_slug=trading_cfg.structure_market_slug)
-    except ESIError as e:
-        raise ActionError(f"Could not fetch the structure's order book ({e}). "
-                           f"Does the seller character still have docking access?") from e
+    stats_by_id = _order_stats_from_cache(f"structure:{trading_cfg.structure_id}", all_ids)
 
     rows = [_error_line_to_row(line) for line in error_lines]
     for line in parsed:
@@ -190,7 +240,7 @@ def do_quote_reprocessing(paste_text: str, trading_cfg: TradingConfig = TRADING_
         "total_refined_value": sum(r.refined_value or 0.0 for r in reprocess_rows),
         "total_sell_as_is_value": sum(r.sell_as_is_value or 0.0 for r in rows if r.sell_as_is_value is not None),
     }
-    return {"rows": rows, "totals": totals, "priced_via_fallback": priced_via_fallback}
+    return {"rows": rows, "totals": totals}
 
 
 def _error_line_to_row(line) -> ReprocessingQuoteRow:
@@ -320,22 +370,19 @@ def _ore_option(candidate, jita_stats, refining_cfg: RefiningConfig,
 def do_optimize_mineral_shopping_list(requirements: Optional[list[dict]] = None,
                                        trading_cfg: TradingConfig = TRADING_CONFIG,
                                        refining_cfg: RefiningConfig = REFINING_CONFIG,
-                                       production_cfg: ProductionConfig = PRODUCTION_CONFIG,
-                                       oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+                                       production_cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     """Solves "cheapest way to acquire these minerals" across every compressed
     ore/ice type at once (see optimizer.py for the LP itself). `requirements`
     defaults to the saved list; passing one solves an ad-hoc list without
     persisting it.
 
-    Needs NO logged-in character: every price it reads is either a *buy*
-    price from Jita's public regional order book, or an unauthenticated
-    Goonmetrics current-price quote for C-J's own home market - never C-J's
-    authenticated structure order book, since nothing is sold in this
-    workflow (the minerals are consumed by Production). The ore universe is
-    the full SDE-derived one, not the Ore Shortlist's active rows: the
-    shortlist is a profit-tracking selection for the import-and-sell
-    business, and excluding an ore from it shouldn't quietly make a build
-    list more expensive.
+    Every price it reads comes from storage.order_book_cache - the Jita
+    region book and the C-J home-market Goonmetrics snapshot, both cached by
+    do_refresh_ore_shortlist's sync bundle - never a live call (see
+    esi_update.py's own docstring). The ore universe is the full SDE-derived
+    one, not the Ore Shortlist's active rows: the shortlist is a profit-
+    tracking selection for the import-and-sell business, and excluding an
+    ore from it shouldn't quietly make a build list more expensive.
 
     The ore side always sources from Jita only (ore is imported and refined,
     never bought at home). Only the *direct-mineral* alternative compares
@@ -358,28 +405,16 @@ def do_optimize_mineral_shopping_list(requirements: Optional[list[dict]] = None,
     if not candidates:
         raise ActionError("No compressed ore/ice types found in the SDE cache - run refresh-sde first.")
 
-    client = ESIClient(trading_cfg, TokenManager(oauth_cfg))
     ore_ids = [c.type_id for c in candidates]
     mineral_ids = [r.type_id for r in wanted]
-    try:
-        stats_by_id = client.region_order_stats_bulk(trading_cfg.jita_region_id, sorted(set(ore_ids + mineral_ids)))
-    except (ESIError, requests.RequestException) as e:
-        raise ActionError(f"Could not fetch Jita's order book ({e}).") from e
+    stats_by_id = _order_stats_from_cache(f"region:{trading_cfg.jita_region_id}", sorted(set(ore_ids + mineral_ids)))
 
     ore_options = [o for o in (_ore_option(c, stats_by_id.get(c.type_id), refining_cfg, trading_cfg)
                                for c in candidates) if o is not None]
 
-    # Best-effort - a Goonmetrics outage shouldn't break the whole shopping
-    # list (Jita-only pricing is still a valid fallback), unlike the ESI
-    # order-book fetch above which the function genuinely can't proceed
-    # without.
     home_quotes = {}
     if production_cfg.home_market:
-        try:
-            home_quotes = {p.type_id: p
-                          for p in GoonmetricsClient(trading_cfg).current_prices(production_cfg.home_market)}
-        except requests.RequestException:
-            log.warning("Goonmetrics home-market fetch failed - falling back to Jita-only mineral pricing.")
+        home_quotes = _order_stats_from_cache(f"goonmetrics:{production_cfg.home_market}", mineral_ids)
 
     mineral_options = {}
     for req in wanted:
@@ -389,8 +424,8 @@ def do_optimize_mineral_shopping_list(requirements: Optional[list[dict]] = None,
         jita_cost = landed_cost_per_unit(stats.sell_percentile if stats else None, volume, trading_cfg)
 
         home_quote = home_quotes.get(req.type_id)
-        home_cost = (home_quote.sell * (1 + trading_cfg.jita_buy_broker_fee)
-                    if home_quote and home_quote.sell > 0 else None)
+        home_cost = (home_quote.sell_percentile * (1 + trading_cfg.jita_buy_broker_fee)
+                    if home_quote and home_quote.sell_percentile and home_quote.sell_percentile > 0 else None)
 
         if home_cost is not None and (jita_cost is None or home_cost < jita_cost):
             cost, source = home_cost, "Home"

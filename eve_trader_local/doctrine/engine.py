@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from typing import Optional
 
 from .. import storage
-from ..esi_client import ESIClient
 from ..production.config import PRODUCTION_CONFIG
 from ..production import pricing as production_pricing
 from ..production.engine import CostIndices, T2Mods, _haul_volume, structural_material_closure, unit_cost_detail
@@ -327,16 +326,11 @@ def shopping_list_rows(doctrine_id: Optional[str] = None,
     home = production_pricing.home_prices(priced_type_ids, PRODUCTION_CONFIG)
     jita = production_pricing.jita_prices(priced_type_ids)
 
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": production_pricing.system_cost_indices_for(esi_client, PRODUCTION_CONFIG.component_system_id),
-        "manufacturing": production_pricing.system_cost_indices_for(
-            esi_client, PRODUCTION_CONFIG.manufacturing_system_id),
+        "component": production_pricing.cached_system_cost_indices(PRODUCTION_CONFIG.component_system_id),
+        "manufacturing": production_pricing.cached_system_cost_indices(PRODUCTION_CONFIG.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = production_pricing.cached_adjusted_prices()
 
     result = []
     for row in aggregated:
@@ -386,7 +380,10 @@ def fitting_status(fitting: Fitting, cfg: DoctrineConfig = DOCTRINE_CONFIG,
                    stockpile_rows: Optional[list[StockpileRow]] = None,
                    assets_available: bool = True) -> FittingStatus:
     contracts = contract_rows_from_db(storage.list_doctrine_contracts(fitting_id=fitting.fitting_id))
-    last_synced_at = storage.get_esi_sync_time("doctrine")
+    # "contracts" - esi_update.py's own scope-group key (contracts and assets
+    # are two independently-triggerable scopes now, not one combined
+    # "doctrine" sync) - this ampel is specifically about contract staleness.
+    last_synced_at = storage.get_esi_sync_time("contracts")
     # An expired contract must stop counting toward a fitting's target
     # ampel the moment it expires, even though SYNCABLE_CONTRACT_STATUSES
     # keeps it synced/visible.

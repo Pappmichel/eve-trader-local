@@ -105,6 +105,79 @@ def test_no_tenant_columns_anywhere(db):
             assert not any("tenant" in c for c in cols), (table, cols)
 
 
+# ------------------------------------------------------------ order book cache
+def test_order_book_stats_missing_is_empty(db):
+    assert storage.load_order_book_stats("structure:60003760") == {}
+    assert storage.load_order_book_stats("structure:60003760", [34]) == {}
+
+
+def test_order_book_stats_round_trip(db):
+    storage.save_order_book_stats("structure:60003760",
+                                  {34: (4.5, 5.0, 100.0, 50.0), 35: (None, None, 0.0, 0.0)},
+                                  "2026-01-01T00:00:00")
+    assert storage.load_order_book_stats("structure:60003760") == {
+        34: (4.5, 5.0, 100.0, 50.0), 35: (None, None, 0.0, 0.0)}
+    assert storage.load_order_book_stats("structure:60003760", [34]) == {34: (4.5, 5.0, 100.0, 50.0)}
+    assert storage.load_order_book_stats("structure:60003760", []) == {}
+
+
+def test_order_book_stats_upsert_overwrites_only_given_type_ids(db):
+    """Two different sync bundles (e.g. Trading and Ore & Minerals) can share
+    one region's cache - one bundle's fetch must not wipe another's still-
+    good rows for type_ids it didn't ask about."""
+    storage.save_order_book_stats("region:10000002", {34: (1.0, 2.0, 1.0, 1.0)}, "2026-01-01T00:00:00")
+    storage.save_order_book_stats("region:10000002", {35: (3.0, 4.0, 1.0, 1.0)}, "2026-01-02T00:00:00")
+    assert storage.load_order_book_stats("region:10000002") == {
+        34: (1.0, 2.0, 1.0, 1.0), 35: (3.0, 4.0, 1.0, 1.0)}
+    storage.save_order_book_stats("region:10000002", {34: (9.0, 9.0, 9.0, 9.0)}, "2026-01-03T00:00:00")
+    assert storage.load_order_book_stats("region:10000002")[34] == (9.0, 9.0, 9.0, 9.0)
+    assert storage.load_order_book_stats("region:10000002")[35] == (3.0, 4.0, 1.0, 1.0)
+
+
+def test_order_book_stats_markets_are_independent(db):
+    storage.save_order_book_stats("structure:1", {34: (1.0, 1.0, 1.0, 1.0)}, "2026-01-01T00:00:00")
+    storage.save_order_book_stats("region:2", {34: (2.0, 2.0, 2.0, 2.0)}, "2026-01-01T00:00:00")
+    assert storage.load_order_book_stats("structure:1") == {34: (1.0, 1.0, 1.0, 1.0)}
+    assert storage.load_order_book_stats("region:2") == {34: (2.0, 2.0, 2.0, 2.0)}
+
+
+def test_order_book_snapshot_time_missing_is_none(db):
+    assert storage.order_book_snapshot_time("structure:1") is None
+
+
+def test_order_book_snapshot_time_is_the_latest_write(db):
+    storage.save_order_book_stats("structure:1", {34: (1.0, 1.0, 1.0, 1.0)}, "2026-01-01T00:00:00")
+    storage.save_order_book_stats("structure:1", {35: (1.0, 1.0, 1.0, 1.0)}, "2026-01-02T00:00:00")
+    assert storage.order_book_snapshot_time("structure:1") == "2026-01-02T00:00:00"
+
+
+# ----------------------------------------------------------------- result cache
+def test_result_cache_missing_is_none(db):
+    assert storage.load_result_cache("trading:wallet_balance:buyer:1") is None
+
+
+def test_result_cache_round_trip(db):
+    storage.save_result_cache("trading:wallet_balance:buyer:1", {"balance": 1234.5}, "2026-01-01T00:00:00")
+    payload, computed_at = storage.load_result_cache("trading:wallet_balance:buyer:1")
+    assert payload == {"balance": 1234.5}
+    assert computed_at == "2026-01-01T00:00:00"
+
+
+def test_result_cache_upsert_overwrites(db):
+    storage.save_result_cache("k", {"v": 1}, "2026-01-01T00:00:00")
+    storage.save_result_cache("k", {"v": 2}, "2026-01-02T00:00:00")
+    payload, computed_at = storage.load_result_cache("k")
+    assert payload == {"v": 2}
+    assert computed_at == "2026-01-02T00:00:00"
+
+
+def test_result_cache_keys_are_independent(db):
+    storage.save_result_cache("a", {"v": 1}, "2026-01-01T00:00:00")
+    storage.save_result_cache("b", {"v": 2}, "2026-01-01T00:00:00")
+    assert storage.load_result_cache("a")[0] == {"v": 1}
+    assert storage.load_result_cache("b")[0] == {"v": 2}
+
+
 def test_stock_target_round_trip(db):
     storage.upsert_stock_target(34, "Tritanium", 1000.0, jita_target=False)
     storage.upsert_stock_target(35, "Pyerite", 500.0, jita_target=True)

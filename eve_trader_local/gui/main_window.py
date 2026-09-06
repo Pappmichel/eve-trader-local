@@ -40,6 +40,7 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 logger = logging.getLogger(__name__)
 
 from .dialogs.characters_dialog import CharactersDialog
+from .dialogs.esi_update_dialog import EsiUpdateDialog
 from .dialogs.settings_dialog import SettingsDialog
 from .dialogs.update_dialog import UpdateDialog
 from .views.doctrine_contract_history import ContractHistoryView
@@ -155,12 +156,20 @@ class MainWindow(QMainWindow):
                 menu.addAction(action)
 
     def _build_app_menu(self) -> None:
-        """Cross-tool, app-level actions (Settings, Characters, Check for
-        Updates) - deliberately the one menu that isn't one of
+        """Cross-tool, app-level actions (Settings, Characters, Update Data,
+        Check for App Updates) - deliberately the one menu that isn't one of
         `_TOOL_MENUS`' per-tool entries, since none of these dialogs belongs
-        to just one tool. All three are opened as modal `QDialog`s
-        (`exec()`), not workspace tabs - see `dialogs/__init__.py` for why
-        they can't be `views.base.BaseView` subclasses."""
+        to just one tool. All four are opened as modal `QDialog`s (`exec()`),
+        not workspace tabs - see `dialogs/__init__.py` for why they can't be
+        `views.base.BaseView` subclasses.
+
+        "Update Data..." (`EsiUpdateDialog`) and "Check for App Updates..."
+        (`UpdateDialog`) are two unrelated kinds of "update" that happen to
+        share the word - the first refreshes game data from ESI/Goonmetrics
+        (see esi_update.py's own docstring for why every such call in this
+        app now goes exclusively through that dialog), the second checks
+        GitHub for a newer eve-trader-local release. Kept as distinctly
+        labelled menu entries so they're never confused for each other."""
         menu = self.menuBar().addMenu("App")
 
         settings_action = QAction("Settings...", self)
@@ -171,7 +180,11 @@ class MainWindow(QMainWindow):
         characters_action.triggered.connect(self._open_characters)
         menu.addAction(characters_action)
 
-        update_action = QAction("Check for Updates...", self)
+        esi_update_action = QAction("Update Data...", self)
+        esi_update_action.triggered.connect(self._open_esi_update)
+        menu.addAction(esi_update_action)
+
+        update_action = QAction("Check for App Updates...", self)
         update_action.triggered.connect(self._open_update_check)
         menu.addAction(update_action)
 
@@ -180,6 +193,9 @@ class MainWindow(QMainWindow):
 
     def _open_characters(self) -> None:
         CharactersDialog(self).exec()
+
+    def _open_esi_update(self) -> None:
+        EsiUpdateDialog(self).exec()
 
     def _open_update_check(self) -> None:
         UpdateDialog(self).exec()

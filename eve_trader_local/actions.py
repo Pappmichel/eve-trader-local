@@ -26,6 +26,7 @@ a dict conversion would be paperwork.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import logging
 import math
@@ -35,7 +36,7 @@ from . import candidate_discovery, config, history_backtest, own_orders, storage
 from .auth import TokenManager
 from .config import OAUTH_CONFIG, TRADING_CONFIG, OAuthConfig, TradingConfig
 from .errors import ActionError
-from .esi_client import ESIClient, ESIError
+from .esi_client import ESIClient, ESIError, OrderStats
 from .goonmetrics_client import GoonmetricsClient
 from .models import ShortlistItem, ShortlistRow, UndercutRow, UnlistedStockRow
 from .shortlist import (NO_MARKET_DATA_DECISION, SKIP_DECISION, _decision, audit_shortlist,
@@ -90,45 +91,104 @@ def do_remove_trading_character(role_key: str, oauth_cfg: OAuthConfig = OAUTH_CO
 
 
 # --------------------------------------------------------------- wallet
-def do_wallet_balance(role_key: str, cfg: TradingConfig = TRADING_CONFIG,
-                      oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    """Live ISK balance - never cached/persisted, same as the transaction
-    history below."""
-    tm = TokenManager(oauth_cfg)
-    record = tm.get_record(role_key)
-    if record is None:
+# Every wallet figure below is read-only against result_cache - the live ESI
+# fetch only ever happens inside do_pipeline's _cache_wallet_balances/
+# _cache_wallet_transactions steps (see esi_update.py's own docstring for why
+# nothing outside a sync bundle may build an ESIClient anymore).
+def _wallet_balance_cache_key(role_key: str) -> str:
+    return f"trading:wallet_balance:{role_key}"
+
+
+def _wallet_transactions_cache_key(role_key: str) -> str:
+    return f"trading:wallet_transactions:{role_key}"
+
+
+def do_wallet_balance(role_key: str, oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """Last cached ISK balance for `role_key` - see _cache_wallet_balances."""
+    if TokenManager(oauth_cfg).get_record(role_key) is None:
         raise ActionError(f"Character '{role_key}' is not logged in.")
-    balance = ESIClient(cfg, tm).character_wallet_balance(record.character_id, role_key)
-    return {"role_key": role_key, "balance": balance}
+    cached = storage.load_result_cache(_wallet_balance_cache_key(role_key))
+    if cached is None:
+        raise ActionError("No cached wallet balance yet - run Update Data for Trading first.")
+    payload, _computed_at = cached
+    return payload
 
 
-def do_wallet_transactions(role_key: str, lookback_days: Optional[int] = None,
-                           cfg: TradingConfig = TRADING_CONFIG,
+def do_wallet_transactions(role_key: str, cfg: TradingConfig = TRADING_CONFIG,
                            oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> list[dict]:
-    """One character's recent wallet transactions, newest first, labelled with
-    real item names from the SDE cache. Location ids are passed through as-is:
-    the parent resolves them against a persisted structure-name table this
-    repo has no equivalent of yet."""
-    tm = TokenManager(oauth_cfg)
-    record = tm.get_record(role_key)
-    if record is None:
+    """One character's cached wallet transactions (see
+    _cache_wallet_transactions), newest first - whatever the last sync
+    fetched at cfg.lookback_days (as of *that* sync, not filtered again
+    against the current moment here: re-filtering by "now minus N days" on
+    every read would make a transaction quietly vanish from view over time
+    even though it's exactly what the last sync legitimately found, which is
+    a worse surprise than just showing what was cached)."""
+    if TokenManager(oauth_cfg).get_record(role_key) is None:
         raise ActionError(f"Character '{role_key}' is not logged in.")
-    client = ESIClient(cfg, tm)
-    txns = fetch_recent_transactions(record.character_id, role_key, client,
-                                     lookback_days or cfg.lookback_days)
-    item_names = storage.sde_type_names({t["type_id"] for t in txns})
-    rows = [{
-        "transaction_id": t["transaction_id"],
-        "date": t["date"],
-        "type_id": t["type_id"],
-        "item": item_names.get(t["type_id"], str(t["type_id"])),
-        "is_buy": t["is_buy"],
-        "quantity": t["quantity"],
-        "unit_price": t["unit_price"],
-        "total": t["quantity"] * t["unit_price"],
-        "location_id": t["location_id"],
-    } for t in txns]
+    cached = storage.load_result_cache(_wallet_transactions_cache_key(role_key))
+    if cached is None:
+        raise ActionError("No cached wallet transactions yet - run Update Data for Trading first.")
+    rows, _computed_at = cached
     return sorted(rows, key=lambda r: r["date"], reverse=True)
+
+
+def _cache_wallet_balances(cfg: TradingConfig = TRADING_CONFIG,
+                           oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """The real live fetch behind do_wallet_balance - every buyer/seller
+    character's balance, cached individually so a character missing docking/
+    login doesn't block the others (same isolation do_pipeline's own steps
+    already give each other)."""
+    tm = TokenManager(oauth_cfg)
+    characters = _list_role_characters(tm, "buyer") + _list_role_characters(tm, "seller")
+    if not characters:
+        return {"cached": 0}
+    client = ESIClient(cfg, tm)
+    run_ts = now_ts()
+    cached = 0
+    for role_key, character_id, _name in characters:
+        try:
+            balance = client.character_wallet_balance(character_id, role_key)
+        except ESIError as e:
+            log.warning("Could not fetch wallet balance for %s (%s)", role_key, e)
+            continue
+        storage.save_result_cache(_wallet_balance_cache_key(role_key),
+                                  {"role_key": role_key, "balance": balance}, run_ts)
+        cached += 1
+    return {"cached": cached, "characters": len(characters)}
+
+
+def _cache_wallet_transactions(cfg: TradingConfig = TRADING_CONFIG,
+                               oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """The real live fetch behind do_wallet_transactions - see
+    _cache_wallet_balances for the per-character isolation rationale."""
+    tm = TokenManager(oauth_cfg)
+    characters = _list_role_characters(tm, "buyer") + _list_role_characters(tm, "seller")
+    if not characters:
+        return {"cached": 0}
+    client = ESIClient(cfg, tm)
+    run_ts = now_ts()
+    cached = 0
+    for role_key, character_id, _name in characters:
+        try:
+            txns = fetch_recent_transactions(character_id, role_key, client, cfg.lookback_days)
+        except ESIError as e:
+            log.warning("Could not fetch wallet transactions for %s (%s)", role_key, e)
+            continue
+        item_names = storage.sde_type_names({t["type_id"] for t in txns})
+        rows = [{
+            "transaction_id": t["transaction_id"],
+            "date": t["date"],
+            "type_id": t["type_id"],
+            "item": item_names.get(t["type_id"], str(t["type_id"])),
+            "is_buy": t["is_buy"],
+            "quantity": t["quantity"],
+            "unit_price": t["unit_price"],
+            "total": t["quantity"] * t["unit_price"],
+            "location_id": t["location_id"],
+        } for t in txns]
+        storage.save_result_cache(_wallet_transactions_cache_key(role_key), rows, run_ts)
+        cached += 1
+    return {"cached": cached, "characters": len(characters)}
 
 
 # ------------------------------------------------------------- settings
@@ -243,37 +303,73 @@ def _backfill_meta_levels(items: list[ShortlistItem], client: ESIClient) -> dict
             "no_attribute": len(missing) - len(fetched) - failed, "failed": failed}
 
 
-def _refresh_shortlist_rows(cfg: TradingConfig = TRADING_CONFIG,
-                            oauth_cfg: OAuthConfig = OAUTH_CONFIG
-                            ) -> tuple[list[ShortlistItem], list[ShortlistRow], dict]:
-    """Re-fetches live market data for the shortlist and recomputes every
-    row's decision. Deliberately does NOT save a snapshot - both callers do
-    that themselves once they're done mutating the rows (the pruning one
-    deactivates items *before* the snapshot is written, so the snapshot
-    reflects the same run's prunes)."""
-    items = storage.load_shortlist()
-    if not items:
-        raise ActionError("Shortlist is empty - run 'add-to-shortlist' first.")
+def _cache_order_book_stats(market: str, stats_by_item: dict) -> None:
+    """Upserts this run's fetched order-book stats into the shared
+    storage.order_book_cache table - see the call site's own comment."""
+    if not stats_by_item:
+        return
+    rows = {tid: (s.buy_percentile, s.sell_percentile, s.buy_volume, s.sell_volume)
+            for tid, s in stats_by_item.items()}
+    storage.save_order_book_stats(market, rows, now_ts())
+
+
+def _order_stats_from_cache(market: str, type_ids: list[int]) -> dict[int, OrderStats]:
+    cached = storage.load_order_book_stats(market, type_ids)
+    return {tid: OrderStats(sell_percentile=sell_pct, sell_volume=sell_vol or 0.0,
+                            buy_percentile=buy_pct, buy_volume=buy_vol or 0.0)
+            for tid, (buy_pct, sell_pct, buy_vol, sell_vol) in cached.items()}
+
+
+# ------------------------------------------------------------ market orders
+# Part of the esi_update.py "Market Orders" scope group - every seller
+# character's own open sell-order quantity per item, pooled. Feeds both
+# shortlist evaluation (own_orders_remaining) and, via
+# _cache_unlisted_stock_and_undercut further down, the unlisted-stock/
+# undercut checks.
+_OWN_SELL_ORDERS_CACHE_KEY = "trading:own_sell_orders"
+
+
+def _cache_own_sell_orders(cfg: TradingConfig = TRADING_CONFIG,
+                           oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
     tm = TokenManager(oauth_cfg)
     seller_characters = _list_role_characters(tm, "seller")
+    if not seller_characters:
+        return {"cached": 0}
     client = ESIClient(cfg, tm)
-
-    meta_backfill = _backfill_meta_levels(items, client)
-
-    # Own listings pooled across every seller character - they share the
-    # structure's order slots, so "how much of this do I already have listed"
-    # is a total across all of them. There is no unauthenticated equivalent
-    # for "my own orders", so with no seller logged in this simply stays
-    # empty rather than blocking the refresh; pricing below has its own
-    # independent fallback.
     own_remaining: dict[int, float] = {}
     for seller_role, seller_character_id, _name in seller_characters:
         for item_id, remaining in own_orders.fetch_own_sell_orders(
                 seller_character_id, seller_role, client, cfg).items():
             own_remaining[item_id] = own_remaining.get(item_id, 0.0) + remaining
+    storage.save_result_cache(_OWN_SELL_ORDERS_CACHE_KEY, own_remaining, now_ts())
+    return {"cached": len(own_remaining)}
 
+
+def _load_own_sell_orders() -> dict[int, float]:
+    cached = storage.load_result_cache(_OWN_SELL_ORDERS_CACHE_KEY)
+    if cached is None:
+        return {}
+    payload, _computed_at = cached
+    return {int(k): v for k, v in payload.items()}
+
+
+# ----------------------------------------------------------------- assets
+# Part of the esi_update.py "Assets" scope group - which shortlist items each
+# buyer already holds an open buy order or inventory for. Production's/
+# Doctrine's own asset syncs live in their own modules; this is Trading's
+# only asset-shaped need.
+_BUYER_ALREADY_COVERED_CACHE_KEY = "trading:buyer_already_covered"
+
+
+def _cache_buyer_already_covered(cfg: TradingConfig = TRADING_CONFIG,
+                                 oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    tm = TokenManager(oauth_cfg)
+    buyer_characters = _list_role_characters(tm, "buyer")
+    if not buyer_characters:
+        return {"cached": 0}
+    client = ESIClient(cfg, tm)
     covered: set[int] = set()
-    for buyer_role, buyer_character_id, _name in _list_role_characters(tm, "buyer"):
+    for buyer_role, buyer_character_id, _name in buyer_characters:
         try:
             covered |= own_orders.fetch_buyer_already_covered(buyer_character_id, buyer_role, client, cfg)
         except ESIError as e:
@@ -281,7 +377,36 @@ def _refresh_shortlist_rows(cfg: TradingConfig = TRADING_CONFIG,
             # that scope existed won't have it. Skip just that buyer.
             log.warning("Could not read buyer %s's Jita orders/assets (%s) - log that character in again?",
                         buyer_role, e)
-    buyer_already_covered_ids = frozenset(covered)
+    storage.save_result_cache(_BUYER_ALREADY_COVERED_CACHE_KEY, sorted(covered), now_ts())
+    return {"cached": len(covered)}
+
+
+def _load_buyer_already_covered() -> frozenset[int]:
+    cached = storage.load_result_cache(_BUYER_ALREADY_COVERED_CACHE_KEY)
+    return frozenset(cached[0]) if cached else frozenset()
+
+
+# ----------------------------------------------------------- market prices
+# Part of the esi_update.py "Market Prices" scope group - live structure/
+# Jita order-book stats and Goonmetrics daily-volume history for every
+# shortlist item, plus meta-level backfill (also a live ESI lookup). Shared
+# with every other tool via storage.order_book_cache - the same table
+# production/pricing.py's refresh_home_prices/refresh_jita_prices write
+# into, so one structure/Jita fetch benefits every reader, not just this
+# shortlist (see esi_update.py's own docstring).
+_AVG_DAILY_VOLUME_CACHE_KEY = "trading:avg_daily_volume"
+
+
+def _cache_shortlist_market_prices(cfg: TradingConfig = TRADING_CONFIG,
+                                   oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    items = storage.load_shortlist()
+    if not items:
+        return {"priced": 0}
+    tm = TokenManager(oauth_cfg)
+    seller_characters = _list_role_characters(tm, "seller")
+    client = ESIClient(cfg, tm)
+
+    meta_backfill = _backfill_meta_levels(items, client)
 
     # Every item with an id, not just the active ones: an inactive item still
     # shows real margin/profit numbers (only its *decision* short-circuits),
@@ -303,33 +428,60 @@ def _refresh_shortlist_rows(cfg: TradingConfig = TRADING_CONFIG,
                           "Does the seller character still have docking access, or set "
                           "structure_market_slug for the Goonmetrics fallback.") from e
     jita_stats_by_item = client.region_order_stats_bulk(cfg.jita_region_id, priced_item_ids)
+    _cache_order_book_stats(f"structure:{cfg.structure_id}", structure_stats_by_item)
+    _cache_order_book_stats(f"region:{cfg.jita_region_id}", jita_stats_by_item)
 
     try:
         history_points = GoonmetricsClient(cfg).price_history_chunked(cfg.reference_region_id, priced_item_ids)
         avg_daily_volume_by_item = average_market_daily_volume(history_points)
-    except Exception:  # noqa: BLE001 - best-effort; a history outage shouldn't block the whole refresh
+    except Exception:  # noqa: BLE001 - best-effort; a history outage shouldn't block the rest of this sync
         log.exception("Could not fetch region history for Profit/Day - leaving it empty this run.")
         avg_daily_volume_by_item = {}
+    storage.save_result_cache(_AVG_DAILY_VOLUME_CACHE_KEY, avg_daily_volume_by_item, now_ts())
+
+    return {"priced": len(priced_item_ids), "priced_via_fallback": priced_via_fallback,
+            "meta_level_backfill": meta_backfill}
+
+
+def _load_avg_daily_volume() -> dict[int, float]:
+    cached = storage.load_result_cache(_AVG_DAILY_VOLUME_CACHE_KEY)
+    if cached is None:
+        return {}
+    payload, _computed_at = cached
+    return {int(k): v for k, v in payload.items()}
+
+
+def _compute_shortlist_rows(cfg: TradingConfig = TRADING_CONFIG
+                            ) -> tuple[list[ShortlistItem], list[ShortlistRow]]:
+    """Pure local recompute of every shortlist row from whatever the Market
+    Orders (_cache_own_sell_orders)/Assets (_cache_buyer_already_covered)/
+    Market Prices (_cache_shortlist_market_prices) scopes last cached - no
+    network call of its own (see esi_update.py's own docstring). Both
+    do_refresh_shortlist and do_refresh_and_prune_candidates build on this."""
+    items = storage.load_shortlist()
+    if not items:
+        raise ActionError("Shortlist is empty - run 'add-to-shortlist' first.")
+    priced_item_ids = [i.item_id for i in items if i.item_id]
+    own_remaining = _load_own_sell_orders()
+    buyer_already_covered_ids = _load_buyer_already_covered()
+    structure_stats_by_item = _order_stats_from_cache(f"structure:{cfg.structure_id}", priced_item_ids)
+    jita_stats_by_item = _order_stats_from_cache(f"region:{cfg.jita_region_id}", priced_item_ids)
+    avg_daily_volume_by_item = _load_avg_daily_volume()
 
     rows = evaluate_shortlist(items, own_remaining, jita_stats_by_item, structure_stats_by_item, cfg=cfg,
                               buyer_already_covered_ids=buyer_already_covered_ids,
                               avg_daily_volume_by_item=avg_daily_volume_by_item)
-    extra = {
-        "own_sell_orders_found": sum(1 for v in own_remaining.values() if v > 0),
-        "buyer_already_covered_found": len(buyer_already_covered_ids),
-        "meta_level_backfill": meta_backfill,
-        "priced_via_fallback": priced_via_fallback,
-    }
-    return items, rows, extra
+    return items, rows
 
 
-def do_refresh_shortlist(cfg: TradingConfig = TRADING_CONFIG,
-                         oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    items, rows, extra = _refresh_shortlist_rows(cfg, oauth_cfg)
+def do_refresh_shortlist(cfg: TradingConfig = TRADING_CONFIG) -> dict:
+    """Pure local recompute (see _compute_shortlist_rows) - no network call;
+    the underlying prices/own-orders/buyer-coverage are only ever refreshed
+    via App > Update Data... (Market Orders/Assets/Market Prices scopes)."""
+    items, rows = _compute_shortlist_rows(cfg)
     run_ts = now_ts()
     storage.save_shortlist_snapshot(rows, run_ts)
-    storage.set_esi_sync_time("trading", run_ts)
-    return {**extra, "summary": summary_counts(rows),
+    return {"summary": summary_counts(rows),
             "top_imports": top_imports_by_daily_profit(rows), "audit": audit_shortlist(items)}
 
 
@@ -344,12 +496,21 @@ def do_shortlist_trends(cfg: TradingConfig = TRADING_CONFIG) -> dict:
 
 
 # ------------------------------------------------- live one-shot checks
-def do_check_seller_unlisted_stock(cfg: TradingConfig = TRADING_CONFIG,
-                                   oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+# Both rows sets below are cached under these keys by do_pipeline's own
+# unlisted-stock/undercut steps - the do_check_* functions further down only
+# ever read them back (see actions.py's/esi_update.py's "no ESIClient outside
+# a sync bundle" rule).
+_UNLISTED_STOCK_CACHE_KEY = "trading:unlisted_stock"
+_UNDERCUT_CACHE_KEY = "trading:undercut"
+
+
+def _fetch_seller_unlisted_stock(cfg: TradingConfig = TRADING_CONFIG,
+                                 oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
     """Shortlist stock physically sitting at the structure with no sell order
     on it at all. Deliberately covers inactive shortlist items too: "not
     tracked for re-pricing anymore" is not the same as "don't bother selling
-    what you already hold". Always a fresh live read, never cached."""
+    what you already hold". The real live fetch behind do_check_seller_
+    unlisted_stock - called only from do_pipeline."""
     tm = TokenManager(oauth_cfg)
     seller_characters = _list_role_characters(tm, "seller")
     if not seller_characters:
@@ -410,11 +571,12 @@ def do_check_seller_unlisted_stock(cfg: TradingConfig = TRADING_CONFIG,
     return {"rows": rows}
 
 
-def do_check_undercut(cfg: TradingConfig = TRADING_CONFIG,
-                      oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+def _fetch_undercut(cfg: TradingConfig = TRADING_CONFIG,
+                    oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
     """Which of the seller's own sell orders a competitor is currently
-    beating. ESI has no "you were undercut" notification, so this is only ever
-    a fresh live check."""
+    beating. ESI has no "you were undercut" notification, so this always
+    needs a fresh read - the real live fetch behind do_check_undercut, called
+    only from do_pipeline."""
     tm = TokenManager(oauth_cfg)
     seller_characters = _list_role_characters(tm, "seller")
     if not seller_characters:
@@ -434,6 +596,49 @@ def do_check_undercut(cfg: TradingConfig = TRADING_CONFIG,
             my_price=entry["my_price"], competitor_price=entry["competitor_price"],
             difference=entry["difference"]))
     return {"rows": rows}
+
+
+def _cache_unlisted_stock_and_undercut(cfg: TradingConfig = TRADING_CONFIG,
+                                       oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """Runs both live one-shot checks above and caches their rows - called
+    only from do_pipeline. Each check's failure (e.g. no seller logged in) is
+    isolated from the other, same as every other do_pipeline step."""
+    run_ts = now_ts()
+    result: dict = {}
+    try:
+        unlisted_rows = _fetch_seller_unlisted_stock(cfg, oauth_cfg)["rows"]
+        storage.save_result_cache(_UNLISTED_STOCK_CACHE_KEY,
+                                  [dataclasses.asdict(r) for r in unlisted_rows], run_ts)
+        result["unlisted_stock"] = {"count": len(unlisted_rows)}
+    except ActionError as e:
+        result["unlisted_stock"] = {"error": str(e)}
+
+    try:
+        undercut_rows = _fetch_undercut(cfg, oauth_cfg)["rows"]
+        storage.save_result_cache(_UNDERCUT_CACHE_KEY,
+                                  [dataclasses.asdict(r) for r in undercut_rows], run_ts)
+        result["undercut"] = {"count": len(undercut_rows)}
+    except ActionError as e:
+        result["undercut"] = {"error": str(e)}
+    return result
+
+
+def do_check_seller_unlisted_stock() -> dict:
+    """Last cached unlisted-stock check - see _cache_unlisted_stock_and_undercut."""
+    cached = storage.load_result_cache(_UNLISTED_STOCK_CACHE_KEY)
+    if cached is None:
+        raise ActionError("No cached unlisted-stock check yet - run Update Data for Trading first.")
+    rows, _computed_at = cached
+    return {"rows": [UnlistedStockRow(**r) for r in rows]}
+
+
+def do_check_undercut() -> dict:
+    """Last cached undercut check - see _cache_unlisted_stock_and_undercut."""
+    cached = storage.load_result_cache(_UNDERCUT_CACHE_KEY)
+    if cached is None:
+        raise ActionError("No cached undercut check yet - run Update Data for Trading first.")
+    rows, _computed_at = cached
+    return {"rows": [UndercutRow(**r) for r in rows]}
 
 
 # --------------------------------------------------- pruning / reactivation
@@ -494,10 +699,12 @@ def _items_to_reactivate(rows: list[ShortlistRow], cfg: TradingConfig) -> list[t
     return due
 
 
-def do_refresh_and_prune_candidates(safe: bool = True, cfg: TradingConfig = TRADING_CONFIG,
-                                    oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    """One-button shortlist maintenance: find new candidates, add the
-    recommended ones, then re-evaluate everything and deactivate
+def do_refresh_and_prune_candidates(cfg: TradingConfig = TRADING_CONFIG) -> dict:
+    """One-button shortlist maintenance, pure local (no network - see
+    esi_update.py's own docstring for why "find new candidates" itself now
+    only happens inside the Market Prices scope's sync, not here): promotes
+    whatever that last backtest recommended (do_add_to_shortlist), then
+    re-evaluates everything from cache and deactivates
 
       1. items continuously Skip-like for cfg.skip_grace_period_days, and
       2. if cfg.enforce_shortlist_cap is on, whatever *remains* active beyond
@@ -506,20 +713,16 @@ def do_refresh_and_prune_candidates(safe: bool = True, cfg: TradingConfig = TRAD
 
     while reactivating any inactive item whose numbers now clear the same bar
     again. Deactivation is active=False, never a delete - snapshot history
-    survives and the item can come back.
-
-    Assumes the candidate universe already exists (build-universe is an
-    occasional setup step, not a daily one)."""
-    find_result = do_find_new_candidates(safe=safe, cfg=cfg)
+    survives and the item can come back."""
     try:
         add_result = do_add_to_shortlist()
     except ActionError:
-        # Only reachable when the search above scored nothing at all (every
+        # Only reachable when the last backtest scored nothing at all (every
         # candidate already on the shortlist, or a fully failed batch) - that
         # must not abort the refresh/prune half of this action.
         add_result = {"added": 0}
 
-    items, rows, extra = _refresh_shortlist_rows(cfg, oauth_cfg)
+    items, rows = _compute_shortlist_rows(cfg)
     run_ts = now_ts()
 
     to_reactivate = _items_to_reactivate(rows, cfg)
@@ -566,12 +769,9 @@ def do_refresh_and_prune_candidates(safe: bool = True, cfg: TradingConfig = TRAD
                 r.decision = "Inactive"
 
     storage.save_shortlist_snapshot(rows, run_ts)
-    storage.set_esi_sync_time("trading", run_ts)
 
     return {
-        "new_candidates_evaluated": find_result["evaluated"],
         "new_candidates_added": add_result["added"],
-        **extra,
         "summary": summary_counts(rows),
         "top_imports": top_imports_by_daily_profit(rows),
         "audit": audit_shortlist(items),
@@ -595,8 +795,10 @@ def shortlist_skip_deactivation_days(cfg: TradingConfig = TRADING_CONFIG) -> dic
 
 
 # ------------------------------------------------------- realized trades
-def do_reconcile_trades(cfg: TradingConfig = TRADING_CONFIG,
-                        oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+def _cache_reconcile_trades(cfg: TradingConfig = TRADING_CONFIG,
+                            oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
+    """The real live fetch behind do_reconcile_trades - called only from
+    do_pipeline now."""
     tm = TokenManager(oauth_cfg)
     buyer_characters = _list_role_characters(tm, "buyer")
     seller_characters = _list_role_characters(tm, "seller")
@@ -613,18 +815,31 @@ def do_reconcile_trades(cfg: TradingConfig = TRADING_CONFIG,
     return {"matched_trades": len(trades), **summarize_realized(trades)}
 
 
+def do_reconcile_trades() -> dict:
+    """Last cached realized-trades reconciliation (see
+    _cache_reconcile_trades, run only from do_pipeline) - storage.
+    save_realized_trades/latest_realized_trades already persisted this
+    across runs before esi_update.py existed, so this is a read of an
+    already-existing table, not a new cache."""
+    trades = storage.latest_realized_trades()
+    if not trades:
+        raise ActionError("No cached trade reconciliation yet - run Update Data for Trading first.")
+    return {"matched_trades": len(trades), **summarize_realized(trades)}
+
+
 # ---------------------------------------------------------------- pipeline
 def do_pipeline(safe: bool = True, rebuild_universe: bool = False,
                 cfg: TradingConfig = TRADING_CONFIG,
                 oauth_cfg: OAuthConfig = OAUTH_CONFIG) -> dict:
-    """The daily workflow. Each step is isolated: a missing login or a network
-    hiccup in one must not stop the others from running, so a failure is
-    recorded as that step's result instead of raising.
-
-    Uses do_refresh_and_prune_candidates rather than a separate find + refresh
-    pair, so one run actually finishes the job - newly found candidates get
-    added and stale ones pruned in the same run (in the parent repo this
-    called find + refresh only, and so never added or pruned anything).
+    """The CLI's own "do everything Trading needs, in one command" daily
+    workflow - a convenience wrapper, unrelated to esi_update.py's per-scope-
+    group "Update Data" dialog (see that module's own docstring): each scope
+    group's sync (Market Prices/Market Orders/Assets/Wallet) is independently
+    triggerable and independently timed there, but the CLI still wants one
+    command that runs Trading's whole slice of all four in sequence. Each
+    step is isolated: a missing login or a network hiccup in one must not
+    stop the others from running, so a failure is recorded as that step's
+    result instead of raising.
 
     `rebuild_universe` re-derives the entire candidate universe and is off by
     default: that's an occasional setup step, not a daily one."""
@@ -638,14 +853,45 @@ def do_pipeline(safe: bool = True, rebuild_universe: bool = False,
             results["build_universe"] = {"error": str(e)}
 
     try:
-        results["refresh_and_prune_candidates"] = do_refresh_and_prune_candidates(
-            safe=safe, cfg=cfg, oauth_cfg=oauth_cfg)
+        results["find_new_candidates"] = do_find_new_candidates(safe=safe, cfg=cfg)
+    except ActionError as e:
+        results["find_new_candidates"] = {"error": str(e)}
+
+    try:
+        results["shortlist_market_prices"] = _cache_shortlist_market_prices(cfg, oauth_cfg)
+    except ActionError as e:
+        results["shortlist_market_prices"] = {"error": str(e)}
+
+    try:
+        results["own_sell_orders"] = _cache_own_sell_orders(cfg, oauth_cfg)
+    except ActionError as e:
+        results["own_sell_orders"] = {"error": str(e)}
+
+    try:
+        results["buyer_already_covered"] = _cache_buyer_already_covered(cfg, oauth_cfg)
+    except ActionError as e:
+        results["buyer_already_covered"] = {"error": str(e)}
+
+    try:
+        results["refresh_and_prune_candidates"] = do_refresh_and_prune_candidates(cfg=cfg)
     except ActionError as e:
         results["refresh_and_prune_candidates"] = {"error": str(e)}
 
     try:
-        results["reconcile_trades"] = do_reconcile_trades(cfg, oauth_cfg)
+        results["reconcile_trades"] = _cache_reconcile_trades(cfg, oauth_cfg)
     except ActionError as e:
         results["reconcile_trades"] = {"error": str(e)}
+
+    try:
+        results["wallet_balances"] = _cache_wallet_balances(cfg, oauth_cfg)
+    except ActionError as e:
+        results["wallet_balances"] = {"error": str(e)}
+
+    try:
+        results["wallet_transactions"] = _cache_wallet_transactions(cfg, oauth_cfg)
+    except ActionError as e:
+        results["wallet_transactions"] = {"error": str(e)}
+
+    results.update(_cache_unlisted_stock_and_undercut(cfg, oauth_cfg))
 
     return results

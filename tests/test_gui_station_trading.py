@@ -68,11 +68,12 @@ def test_station_shortlist_show_end_to_end_with_empty_db(qapp, db):
     assert "empty" in view.status_label.text().lower()
 
 
-def test_undercut_skills_refresh_skills_end_to_end_with_no_trader_characters(qapp, db):
-    """No trader characters are registered in this throwaway DB, so
-    `do_get_skill_summary` returns an empty list without needing a live ESI
-    call/character login - exercises the same run_action round trip as
-    above without depending on network access."""
+def test_undercut_skills_refresh_skills_end_to_end_with_nothing_cached(qapp, db):
+    """`do_get_skill_summary` is a cache-only read now (see esi_update.py's
+    own docstring) - nothing has ever synced in this throwaway DB, so it
+    raises ActionError rather than making a live ESI call, and the view
+    surfaces that as its status-label error - exercises the same run_action
+    round trip as above without depending on network access."""
     from eve_trader_local.gui.views.station_trading_undercut_skills import UndercutSkillsView
 
     view = UndercutSkillsView()
@@ -84,4 +85,4 @@ def test_undercut_skills_refresh_skills_end_to_end_with_no_trader_characters(qap
         time.sleep(0.01)
 
     assert view.skills_table.rowCount() == 0
-    assert "no trader characters registered" in view.status_label.text().lower()
+    assert "no cached skill summary yet" in view.status_label.text().lower()

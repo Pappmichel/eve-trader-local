@@ -4,18 +4,22 @@ history per character), grouped into one tab since both are "what actually
 happened" historical views - as opposed to the Shortlist's forward-looking
 decision table.
 
+Both are cache-only reads now (see esi_update.py's own docstring) - the live
+ESI wallet/reconciliation fetch only happens inside App > Update Data...'s
+Trading scope. "Reconcile Trades"/"Load Transactions" here just (re)display
+whatever that last run cached, same shape as before but no network call of
+their own.
+
 - Realized Trades: FIFO-matched buy(Jita)/sell(structure) pairs. Loads the
   last saved run on open (`storage.latest_realized_trades`, no network),
-  same convention `trading_shortlist.py`'s `_load_last_snapshot` uses;
-  "Reconcile Trades" re-runs it live. Default sort matches
-  `trade_reconciliation.reconcile_realized_trades`'s own documented order
-  ("results.sort(key=lambda r: r.sell_date)") - Sell Date ascending.
-- Wallet Transactions: one character's raw transaction history - always a
-  fresh live pull (there is no local cache of it, same as
-  `do_wallet_balance`), for whichever registered buyer/seller character is
-  selected. Default sort matches `do_wallet_transactions`'s own documented
-  order ("sorted(rows, key=lambda r: r['date'], reverse=True)") - Date
-  descending.
+  same convention `trading_shortlist.py`'s `_load_last_snapshot` uses.
+  Default sort matches `trade_reconciliation.reconcile_realized_trades`'s
+  own documented order ("results.sort(key=lambda r: r.sell_date)") - Sell
+  Date ascending.
+- Wallet Transactions: one character's cached transaction history, for
+  whichever registered buyer/seller character is selected. Default sort
+  matches `do_wallet_transactions`'s own documented order ("sorted(rows,
+  key=lambda r: r['date'], reverse=True)") - Date descending.
 """
 from __future__ import annotations
 
@@ -64,7 +68,7 @@ class RealizedTransactionsView(BaseView):
         super().__init__(parent)
 
         realized_toolbar = QHBoxLayout()
-        reconcile_btn = QPushButton("Reconcile Trades")
+        reconcile_btn = QPushButton("Show Reconciliation")
         reconcile_btn.clicked.connect(self._reconcile)
         realized_toolbar.addWidget(reconcile_btn)
         realized_toolbar.addStretch(1)
@@ -75,7 +79,7 @@ class RealizedTransactionsView(BaseView):
         self.character_combo = QComboBox()
         self._reload_characters()
         txn_toolbar.addWidget(self.character_combo)
-        load_txn_btn = QPushButton("Load Transactions")
+        load_txn_btn = QPushButton("Show Transactions")
         load_txn_btn.clicked.connect(self._load_transactions)
         txn_toolbar.addWidget(load_txn_btn)
         txn_toolbar.addStretch(1)
@@ -88,6 +92,7 @@ class RealizedTransactionsView(BaseView):
         self.tabs.addTab(self.txn_table, "Wallet Transactions")
         self.root_layout.addWidget(self.tabs)
 
+        self._add_staleness_label("wallet")
         self._finish_status_row()
         self._load_last_realized()
 
@@ -108,12 +113,11 @@ class RealizedTransactionsView(BaseView):
             return
         populate(self.realized_table, [_realized_row(t) for t in trades], default_sort=_REALIZED_SORT)
         if trades:
-            self.show_info(f"Showing the last reconciliation ({len(trades)} matched trade(s)). "
-                           "Click Reconcile Trades for a live run.")
+            self.show_info(f"Showing the last reconciliation ({len(trades)} matched trade(s)).")
 
     def _reconcile(self) -> None:
         self.run_action(functools.partial(actions.do_reconcile_trades), self._on_reconciled,
-                        busy_message="Matching buy/sell transactions across every buyer/seller character...")
+                        busy_message="Loading the last cached trade reconciliation...")
 
     def _on_reconciled(self, result: dict) -> None:
         trades = storage.latest_realized_trades()
@@ -128,7 +132,7 @@ class RealizedTransactionsView(BaseView):
                             "(eve-trader-local auth --role buyer/seller).")
             return
         self.run_action(functools.partial(actions.do_wallet_transactions, role_key), self._on_transactions,
-                        busy_message=f"Fetching wallet transactions for {role_key}...")
+                        busy_message=f"Loading cached wallet transactions for {role_key}...")
 
     def _on_transactions(self, rows: list[dict]) -> None:
         populate(self.txn_table, [_txn_row(r) for r in rows], default_sort=_TXN_SORT)

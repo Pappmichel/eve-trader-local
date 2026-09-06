@@ -10,6 +10,11 @@ Tables, ported from the parent's Postgres schema minus tenant scoping:
   tokens        <- tenant_tokens      (OAuth records, keyed by role)
   esi_sync_state <- esi_sync_state    (when each scope last synced)
   settings      <- tenant_settings    (config overrides, keyed by scope)
+  order_book_cache / result_cache <- new here, no parent equivalent (see
+                                     esi_update.py: every ESI/market call in
+                                     this app is now made only by that
+                                     module's sync bundles and cached here;
+                                     everything else reads these tables)
   sde_*         <- sde_*              (Fuzzwork SDE cache, see sde.py)
   type_packaged_volume <- type_packaged_volume  (ESI-only per-type constant)
   candidate_universe / focused_candidates <- same names (see
@@ -55,6 +60,34 @@ CREATE TABLE IF NOT EXISTS esi_sync_state (
 CREATE TABLE IF NOT EXISTS settings (
     scope     TEXT PRIMARY KEY,
     overrides TEXT NOT NULL
+);
+
+-- One row per (market, type_id) order-book summary, refreshed only by the
+-- esi_update.py sync bundles - see that module's own docstring for why every
+-- other call site reads this table instead of ever hitting ESI/Goonmetrics
+-- live. `market` is "structure:<id>" or "region:<id>" so both C-J's and
+-- Jita's books can share one table without colliding on type_id.
+CREATE TABLE IF NOT EXISTS order_book_cache (
+    market           TEXT NOT NULL,
+    type_id          INTEGER NOT NULL,
+    buy_percentile   REAL,
+    sell_percentile  REAL,
+    buy_volume       REAL,
+    sell_volume      REAL,
+    snapshotted_at   TEXT NOT NULL,
+    PRIMARY KEY (market, type_id)
+);
+
+-- Small JSON-blob cache for whatever a sync bundle computed that isn't an
+-- order book (wallet balances, undercut rows, skill summaries, ...) - same
+-- shape as `settings` above, but keyed by an arbitrary cache key instead of
+-- a config scope, and each row carries its own computed_at rather than
+-- relying on esi_sync_state (a bundle can cache several distinct results
+-- under one sync).
+CREATE TABLE IF NOT EXISTS result_cache (
+    cache_key   TEXT PRIMARY KEY,
+    payload     TEXT NOT NULL,
+    computed_at TEXT NOT NULL
 );
 
 -- ------------------------------------------------------------ SDE cache
@@ -948,6 +981,91 @@ def load_settings(scope: str, path: Optional[Path] = None) -> dict[str, Any]:
     with connect(path) as conn:
         row = conn.execute("SELECT overrides FROM settings WHERE scope = ?", (scope,)).fetchone()
     return json.loads(row["overrides"]) if row else {}
+
+
+# ------------------------------------------------------------ order book cache
+def save_order_book_stats(market: str, rows: dict[int, tuple], snapshotted_at: str,
+                          path: Optional[Path] = None) -> None:
+    """Upserts one summary row per type_id for `market` ("structure:<id>" or
+    "region:<id>") - never a wholesale replace-for-market, since more than
+    one esi_update.py sync bundle can share the same region cache (Trading
+    and Ore & Minerals both price against Jita) and each only ever fetches
+    its own subset of type_ids per run; wiping the market first would erase
+    another bundle's still-good rows.
+
+    `rows` values are (buy_percentile, sell_percentile, buy_volume,
+    sell_volume) plain tuples - esi_client.OrderStats' own field order, not
+    that type itself: esi_client.py already imports this module, so storage
+    importing OrderStats back would be circular. Callers convert."""
+    with connect(path) as conn:
+        conn.executemany(
+            "INSERT INTO order_book_cache "
+            "(market, type_id, buy_percentile, sell_percentile, buy_volume, sell_volume, snapshotted_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(market, type_id) DO UPDATE SET "
+            "buy_percentile = excluded.buy_percentile, sell_percentile = excluded.sell_percentile, "
+            "buy_volume = excluded.buy_volume, sell_volume = excluded.sell_volume, "
+            "snapshotted_at = excluded.snapshotted_at",
+            [(market, type_id, buy_pct, sell_pct, buy_vol, sell_vol, snapshotted_at)
+             for type_id, (buy_pct, sell_pct, buy_vol, sell_vol) in rows.items()],
+        )
+
+
+def load_order_book_stats(market: str, type_ids: Optional[Sequence[int]] = None,
+                          path: Optional[Path] = None) -> dict[int, tuple]:
+    """{type_id: (buy_percentile, sell_percentile, buy_volume, sell_volume)}
+    for `market`, optionally filtered to `type_ids`. A type_id with nothing
+    cached yet is simply absent from the result - the same "no data" shape
+    every caller already handles for a live ESI failure today."""
+    if type_ids is not None and not type_ids:
+        return {}
+    with connect(path) as conn:
+        if type_ids is None:
+            cursor = conn.execute(
+                "SELECT type_id, buy_percentile, sell_percentile, buy_volume, sell_volume "
+                "FROM order_book_cache WHERE market = ?", (market,))
+        else:
+            placeholders = ",".join("?" * len(type_ids))
+            cursor = conn.execute(
+                "SELECT type_id, buy_percentile, sell_percentile, buy_volume, sell_volume "
+                f"FROM order_book_cache WHERE market = ? AND type_id IN ({placeholders})",
+                (market, *type_ids))
+        rows = cursor.fetchall()
+    return {row["type_id"]: (row["buy_percentile"], row["sell_percentile"], row["buy_volume"], row["sell_volume"])
+            for row in rows}
+
+
+def order_book_snapshot_time(market: str, path: Optional[Path] = None) -> Optional[str]:
+    """Newest snapshotted_at across `market`'s cached rows, or None before
+    the first sync ever populates it."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT MAX(snapshotted_at) AS latest FROM order_book_cache WHERE market = ?", (market,)
+        ).fetchone()
+    return row["latest"] if row else None
+
+
+# ----------------------------------------------------------------- result cache
+def save_result_cache(cache_key: str, payload: Any, computed_at: str, path: Optional[Path] = None) -> None:
+    """Upserts one JSON blob under `cache_key` - the generic counterpart to
+    `order_book_cache` for sync results that aren't a price (wallet
+    balances, undercut rows, skill summaries, ...)."""
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO result_cache (cache_key, payload, computed_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(cache_key) DO UPDATE SET payload = excluded.payload, computed_at = excluded.computed_at",
+            (cache_key, json.dumps(payload), computed_at),
+        )
+
+
+def load_result_cache(cache_key: str, path: Optional[Path] = None) -> Optional[tuple[Any, str]]:
+    """(payload, computed_at), or None when `cache_key` has never been
+    cached."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT payload, computed_at FROM result_cache WHERE cache_key = ?", (cache_key,)
+        ).fetchone()
+    return (json.loads(row["payload"]), row["computed_at"]) if row else None
 
 
 # ---------------------------------------------------------------- SDE cache

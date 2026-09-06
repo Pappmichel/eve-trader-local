@@ -12,12 +12,13 @@ view's cheap-local-read table. `do_set_mineral_requirement`/
 `run_action`, matching doctrine_fittings.py's own `_create_doctrine`/
 `_remove_fitting` (every mutation goes through the worker thread regardless
 of whether it happens to touch the network - see refining_ore_shortlist.py's
-own docstring for the same point). `do_optimize_mineral_shopping_list` is
-the one real network call (Jita's live order book plus a Goonmetrics
-home-market quote) - it always solves against the saved requirement list
-here (there's no ad-hoc-list UI; the do_* function's own `requirements=None`
-default already handles that), so Solve always re-reads whatever's currently
-saved/shown in the table above it.
+own docstring for the same point). `do_optimize_mineral_shopping_list` reads
+Jita/C-J prices from storage.order_book_cache now - the last App > Update
+Data...'s Ore & Minerals run, never a live call of its own (see
+esi_update.py's own docstring) - and always solves against the saved
+requirement list here (there's no ad-hoc-list UI; the do_* function's own
+`requirements=None` default already handles that), so Solve always re-reads
+whatever's currently saved/shown in the table above it.
 """
 from __future__ import annotations
 
@@ -91,6 +92,7 @@ class MineralShoppingListView(BaseView):
         self.result_tabs.addTab(self.coverage_table, "Coverage")
         self.root_layout.addWidget(self.result_tabs)
 
+        self._add_staleness_label("market_prices")
         self._finish_status_row()
         self._load_requirements()
 
@@ -173,6 +175,7 @@ class MineralShoppingListView(BaseView):
         populate(self.direct_table, [_direct_purchase_row(p) for p in plan["direct_purchases"]],
                 default_sort=_DIRECT_SORT)
         populate(self.coverage_table, [_coverage_row(c) for c in plan["coverage"]], default_sort=_COVERAGE_SORT)
+        self._refresh_staleness_label()
         message = (f"Total cost: {plan['total_cost']:,.0f} ISK "
                    f"(ore {plan['ore_cost']:,.0f} + direct {plan['direct_cost']:,.0f})")
         if plan.get("savings_vs_all_direct") is not None:

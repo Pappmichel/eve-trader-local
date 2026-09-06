@@ -6,10 +6,13 @@ shape) and get a per-line sell-as-is-vs-reprocess quote plus totals.
 
 A single-purpose tab (unlike the Ore Shortlist's multi-command grouping)
 since there's only one real command here and it doesn't share state with
-anything else on screen - matching doctrine_shopping_list.py's own
-"one real network call, nothing else fits on this tab" reasoning. Nothing
-is loaded on tab-open: a quote only exists for a paste the user provides,
-there's no "last quote" saved anywhere to show first.
+anything else on screen. Prices come from storage.order_book_cache - the
+last App > Update Data...'s Ore & Minerals (or Trading, which shares the
+same structure-book cache) run - never a live call of its own (see
+esi_update.py's own docstring); an item outside any recent sync's known
+universe simply quotes as unpriced. Nothing is loaded on tab-open: a quote
+only exists for a paste the user provides, there's no "last quote" saved
+anywhere to show first.
 """
 from __future__ import annotations
 
@@ -55,6 +58,7 @@ class ReprocessingQuoteView(BaseView):
         self.table = build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS)
         self.root_layout.addWidget(self.table)
 
+        self._add_staleness_label("market_prices")
         self._finish_status_row()
 
     def _quote(self) -> None:
@@ -68,10 +72,8 @@ class ReprocessingQuoteView(BaseView):
     def _on_quoted(self, result: dict) -> None:
         rows = result["rows"]
         populate(self.table, [_row_to_cells(r) for r in rows])
+        self._refresh_staleness_label()
         totals = result["totals"]
-        message = (f"{totals['reprocess_count']:,} item(s) worth reprocessing - "
-                   f"{totals['total_refined_value']:,.0f} ISK refined vs. "
-                   f"{totals['total_sell_as_is_value']:,.0f} ISK sold as-is.")
-        if result.get("priced_via_fallback"):
-            message += " (prices came from the Goonmetrics fallback, not the real order book)"
-        self.show_info(message)
+        self.show_info(f"{totals['reprocess_count']:,} item(s) worth reprocessing - "
+                       f"{totals['total_refined_value']:,.0f} ISK refined vs. "
+                       f"{totals['total_sell_as_is_value']:,.0f} ISK sold as-is.")

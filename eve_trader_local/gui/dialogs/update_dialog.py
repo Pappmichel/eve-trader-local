@@ -1,4 +1,9 @@
-"""The "Check for Updates..." dialog (`main_window.py`'s App menu).
+"""The "Check for App Updates..." dialog (`main_window.py`'s App menu).
+
+Not to be confused with `esi_update_dialog.EsiUpdateDialog` ("Update
+Data..." in the same menu) - that one refreshes game data from ESI/
+Goonmetrics, this one checks GitHub for a newer eve-trader-local release.
+Two unrelated kinds of "update" that happen to share the word.
 
 Branches on `paths.is_frozen()` right at construction, same signal
 `updater.py`'s own Stage-1/Stage-2 split is built around:

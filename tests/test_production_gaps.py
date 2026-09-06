@@ -147,9 +147,12 @@ def test_do_get_system_cost_indices_normalizes_empty_to_none(gaps_sde, monkeypat
 
 
 def test_do_get_system_cost_indices_passes_through_real_data(gaps_sde, monkeypatch):
+    # Cache-only read now (see esi_update.py's own docstring) - the live
+    # fetch behind this is pricing.refresh_system_cost_indices, exercised by
+    # its own sync-bundle test, not here.
     monkeypatch.setattr(
-        production_actions.pricing, "system_cost_indices_for",
-        lambda client, system_id: {"manufacturing": 0.02} if system_id else {})
+        production_actions.pricing, "cached_system_cost_indices",
+        lambda system_id: {"manufacturing": 0.02} if system_id else {})
     result = production_actions.do_get_system_cost_indices(
         _cfg(manufacturing_system_id=30000142, component_system_id=None))
     assert result["manufacturing"] == {"manufacturing": 0.02}

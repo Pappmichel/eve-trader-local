@@ -2,11 +2,15 @@
 Build-vs-Buy-C-J-vs-Buy-Jita comparison over real stockpile shortfalls.
 
 No real network/SDE-blueprint-walk needed: stockpile_rows_for_doctrine,
-production_pricing.home_prices/jita_prices/system_cost_indices_for,
-unit_cost_detail, _haul_volume and structural_material_closure are all
-monkeypatched at the doctrine.engine module boundary, matching this repo's
-established no-network test pattern (test_production_pricing.py,
-test_doctrine_engine.py)."""
+production_pricing.home_prices/jita_prices/cached_system_cost_indices/
+cached_adjusted_prices, unit_cost_detail, _haul_volume and
+structural_material_closure are all monkeypatched at the doctrine.engine
+module boundary, matching this repo's established no-network test pattern
+(test_production_pricing.py, test_doctrine_engine.py). home_prices/
+jita_prices/cached_system_cost_indices/cached_adjusted_prices are
+cache-only reads now (see esi_update.py's own docstring) - engine.py itself
+never constructs an ESIClient anymore, so there is nothing left to fake at
+that level."""
 from __future__ import annotations
 
 from eve_trader_local.doctrine import engine
@@ -31,23 +35,15 @@ def _price(type_id: int, sell: float) -> CurrentPrice:
     return CurrentPrice(type_id=type_id, updated="", buy=0.0, sell=sell)
 
 
-class _FakeESIClient:
-    def __init__(self, *a, **k):
-        pass
-
-    def get_adjusted_prices(self):
-        return {}
-
-
 def _patch_pricing_boundary(monkeypatch, home: dict, jita: dict, build_costs: dict):
     """Stubs everything shopping_list_rows reaches for outside pure logic:
-    ESI/Goonmetrics-backed home/jita quotes, cost-index lookups, and
+    cached home/jita quotes, cached cost-index/adjusted-price lookups, and
     Production's own unit_cost_detail (build_costs maps type_id -> build_cost
     or None, mirroring unit_cost_detail's (best, build_cost, buy) shape)."""
-    monkeypatch.setattr(engine, "ESIClient", _FakeESIClient)
     monkeypatch.setattr(engine.production_pricing, "home_prices", lambda type_ids, cfg: home)
     monkeypatch.setattr(engine.production_pricing, "jita_prices", lambda type_ids: jita)
-    monkeypatch.setattr(engine.production_pricing, "system_cost_indices_for", lambda *a, **k: {})
+    monkeypatch.setattr(engine.production_pricing, "cached_system_cost_indices", lambda system_id: {})
+    monkeypatch.setattr(engine.production_pricing, "cached_adjusted_prices", lambda: {})
     monkeypatch.setattr(engine, "structural_material_closure", lambda seed_ids: set(seed_ids))
     monkeypatch.setattr(engine, "_haul_volume", lambda type_id, cfg: 10.0)
 

@@ -74,10 +74,11 @@ def test_main_window_opens_every_trading_view(qapp, db):
         assert isinstance(window.tabs.currentWidget(), view_class)
 
 
-def test_unlisted_undercut_check_undercut_end_to_end_with_no_seller_character(qapp, db):
-    """No seller character is registered in this throwaway DB, so
-    `do_check_undercut` raises ActionError before any live ESI call -
-    exercises the run_action -> failure -> status-label path, same style as
+def test_unlisted_undercut_check_undercut_end_to_end_with_nothing_cached(qapp, db):
+    """`do_check_undercut` is a cache-only read now (see esi_update.py's own
+    docstring) - nothing has ever synced in this throwaway DB, so it raises
+    ActionError before any live ESI call - exercises the run_action ->
+    failure -> status-label path, same style as
     test_gui_station_trading.py's own end-to-end test."""
     from eve_trader_local.gui.views.trading_unlisted_undercut import UnlistedUndercutView
 
@@ -86,21 +87,7 @@ def test_unlisted_undercut_check_undercut_end_to_end_with_no_seller_character(qa
     _drain(qapp, view)
 
     assert view.undercut_table.rowCount() == 0
-    assert "seller" in view.status_label.text().lower()
-
-
-def test_candidate_discovery_find_candidates_end_to_end_with_empty_universe(qapp, db):
-    """The focused-candidates table is empty in this throwaway DB, so
-    `do_find_new_candidates` raises ActionError before any live network call
-    - exercises the run_action -> failure -> status-label path without
-    depending on network access."""
-    from eve_trader_local.gui.views.trading_candidate_discovery import CandidateDiscoveryView
-
-    view = CandidateDiscoveryView()
-    view._find_candidates(True)
-    _drain(qapp, view)
-
-    assert "focused candidates" in view.status_label.text().lower()
+    assert "no cached undercut check yet" in view.status_label.text().lower()
 
 
 def test_realized_transactions_load_transactions_end_to_end_with_no_character(qapp, db):

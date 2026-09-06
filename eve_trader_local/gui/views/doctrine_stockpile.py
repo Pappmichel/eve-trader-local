@@ -1,20 +1,24 @@
-"""Doctrine's Stockpile Status tab: the ESI sync that feeds it
-(`sync-doctrine`), the offline-revalidation action (`validate-contracts`),
-and the two read-only reports it produces (`doctrine-status`'s per-fitting
-contract/stockpile ampel, `stockpile-status`'s aggregated shortfalls) plus
-the synced contracts list (`list-contracts`) - grouped together because
-"sync ESI, then look at the ampel/shortfalls/contracts it produced" is one
-workflow, matching production_logistics.py's own "the config input and the
-report(s) it feeds" grouping.
+"""Doctrine's Stockpile Status tab: the offline-revalidation action
+(`validate-contracts`) and the two read-only reports it produces
+(`doctrine-status`'s per-fitting contract/stockpile ampel, `stockpile-
+status`'s aggregated shortfalls) plus the synced contracts list
+(`list-contracts`) - grouped together because "look at the ampel/
+shortfalls/contracts a sync produced" is one workflow, matching
+production_logistics.py's own "the config input and the report(s) it feeds"
+grouping. The ESI sync itself (`sync-doctrine`) has no button here anymore -
+it only runs from App > Update Data...'s Doctrine scope now (see
+esi_update.py's own docstring).
 
 `do_get_doctrine_status`/`do_get_stockpile_status` are pure local
 computation (re-derived from already-synced contracts/assets, no network -
 see doctrine/engine.py's own `stockpile_rows_for_doctrine`/`fitting_status`)
 but still routed through `run_action` rather than loaded synchronously on
 open, matching production_logistics.py's own treatment of its (also
-locally-computed but potentially slow) planner-backed reports. `sync-
-doctrine` is the one real network call here. Contracts are a cheap local
-read (`storage.list_doctrine_contracts`) so that list loads on open."""
+locally-computed but potentially slow) planner-backed reports.
+`do_validate_contracts` likewise never touches ESI (re-matches already-
+synced contracts against the current Fitting definitions). Contracts are a
+cheap local read (`storage.list_doctrine_contracts`) so that list loads on
+open."""
 from __future__ import annotations
 
 import functools
@@ -80,19 +84,17 @@ class StockpileStatusView(BaseView):
         self.tabs.addTab(self.contracts_table, "Synced Contracts")
         self.root_layout.addWidget(self.tabs)
 
+        self._add_staleness_label(["assets", "contracts"])
         self._finish_status_row()
         self._load_contracts()
 
     def _build_filter_and_sync_box(self) -> QGroupBox:
-        box = QGroupBox("Sync && Filter")
+        box = QGroupBox("Filter")
         outer = QVBoxLayout(box)
         form = QHBoxLayout()
         form.addWidget(QLabel("Doctrine ID (blank = all):"))
         self.doctrine_filter_input = QLineEdit()
         form.addWidget(self.doctrine_filter_input)
-        sync_btn = QPushButton("Sync ESI (Contracts + Assets)")
-        sync_btn.clicked.connect(self._sync)
-        form.addWidget(sync_btn)
         validate_btn = QPushButton("Validate Contracts")
         validate_btn.clicked.connect(self._validate)
         form.addWidget(validate_btn)
@@ -104,25 +106,6 @@ class StockpileStatusView(BaseView):
 
     def _doctrine_filter(self) -> str | None:
         return self.doctrine_filter_input.text().strip() or None
-
-    def _sync(self) -> None:
-        self.run_action(functools.partial(doctrine_actions.do_sync_doctrine), self._on_synced,
-                        busy_message="Syncing Doctrine contracts and assets from ESI...")
-
-    def _on_synced(self, result: dict) -> None:
-        contracts = result.get("contracts", {})
-        assets = result.get("assets", {})
-        parts = []
-        if "error" in contracts:
-            parts.append(f"contracts failed: {contracts['error']}")
-        else:
-            parts.append(f"contracts synced: {contracts.get('contracts_synced', 0):,}")
-        if "error" in assets:
-            parts.append(f"assets failed: {assets['error']}")
-        else:
-            parts.append("assets synced")
-        self.show_info("Sync complete - " + ", ".join(parts))
-        self._load_contracts()
 
     def _validate(self) -> None:
         self.run_action(functools.partial(doctrine_actions.do_validate_contracts), self._on_validated,
@@ -169,3 +152,4 @@ class StockpileStatusView(BaseView):
             fitting_ids = {row[0] for row in storage.list_fittings_for_doctrine(doctrine_id)}
             rows = [r for r in rows if r["matched_fitting_id"] in fitting_ids]
         populate(self.contracts_table, [_contract_row(r) for r in rows])
+        self._refresh_staleness_label()

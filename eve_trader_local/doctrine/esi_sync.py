@@ -30,6 +30,9 @@ from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError
 from ..esi_client import ESIClient, ESIError
+from ..production.config import PRODUCTION_CONFIG
+from ..production import pricing as production_pricing
+from ..production.engine import structural_material_closure
 from . import engine
 from .config import DOCTRINE_CONFIG, DoctrineConfig
 from .constants import CONTRACT_TYPE_ITEM_EXCHANGE, FINISHED_CONTRACT_STATUSES, SYNCABLE_CONTRACT_STATUSES
@@ -407,29 +410,67 @@ def sync_assets(client: Optional[ESIClient] = None, tm: Optional[TokenManager] =
     return {"characters": per_character, "corporations": per_corporation}
 
 
+def refresh_shopping_list_prices(cfg: DoctrineConfig = DOCTRINE_CONFIG) -> dict:
+    """Part of the esi_update.py "Market Prices" scope group: home/Jita price
+    refresh for the Shopping List's own bounded universe (see engine.
+    shopping_list_rows, which reads these back through production_pricing.
+    home_prices/jita_prices - never a live call itself anymore). Cost
+    indices/adjusted prices are Production's own separate "Cost Indices"
+    scope now (production_pricing.cached_system_cost_indices/
+    cached_adjusted_prices) - if that scope hasn't been synced yet, the
+    shopping list simply shows less precise build costs, same "unpriced
+    until some sync covers it" pattern the rest of this app already uses.
+    Ideally run after the Assets scope so the shortfall numbers this prices
+    against are already current, but not required - a stale shortfall list
+    still gets priced, just possibly for the wrong quantity."""
+    rows, _assets_available = engine.stockpile_rows_for_doctrine(cfg=cfg)
+    aggregated = [r for r in engine.aggregate_stockpile_rows(rows) if r.shortfall > 0]
+    priced_type_ids = list(structural_material_closure(row.type_id for row in aggregated))
+
+    home_count = len(production_pricing.refresh_home_prices(priced_type_ids, PRODUCTION_CONFIG))
+    jita_count = len(production_pricing.refresh_jita_prices(priced_type_ids))
+    return {"shortfall_items": len(aggregated), "home_prices": home_count, "jita_prices": jita_count}
+
+
 def sync_doctrine(cfg: DoctrineConfig = DOCTRINE_CONFIG) -> dict:
-    """Runs both halves (contracts, then assets) against one shared
-    ESIClient/TokenManager, and stamps the combined sync time. Each half is
+    """The CLI's own "do everything Doctrine needs, in one command"
+    convenience wrapper - unrelated to esi_update.py's per-scope-group
+    "Update Data" dialog (see that module's own docstring), which triggers
+    the Contracts/Assets/Market Prices scopes independently instead, each
+    stamping its own esi_sync_state key. Runs contracts, then assets,
+    against one shared ESIClient/TokenManager, then refreshes the Shopping
+    List's own price universe now that assets are current. Each step is
     isolated in its own try/except: a fatal problem in one (e.g. no
-    structure configured for contracts) must not discard the other half's
+    structure configured for contracts) must not discard another step's
     already-fetched-and-persisted result - sync_contracts/sync_assets each
     write their own tables internally before returning, so a later failure
-    here can't undo an earlier success. Raises only if *both* halves fail."""
+    here can't undo an earlier success. Raises only if both contracts and
+    assets fail (a shopping-list pricing failure alone is never fatal - the
+    shopping list simply shows fewer priced rows)."""
     tm = TokenManager(OAUTH_CONFIG)
     client = ESIClient(tokens=tm)
     result: dict = {}
     errors: list[str] = []
+    now = datetime.now(timezone.utc).isoformat()
     try:
         result["contracts"] = sync_contracts(cfg, client=client, tm=tm)
+        storage.set_esi_sync_time("contracts", now)
     except ActionError as e:
         result["contracts"] = {"error": str(e)}
         errors.append(str(e))
     try:
         result["assets"] = sync_assets(client=client, tm=tm)
+        storage.set_esi_sync_time("assets", now)
     except ActionError as e:
         result["assets"] = {"error": str(e)}
         errors.append(str(e))
     if len(errors) == 2:
         raise ActionError(f"Doctrine sync failed entirely: {'; '.join(errors)}")
-    storage.set_esi_sync_time("doctrine", datetime.now(timezone.utc).isoformat())
+
+    try:
+        result["shopping_list_prices"] = refresh_shopping_list_prices(cfg)
+        storage.set_esi_sync_time("market_prices", now)
+    except Exception as e:  # noqa: BLE001 - best-effort; contracts/assets already succeeded above
+        result["shopping_list_prices"] = {"error": str(e)}
+
     return result

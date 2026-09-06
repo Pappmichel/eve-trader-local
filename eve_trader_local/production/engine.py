@@ -794,16 +794,11 @@ def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsC
     home = pricing.home_prices(priced_type_ids, cfg)
     jita = pricing.jita_prices(priced_type_ids)
 
-    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id),
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = pricing.cached_adjusted_prices()
 
     results = []
     for type_id, type_name, meta_level, activity, _bp in buildable:
@@ -1157,16 +1152,11 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     home = pricing.home_prices(priced_type_ids, cfg)
     jita = pricing.jita_prices(priced_type_ids)
 
-    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id),
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = pricing.cached_adjusted_prices()
 
     inventory: list[InventoryRow] = []
     invention_list: list[InventionNeedRow] = []
@@ -1330,16 +1320,11 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     home = pricing.home_prices(priced_type_ids, cfg)
     jita = pricing.jita_prices(priced_type_ids)
 
-    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id),
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = pricing.cached_adjusted_prices()
 
     jobs: dict[int, AssetPlanJob] = {}
     stock_used: dict[int, float] = {}
@@ -1533,16 +1518,11 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     home = pricing.home_prices(priced_type_ids, cfg)
     jita = pricing.jita_prices(priced_type_ids)
 
-    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id),
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = pricing.cached_adjusted_prices()
 
     # Same pooling ledger _expand_all itself uses (see its own docstring) -
     # seeded here for the order's own top-level items the same way
@@ -1682,6 +1662,27 @@ def _descendant_market_group_ids(root_id: int) -> set[int]:
     return result
 
 
+def production_price_universe() -> list[int]:
+    """The bounded type_id set esi_update.py's Production sync bundle
+    refreshes home/Jita prices for: every ship (discover_ship_margins' own
+    catalog) plus every configured stock target, both expanded through their
+    full material closure - the same bounded universe _scan_ship_margins/
+    stock_value already compute for themselves, just fetched once up front
+    by the sync bundle instead of live on every view open.
+
+    A build-material-tree/item-margin lookup for something outside this set
+    simply has no cached price until it happens to be covered here - the
+    same accepted limitation Ore & Minerals' Reprocessing Quote has for
+    items outside its own known universe (see esi_update.py's own
+    docstring)."""
+    excluded_market_groups = _descendant_market_group_ids(SPECIAL_EDITION_SHIPS_MARKET_GROUP_ID)
+    ship_ids = [type_id for type_id, _type_name, _volume, market_group_id, _meta_level, category_id
+               in storage.load_sde_types_with_market_group()
+               if category_id == SHIP_CATEGORY_ID and market_group_id not in excluded_market_groups]
+    stock_target_ids = [t[0] for t in storage.load_stock_targets()]
+    return list(structural_material_closure(ship_ids + stock_target_ids))
+
+
 def discover_ship_margins(cfg: ProductionConfig = PRODUCTION_CONFIG,
                           client: Optional["GoonmetricsClient"] = None) -> list[dict]:
     """Production's Margin page (list view): every ship with a real
@@ -1721,16 +1722,11 @@ def _scan_ship_margins(cfg: ProductionConfig) -> list[dict]:
     home = pricing.home_prices(priced_type_ids, cfg)
     jita = pricing.jita_prices(priced_type_ids)
 
-    from ..esi_client import ESIClient  # local import: only needed for this scan's live lookups
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id),
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = pricing.cached_adjusted_prices()
 
     results = []
     for type_id, type_name, meta_level in ships:
@@ -1772,16 +1768,11 @@ def item_margin_detail(type_id: int, type_name: str, cfg: ProductionConfig = PRO
     home = pricing.home_prices(priced_type_ids, cfg)
     jita = pricing.jita_prices(priced_type_ids)
 
-    from ..esi_client import ESIClient  # local import: only needed for this call's live lookups
-    esi_client = ESIClient()
     cost_indices: CostIndices = {
-        "component": pricing.system_cost_indices_for(esi_client, cfg.component_system_id),
-        "manufacturing": pricing.system_cost_indices_for(esi_client, cfg.manufacturing_system_id),
+        "component": pricing.cached_system_cost_indices(cfg.component_system_id),
+        "manufacturing": pricing.cached_system_cost_indices(cfg.manufacturing_system_id),
     }
-    try:
-        adjusted_prices = esi_client.get_adjusted_prices()
-    except Exception:  # noqa: BLE001 - best-effort; falls back to 0 (job_cost=0), not a guess
-        adjusted_prices = {}
+    adjusted_prices = pricing.cached_adjusted_prices()
 
     activity, _bp = classify_activity(type_id)
     build_cost = _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors,

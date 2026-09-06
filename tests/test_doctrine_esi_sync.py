@@ -245,4 +245,8 @@ def test_sync_doctrine_isolates_each_half_and_persists_partial_success(db, one_c
     result = esi_sync.sync_doctrine(cfg)
     assert "error" in result["contracts"]
     assert result["assets"]["characters"]["Test Pilot"] == {"assets": 1}
-    assert storage.get_esi_sync_time("doctrine") is not None
+    # esi_update.py's own scope-group keys now (contracts/assets are two
+    # independently-triggerable scopes, not one combined "doctrine" sync) -
+    # contracts failed above, so only "assets" is stamped.
+    assert storage.get_esi_sync_time("assets") is not None
+    assert storage.get_esi_sync_time("contracts") is None

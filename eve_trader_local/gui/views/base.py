@@ -19,9 +19,10 @@ from __future__ import annotations
 from typing import Any, Callable, Optional, Sequence
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QPushButton, QTableWidget,
+from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
+from ... import esi_update
 from ..workers import BusyMixin
 
 
@@ -34,6 +35,30 @@ class BaseView(QWidget, BusyMixin):
         super().__init__(parent)
         self._init_busy()
         self.root_layout = QVBoxLayout(self)
+
+    def _add_staleness_label(self, scope_keys: str | list[str]) -> None:
+        """A small "Data as of ..." line (esi_update.describe/describe_many)
+        for any view whose data comes from one or more of esi_update.SCOPES -
+        every ESI/market call this app makes now happens only inside those
+        sync bundles (see esi_update.py's own docstring), so this is how a
+        view tells the user how fresh what they're looking at is, and where
+        to refresh it (App > Update Data...) instead of a "Refresh" button of
+        its own. Pass a list when the view's data spans more than one scope
+        (e.g. Trading's Shortlist reads Market Orders + Assets + Market
+        Prices) - the label then reports whichever of those is least fresh.
+        Call once, after other widgets are in `root_layout`; call
+        `_refresh_staleness_label()` after this view's own success handlers
+        run, in case this view's action was itself what just synced that
+        scope (e.g. a sync-bundle-triggering action elsewhere in the same
+        session)."""
+        self._staleness_scope_keys = [scope_keys] if isinstance(scope_keys, str) else list(scope_keys)
+        self._staleness_label = QLabel(esi_update.describe_many(self._staleness_scope_keys))
+        self._staleness_label.setStyleSheet("color: gray;")
+        self.root_layout.addWidget(self._staleness_label)
+
+    def _refresh_staleness_label(self) -> None:
+        if getattr(self, "_staleness_label", None) is not None:
+            self._staleness_label.setText(esi_update.describe_many(self._staleness_scope_keys))
 
     def _finish_status_row(self) -> None:
         """Call once, after subclasses have added their own widgets to

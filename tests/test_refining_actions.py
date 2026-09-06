@@ -43,6 +43,16 @@ def stats(sell_percentile, sell_volume=1000.0) -> OrderStats:
                       buy_percentile=None, buy_volume=0.0)
 
 
+def _seed_order_book(market: str, stats_by_id: dict) -> None:
+    """Seeds storage.order_book_cache directly, standing in for a sync
+    bundle's own live fetch - do_quote_reprocessing/do_optimize_mineral_
+    shopping_list are cache-only reads now (see esi_update.py's own
+    docstring) and never construct an ESIClient themselves."""
+    rows = {tid: (s.buy_percentile, s.sell_percentile, s.buy_volume, s.sell_volume)
+           for tid, s in stats_by_id.items()}
+    storage.save_order_book_stats(market, rows, "2026-01-01T00:00:00")
+
+
 @pytest.fixture
 def trading_cfg() -> TradingConfig:
     return TradingConfig(jita_region_id=10000002, structure_id=1234567890123,
@@ -130,22 +140,26 @@ def test_refresh_ore_shortlist_empty_raises(db, monkeypatch, trading_cfg, refini
 
 
 def test_refresh_ore_shortlist_happy_path(db, monkeypatch, trading_cfg, refining_cfg):
+    """_cache_ore_mineral_prices (Market Prices scope) does the live fetch;
+    do_refresh_ore_shortlist (pure local, see esi_update.py's own docstring)
+    then recomputes from that cache alone."""
     _seed_sde()
     actions.do_add_ore_to_shortlist()
     client = StubClient(jita_stats={VELDSPAR: stats(1.0)},
                         structure_stats={TRITANIUM: stats(10.0)})
     install(monkeypatch, client=client, tokens=StubTokenManager([StubRecord("seller:1")]))
 
+    price_result = actions._cache_ore_mineral_prices(trading_cfg)
+    assert price_result["priced_via_fallback"] is False
+
     result = actions.do_refresh_ore_shortlist(trading_cfg, refining_cfg)
     assert result["evaluated"] == 1
     assert result["import_candidates"] == 1
-    assert result["priced_via_fallback"] is False
 
     rows = actions.do_get_ore_shortlist()["rows"]
     assert len(rows) == 1
     assert rows[0].item == "Compressed Veldspar"
     assert rows[0].decision == "Import"
-    assert storage.get_esi_sync_time("refining") is not None
 
 
 def test_refresh_ore_shortlist_structure_error_raises(db, monkeypatch, trading_cfg, refining_cfg):
@@ -154,7 +168,7 @@ def test_refresh_ore_shortlist_structure_error_raises(db, monkeypatch, trading_c
     client = StubClient(jita_stats={VELDSPAR: stats(1.0)}, structure_error=ESIError("no docking access"))
     install(monkeypatch, client=client, tokens=StubTokenManager([StubRecord("seller:1")]))
     with pytest.raises(ActionError, match="docking access"):
-        actions.do_refresh_ore_shortlist(trading_cfg, refining_cfg)
+        actions._cache_ore_mineral_prices(trading_cfg)
 
 
 def test_deactivate_and_activate_ore_shortlist_items(db):
@@ -171,16 +185,15 @@ def test_get_ore_shortlist_before_any_refresh_is_empty(db):
 
 
 # ---------------------------------------------------------- Reprocessing quote
-def test_quote_reprocessing_empty_paste_raises(db, monkeypatch, trading_cfg, refining_cfg):
-    install(monkeypatch, client=StubClient(), tokens=StubTokenManager())
+def test_quote_reprocessing_empty_paste_raises(db, trading_cfg, refining_cfg):
     with pytest.raises(ActionError, match="empty"):
         actions.do_quote_reprocessing("   ", trading_cfg, refining_cfg)
 
 
-def test_quote_reprocessing_happy_path(db, monkeypatch, trading_cfg, refining_cfg):
+def test_quote_reprocessing_happy_path(db, trading_cfg, refining_cfg):
     _seed_sde()
-    client = StubClient(structure_stats={VELDSPAR: stats(2.0), TRITANIUM: stats(10.0)})
-    install(monkeypatch, client=client, tokens=StubTokenManager([StubRecord("seller:1")]))
+    _seed_order_book(f"structure:{trading_cfg.structure_id}",
+                     {VELDSPAR: stats(2.0), TRITANIUM: stats(10.0)})
 
     paste = "Compressed Veldspar\t100\tVeldspar\tAsteroid\t\t\t0.01\t\t"
     result = actions.do_quote_reprocessing(paste, trading_cfg, refining_cfg)
@@ -188,25 +201,26 @@ def test_quote_reprocessing_happy_path(db, monkeypatch, trading_cfg, refining_cf
     row = result["rows"][0]
     assert row.type_id == VELDSPAR
     assert row.error is None
-    assert result["priced_via_fallback"] is False
     assert "reprocess_count" in result["totals"]
 
 
-def test_quote_reprocessing_unresolvable_item(db, monkeypatch, trading_cfg, refining_cfg):
+def test_quote_reprocessing_unresolvable_item(db, trading_cfg, refining_cfg):
     _seed_sde()
-    install(monkeypatch, client=StubClient(), tokens=StubTokenManager())
     paste = "Not A Real Item\t5\tJunk\tMisc\t\t\t1.0\t\t"
     result = actions.do_quote_reprocessing(paste, trading_cfg, refining_cfg)
     assert result["rows"][0].decision == "Unknown item"
 
 
-def test_quote_reprocessing_structure_error_raises(db, monkeypatch, trading_cfg, refining_cfg):
+def test_quote_reprocessing_with_nothing_cached_is_unpriced(db, trading_cfg, refining_cfg):
+    """No sync has ever cached this item's structure-book price - a cache-
+    only read must degrade to "unpriced", never raise (see esi_update.py's
+    own docstring for why nothing here can fall back to a live call)."""
     _seed_sde()
-    client = StubClient(structure_error=ESIError("down"))
-    install(monkeypatch, client=client, tokens=StubTokenManager())
     paste = "Compressed Veldspar\t100\tVeldspar\tAsteroid\t\t\t0.01\t\t"
-    with pytest.raises(ActionError, match="order book"):
-        actions.do_quote_reprocessing(paste, trading_cfg, refining_cfg)
+    result = actions.do_quote_reprocessing(paste, trading_cfg, refining_cfg)
+    row = result["rows"][0]
+    assert row.type_id == VELDSPAR
+    assert row.sell_as_is_value is None
 
 
 # ------------------------------------------------- Mineral requirement CRUD
@@ -265,41 +279,37 @@ def test_list_refinable_minerals(db):
 
 
 # --------------------------------------------------------- Mineral Shopping List
-def test_optimize_shopping_list_no_requirements_raises(db, monkeypatch, trading_cfg, refining_cfg):
+def test_optimize_shopping_list_no_requirements_raises(db, trading_cfg, refining_cfg):
     _seed_sde()
-    install(monkeypatch, client=StubClient(), tokens=StubTokenManager())
     with pytest.raises(ActionError, match="requirements"):
         actions.do_optimize_mineral_shopping_list([], trading_cfg, refining_cfg, ProductionConfig())
 
 
-def test_optimize_shopping_list_no_ore_universe_raises(db, monkeypatch, trading_cfg, refining_cfg):
-    install(monkeypatch, client=StubClient(), tokens=StubTokenManager())
+def test_optimize_shopping_list_no_ore_universe_raises(db, trading_cfg, refining_cfg):
     with pytest.raises(ActionError, match="SDE cache"):
         actions.do_optimize_mineral_shopping_list(
             [{"type_id": TRITANIUM, "required_qty": 100, "name": "Tritanium"}],
             trading_cfg, refining_cfg, ProductionConfig())
 
 
-def test_optimize_shopping_list_esi_failure_raises(db, monkeypatch, trading_cfg, refining_cfg):
+def test_optimize_shopping_list_raises_when_nothing_is_cached(db, trading_cfg, refining_cfg):
+    """No sync has ever cached Jita prices - a cache-only read must degrade
+    to "nothing prices this", never a live call (see esi_update.py's own
+    docstring); the LP solve itself is what raises here, same as a genuinely
+    unpriceable mineral would."""
     _seed_sde()
-
-    class BoomClient(StubClient):
-        def region_order_stats_bulk(self, region_id, type_ids):
-            raise ESIError("Jita is down")
-
-    install(monkeypatch, client=BoomClient(), tokens=StubTokenManager())
-    with pytest.raises(ActionError, match="Jita"):
+    with pytest.raises(ActionError, match="No way to source"):
         actions.do_optimize_mineral_shopping_list(
             [{"type_id": TRITANIUM, "required_qty": 100, "name": "Tritanium"}],
             trading_cfg, refining_cfg, ProductionConfig())
 
 
-def test_optimize_shopping_list_end_to_end(db, monkeypatch, trading_cfg, refining_cfg):
+def test_optimize_shopping_list_end_to_end(db, trading_cfg, refining_cfg):
     """discover ore candidates -> price them -> solve for a mineral
-    requirement, with mocked Jita prices - a real, if small, LP solve."""
+    requirement, with cached Jita prices - a real, if small, LP solve."""
     _seed_sde()
-    client = StubClient(jita_stats={VELDSPAR: stats(1.0), TRITANIUM: stats(50.0)})
-    install(monkeypatch, client=client, tokens=StubTokenManager())
+    _seed_order_book(f"region:{trading_cfg.jita_region_id}",
+                     {VELDSPAR: stats(1.0), TRITANIUM: stats(50.0)})
 
     plan = actions.do_optimize_mineral_shopping_list(
         [{"type_id": TRITANIUM, "required_qty": 415, "name": "Tritanium"}],
@@ -315,11 +325,11 @@ def test_optimize_shopping_list_end_to_end(db, monkeypatch, trading_cfg, refinin
     assert plan["ore_cost"] < plan["all_direct_cost"]
 
 
-def test_optimize_shopping_list_defaults_to_saved_requirements(db, monkeypatch, trading_cfg, refining_cfg):
+def test_optimize_shopping_list_defaults_to_saved_requirements(db, trading_cfg, refining_cfg):
     _seed_sde()
     actions.do_save_mineral_requirements([{"type_id": TRITANIUM, "required_qty": 415}])
-    client = StubClient(jita_stats={VELDSPAR: stats(1.0), TRITANIUM: stats(50.0)})
-    install(monkeypatch, client=client, tokens=StubTokenManager())
+    _seed_order_book(f"region:{trading_cfg.jita_region_id}",
+                     {VELDSPAR: stats(1.0), TRITANIUM: stats(50.0)})
 
     plan = actions.do_optimize_mineral_shopping_list(None, trading_cfg, refining_cfg, ProductionConfig())
     assert plan["coverage"][0].required == 415.0

@@ -1,14 +1,13 @@
 """Trading's Candidate Discovery tab: the "find new things to import" setup
-workflow, combined into one screen since every step feeds the next -
-
-- `do_build_universe` (which itself calls `do_build_focused` too, matching
-  `cli.py`'s own `cmd_build_universe`) - rebuilds the whole candidate
-  universe from the SDE cache and its focused subset in one click.
-- `do_find_new_candidates` (`--safe`/`--full`, same pair `cli.py`'s
-  `find-candidates` exposes) - backtests focused candidates against
-  Goonmetrics price history and records recommendations.
-- `do_add_to_shortlist` - promotes the last search run's recommended
-  candidates onto the actual Trading Shortlist.
+workflow. `do_build_universe`/`do_find_new_candidates` (both live ESI/
+Goonmetrics calls) no longer have buttons here - `do_find_new_candidates`
+runs from App > Update Data...'s Market Prices scope now (see
+esi_update.py's own docstring), and the universe rebuild
+(`do_build_universe`/`do_build_focused`) stays a rare, heavy, CLI-only step
+(`pipeline --rebuild-universe`/`build-universe`) that the routine Market
+Prices sync deliberately doesn't repeat every time - see `actions.
+do_pipeline`'s own docstring. `do_add_to_shortlist` (a purely local promote-
+from-storage step, no network) stays a button here.
 
 Three sub-tabs, each a cheap local read (`storage.load_candidate_universe`/
 `storage.latest_new_candidates`, no network) loaded on tab-open so the view
@@ -24,11 +23,6 @@ shows whatever was last computed immediately, same convention
   scored rows, defaulted to Score desc to match `history_backtest.py`'s own
   "highest score/margin first" ranking (`batch_results.sort(key=lambda r:
   (r.score, r.latest_margin), reverse=True)`).
-
-This is Trading's "occasional setup step, not a daily one" per
-`actions.do_pipeline`'s own docstring (already referenced by
-`trading_shortlist.py`'s own docstring as belonging elsewhere) - this is
-that elsewhere.
 """
 from __future__ import annotations
 
@@ -69,15 +63,9 @@ class CandidateDiscoveryView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        build_btn = QPushButton("Build Universe")
-        build_btn.clicked.connect(self._build_universe)
-        toolbar.addWidget(build_btn)
-        find_safe_btn = QPushButton("Find New Candidates (Safe)")
-        find_safe_btn.clicked.connect(functools.partial(self._find_candidates, True))
-        toolbar.addWidget(find_safe_btn)
-        find_full_btn = QPushButton("Find New Candidates (Full Scan)")
-        find_full_btn.clicked.connect(functools.partial(self._find_candidates, False))
-        toolbar.addWidget(find_full_btn)
+        reload_btn = QPushButton("Reload")
+        reload_btn.clicked.connect(self._load_local)
+        toolbar.addWidget(reload_btn)
         add_btn = QPushButton("Add Recommended To Shortlist")
         add_btn.clicked.connect(self._add_to_shortlist)
         toolbar.addWidget(add_btn)
@@ -93,48 +81,29 @@ class CandidateDiscoveryView(BaseView):
         self.tabs.addTab(self.new_candidates_table, "New Candidates (Search Results)")
         self.root_layout.addWidget(self.tabs)
 
+        self._add_staleness_label("market_prices")
         self._finish_status_row()
         self._load_local()
 
     def _load_local(self) -> None:
-        """Cheap local reads, no network - see module docstring."""
+        """Cheap local reads, no network - see module docstring. Building the
+        universe/finding new candidates both happen only via App > Update
+        Data... (or the CLI) now, so this is also what a "Reload" click
+        does - re-read whatever that last produced."""
         try:
             universe = storage.load_candidate_universe("candidate_universe")
             focused = storage.load_candidate_universe("focused_candidates")
             new_candidates = storage.latest_new_candidates()
-        except Exception as e:  # noqa: BLE001 - best-effort initial fill, buttons recover from any real problem
+        except Exception as e:  # noqa: BLE001 - best-effort initial fill, Reload recovers from any real problem
             self.show_error(f"Could not load saved candidate data: {e!r}")
             return
         populate(self.universe_table, [_candidate_row(c) for c in universe])
         populate(self.focused_table, [_candidate_row(c) for c in focused])
         populate(self.new_candidates_table, [_new_candidate_row(r) for r in new_candidates],
                 default_sort=_NEW_CANDIDATE_SORT)
+        self._refresh_staleness_label()
         self.show_info(f"Universe: {len(universe):,} | Focused: {len(focused):,} | "
                        f"Last search: {len(new_candidates):,} result(s).")
-
-    def _build_universe(self) -> None:
-        self.run_action(self._do_build_universe, self._on_universe_built,
-                        busy_message="Rebuilding the candidate universe from the SDE cache...")
-
-    @staticmethod
-    def _do_build_universe() -> dict:
-        universe = actions.do_build_universe()
-        focused = actions.do_build_focused()
-        return {"universe": universe, "focused": focused}
-
-    def _on_universe_built(self, result: dict) -> None:
-        self._load_local()
-        self.show_info(f"Candidate universe: {result['universe']['count']:,} items, "
-                       f"focused: {result['focused']['count']:,} items.")
-
-    def _find_candidates(self, safe: bool) -> None:
-        mode = "safe (rotating window)" if safe else "full scan"
-        self.run_action(functools.partial(actions.do_find_new_candidates, safe=safe), self._on_found,
-                        busy_message=f"Backtesting focused candidates - {mode}. This can take a while...")
-
-    def _on_found(self, result: dict) -> None:
-        self._load_local()
-        self.show_info(f"Evaluated {result['evaluated']:,} candidates, {result['recommended']:,} recommended.")
 
     def _add_to_shortlist(self) -> None:
         self.run_action(functools.partial(actions.do_add_to_shortlist), self._on_added,

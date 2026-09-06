@@ -1,7 +1,9 @@
 """Trading's Unlisted Stock && Undercut Check tab: `do_check_seller_unlisted_stock`
-and `do_check_undercut`, grouped into one screen - both are, per `actions.py`'s
-own section comment, "live one-shot checks" with no persisted state and no
-shared data model, same "small independent read-only reports" grouping
+and `do_check_undercut`, grouped into one screen - both cache-only reads now
+(see esi_update.py's own docstring): the live ESI check only happens inside
+App > Update Data...'s Trading scope, cached into storage.result_cache. This
+tab's two buttons just (re)display whatever that last run found, same
+"small independent read-only reports" grouping
 `station_trading_undercut_skills.py`'s `UndercutSkillsView` already uses for
 its own pair.
 
@@ -14,10 +16,9 @@ its own pair.
   own documented order ("results.sort(key=lambda r: r['difference'],
   reverse=True)") - Difference descending.
 
-Neither has a genuinely local read to load on tab-open (both always make a
-live ESI call) - same restraint `trading_shortlist.py`/
-`station_trading_undercut_skills.py` already document, so this starts empty
-until a button is clicked."""
+Neither loads on tab-open (nothing may have been cached yet) - same
+restraint `trading_shortlist.py`/`station_trading_undercut_skills.py`
+already document, so this starts empty until a button is clicked."""
 from __future__ import annotations
 
 import functools
@@ -62,10 +63,10 @@ class UnlistedUndercutView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        unlisted_btn = QPushButton("Check Unlisted Stock")
+        unlisted_btn = QPushButton("Show Unlisted Stock")
         unlisted_btn.clicked.connect(self._check_unlisted)
         toolbar.addWidget(unlisted_btn)
-        undercut_btn = QPushButton("Check Undercut")
+        undercut_btn = QPushButton("Show Undercut")
         undercut_btn.clicked.connect(self._check_undercut)
         toolbar.addWidget(undercut_btn)
         toolbar.addStretch(1)
@@ -78,11 +79,12 @@ class UnlistedUndercutView(BaseView):
         self.tabs.addTab(self.undercut_table, "Undercut Check")
         self.root_layout.addWidget(self.tabs)
 
+        self._add_staleness_label("market_orders")
         self._finish_status_row()
 
     def _check_unlisted(self) -> None:
         self.run_action(functools.partial(actions.do_check_seller_unlisted_stock), self._on_unlisted,
-                        busy_message="Checking structure stock against open sell orders...")
+                        busy_message="Loading the last cached unlisted-stock check...")
 
     def _on_unlisted(self, result: dict) -> None:
         rows = result["rows"]
@@ -92,7 +94,7 @@ class UnlistedUndercutView(BaseView):
 
     def _check_undercut(self) -> None:
         self.run_action(functools.partial(actions.do_check_undercut), self._on_undercut,
-                        busy_message="Checking your own sell orders against competing orders...")
+                        busy_message="Loading the last cached undercut check...")
 
     def _on_undercut(self, result: dict) -> None:
         rows = result["rows"]

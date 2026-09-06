@@ -2,12 +2,16 @@
 stockpile shortfall (across every doctrine, optionally filtered to one)
 priced Build vs. Buy-C-J vs. Buy-Jita. Kept separate from Stockpile Status
 even though it's derived from the same underlying shortfalls, because
-`do_get_shopping_list` is a real network call (home/Jita ESI order-book
-pricing plus Production's own build-cost engine, see doctrine/engine.py's
-`shopping_list_rows`) with its own noticeably-longer wait, unlike the
-Stockpile Status tab's purely-local ampel/shortfall computation - keeping
-it on its own tab means clicking Refresh here never blocks on re-running
-that other, unrelated local computation too."""
+`do_get_shopping_list` (home/Jita pricing plus Production's own build-cost
+engine, see doctrine/engine.py's `shopping_list_rows`) is a noticeably
+heavier computation than the Stockpile Status tab's purely-local ampel/
+shortfall pass - keeping it on its own tab means clicking Refresh here never
+blocks on re-running that other, unrelated computation too.
+
+Prices themselves are cache-only now (see esi_update.py's own docstring):
+the live ESI order-book fetch only happens inside App > Update Data...'s
+Doctrine scope; "Refresh" here just re-runs the local build-cost/shortfall
+math against whatever that last sync cached."""
 from __future__ import annotations
 
 import functools
@@ -46,6 +50,7 @@ class ShoppingListView(TableView):
 
         self._build_toolbar([("Refresh", self._refresh)])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
+        self._add_staleness_label(["assets", "market_prices"])
         self._finish_status_row()
 
     def _refresh(self) -> None:
@@ -56,4 +61,5 @@ class ShoppingListView(TableView):
     def _on_refreshed(self, result: dict) -> None:
         rows = result["rows"]
         self.populate_table([_row_to_cells(r) for r in rows])
+        self._refresh_staleness_label()
         self.show_info(f"{len(rows)} shortfall row(s)." if rows else "Nothing short of target.")

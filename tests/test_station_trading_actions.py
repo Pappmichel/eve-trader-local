@@ -183,21 +183,29 @@ def test_check_undercut_reports_both_sell_and_buy_undercuts(cfg, monkeypatch):
     )
     monkeypatch.setattr(actions, "ESIClient", lambda tokens: client)
 
-    result = actions.do_check_undercut(cfg)
+    cached = actions._cache_undercut(cfg)
+    assert cached == {"sell": 1, "buy": 1}
 
+    # do_check_undercut is the cache-read counterpart - same rows, no network.
+    result = actions.do_check_undercut()
     assert result["sell"] == [{"type_id": TRITANIUM, "name": "Tritanium",
                                "my_price": 10.0, "competitor_price": 9.0, "difference": 1.0}]
     assert result["buy"] == [{"type_id": PYERITE, "name": "Pyerite",
                               "my_price": 4.0, "competitor_price": 4.5, "difference": 0.5}]
 
 
-def test_check_undercut_with_no_traders_raises(cfg, monkeypatch):
+def test_check_undercut_needs_a_prior_sync():
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_check_undercut()
+
+
+def test_fetch_undercut_with_no_traders_raises(cfg, monkeypatch):
     monkeypatch.setattr(actions, "TokenManager", lambda cfg: StubTokenManager([]))
     with pytest.raises(ActionError, match="No trader characters"):
-        actions.do_check_undercut(cfg)
+        actions._cache_undercut(cfg)
 
 
-def test_check_undercut_converts_esi_error_to_action_error(cfg, monkeypatch):
+def test_fetch_undercut_converts_esi_error_to_action_error(cfg, monkeypatch):
     tm = StubTokenManager([StubRecord("trader:111", 111, "A Trader")])
     monkeypatch.setattr(actions, "TokenManager", lambda cfg: tm)
 
@@ -208,7 +216,7 @@ def test_check_undercut_converts_esi_error_to_action_error(cfg, monkeypatch):
     monkeypatch.setattr(actions, "ESIClient", lambda tokens: FailingClient())
 
     with pytest.raises(ActionError, match="Could not fetch order-book data"):
-        actions.do_check_undercut(cfg)
+        actions._cache_undercut(cfg)
 
 
 # ------------------------------------------------------------------ skills
@@ -231,8 +239,11 @@ def test_skill_summary_reports_levels_and_derived_order_slots(monkeypatch):
     client = StubSkillClient({111: {"skills": [{"skill_id": SKILL_TRADE, "active_skill_level": 5}]}})
     monkeypatch.setattr(actions, "ESIClient", lambda tokens: client)
 
-    result = actions.do_get_skill_summary()
+    cached = actions._cache_skill_summary()
+    assert cached == {"count": 1}
 
+    # do_get_skill_summary is the cache-read counterpart - same rows, no network.
+    result = actions.do_get_skill_summary()
     assert result[0]["character_name"] == "A Trader"
     assert result[0]["levels"]["Trade"] == 5
     assert result[0]["order_slots"] == 5 + 4 * 5
@@ -243,6 +254,7 @@ def test_skill_summary_reports_a_failed_character_without_raising(monkeypatch):
     monkeypatch.setattr(actions, "TokenManager", lambda cfg: tm)
     monkeypatch.setattr(actions, "ESIClient", lambda tokens: StubSkillClient(error=ESIError("403")))
 
+    actions._cache_skill_summary()
     result = actions.do_get_skill_summary()
 
     assert "error" in result[0]
@@ -252,7 +264,13 @@ def test_skill_summary_reports_a_failed_character_without_raising(monkeypatch):
 def test_skill_summary_with_no_characters_is_empty(monkeypatch):
     monkeypatch.setattr(actions, "TokenManager", lambda cfg: StubTokenManager([]))
     monkeypatch.setattr(actions, "ESIClient", lambda tokens: StubSkillClient())
+    actions._cache_skill_summary()
     assert actions.do_get_skill_summary() == []
+
+
+def test_skill_summary_needs_a_prior_sync():
+    with pytest.raises(ActionError, match="Update Data"):
+        actions.do_get_skill_summary()
 
 
 # -------------------------------------------------------------- characters
