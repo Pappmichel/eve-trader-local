@@ -397,6 +397,39 @@ current scope.
   much smaller, clearly-labeled per-line-item Buy-vs-Build estimate on
   top of the existing single-item `unitBuildCost`, not a narrowed port of
   the real planner.
+- **Production -> Stock Planner** (`data/production/ProductionEngine.kt`,
+  `StockPlan.kt`, `LiveStockSource.kt`; `ui/screens/
+  StockPlannerScreen.kt`): the user asked directly to resolve the
+  `plan_production` blocker every other Production gap above traces back
+  to, so this is a real port of `engine.plan_production`, not another
+  substitute. For every configured stock target it nets a live-ESI
+  current stock (a manual override, or owned assets everywhere plus
+  in-progress industry-job output) against the target quantity - a real
+  shortfall must clear a build-margin gate before it seeds demand.
+  `expandAll` resolves that demand breadth-first *across every target at
+  once*: a component shared by two targets is decided on and expanded
+  exactly once per round using its *total* pooled demand, with an
+  overbuild buffer sized off the stock-oblivious whole-tree run count
+  (`baseRuns`), not the level's own already-buffered demand, to avoid
+  compounding the buffer - matching desktop's own worked example exactly.
+  Reuses `ProductionBuildCost.kt`/`ProductionPricing.kt`'s cost math
+  throughout. New Room entities/DAOs for stock targets, manual stock, and
+  manual build/buy overrides (`StockPlan.kt`, Room v6 -> v7) - real
+  tables, not a settings-blob, following `DoctrineContractHistoryEntity`'s
+  established pattern, since this is user-managed structured data. New
+  `EsiClient.getAdjustedPrices`/`getSystemCostIndices` methods fetch the
+  live EIV/job-cost-index data the engine needs - added, but deliberately
+  not yet wired into `unitBuildCost`'s shared EIV approximation, since
+  that function is also used by Ship Margins/Build Candidates and
+  rewiring it is separate scope. Documented gaps (`ProductionEngine.kt`'s
+  own docstring): no Tech II/invention needs list (needs Reaction/
+  decryptor SDE data this Manufacturing-only cache doesn't carry), no
+  `job_category` column, live-read stock rather than a synced snapshot
+  (matching every other asset-shaped Production view here). A distinct
+  "Stock Planner" menu entry, not a replacement for the existing Planner
+  route (which already ports a different real feature, Material Tree/BOM
+  explosion) - both stay reachable under their own correctly-scoped
+  names.
 - **Production -> Invention Estimator** (`data/production/
   InventionEstimator.kt`; extends `data/sde/` with a new
   `sde_invention_probability` table and widens `sde_blueprint_materials`/
@@ -583,7 +616,11 @@ current scope.
   and its structure-name-resolution helper only exists to label that
   config UI and has no `EsiClient.kt` endpoint to call anyway. Confirmed
   nothing meaningful is portable in isolation - remains
-  `PlaceholderScreen`, correctly, not for lack of trying.
+  `PlaceholderScreen`, correctly, not for lack of trying. **Update:** the
+  `plan_production` engine this was blocked on now exists for real (see
+  Stock Planner above) - Logistics is a live candidate for a follow-up
+  pass wiring its four report functions onto it, not done yet as of this
+  note.
 - **Production -> Asset-Optimized Planner** got the same investigation
   and the same answer: `engine.plan_asset_optimized` is documented as
   reusing `plan_production`'s own buy-vs-build decision function, just
@@ -591,7 +628,9 @@ current scope.
   recursive material tree - so it needs the identical stock-target/
   manual-override storage and recursive buy-vs-build engine already
   missing for Planner/Special Orders/Logistics, not a smaller standalone
-  asset-vs-material-tree feature. Remains `PlaceholderScreen`, correctly.
+  asset-vs-material-tree feature. Remains `PlaceholderScreen`, correctly -
+  same update as Logistics: the missing engine now exists
+  (`ProductionEngine.kt`), a live follow-up candidate, not done yet.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters: a `TabRow` with one tab per tool that has a config on
   this platform - Trading, Station Trading, Production, Ore & Minerals

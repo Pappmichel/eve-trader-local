@@ -657,6 +657,42 @@ which "careful reading" alone had caught):
   runs a much smaller per-line-item Buy-vs-Build estimate on the existing
   single-item `unitBuildCost`, clearly not a narrowed port of the real
   planner.
+- Production -> **Stock Planner** (`data/production/ProductionEngine.kt`,
+  `StockPlan.kt`, `LiveStockSource.kt`; `ui/screens/StockPlannerScreen.kt`)
+  - the user asked directly to resolve the `plan_production` blocker
+  Planner/Special Orders/Logistics/Asset-Optimized Planner all hit, so
+  this is a genuine port of `engine.plan_production` itself, not another
+  substitute. What it does: for every configured stock target, nets a
+  live-ESI-derived current stock (a manual override, or owned assets
+  everywhere plus in-progress industry-job output) against the target
+  quantity; a real shortfall must clear a build-margin gate before it
+  seeds demand. `expandAll` then resolves that demand breadth-first
+  *across every target at once*, not depth-first per target - a
+  component shared by two different targets is decided on and expanded
+  exactly once per round, using its *total* pooled demand, with an
+  overbuild buffer sized off the stock-oblivious whole-tree run count
+  (`baseRuns`) rather than the level's own already-buffered demand, to
+  avoid compounding the buffer. Reuses `ProductionBuildCost.kt`/
+  `ProductionPricing.kt`'s existing cost math throughout rather than
+  reimplementing it. New Room entities/DAOs for stock targets, manual
+  stock, and manual build/buy overrides (`StockPlan.kt`, Room v6 -> v7)
+  follow the same real-table pattern `DoctrineContractHistoryEntity`
+  established, since this is user-managed structured data, not a small
+  fixed config blob. New `EsiClient.getAdjustedPrices`/
+  `getSystemCostIndices` methods fetch the live EIV/job-cost-index data
+  the real engine needs - added and available, but deliberately *not yet*
+  wired into `unitBuildCost`'s shared EIV approximation, since that
+  function is also used by Ship Margins and Build Candidates and
+  rewiring it is separate scope from resolving this blocker. Documented
+  gaps (in `ProductionEngine.kt`'s own docstring): no Tech II/invention
+  needs list (needs Reaction/decryptor machinery this Manufacturing-only
+  SDE cache doesn't carry), no `job_category` column, and stock is read
+  live every time rather than kept as a synced snapshot (matching every
+  other asset-shaped Production view's existing convention on this
+  platform). Added as its own distinct "Stock Planner" menu entry rather
+  than replacing the existing Planner route, which already ports a
+  different real desktop feature (Material Tree/BOM explosion, see
+  above) - both stay reachable under their own correctly-scoped names.
 - Production -> Logistics was investigated and confirmed genuinely
   blocked, not just left as a placeholder without checking: desktop's
   four Logistics report tabs (Logistics Status, Distribution
@@ -671,7 +707,12 @@ which "careful reading" alone had caught):
   "Resolve Structure Name" helper would need ESI endpoints
   (`EsiClient.kt` has none for structure/corporation name resolution)
   that only exist to label that same unportable config UI. Remains
-  `PlaceholderScreen`, correctly.
+  `PlaceholderScreen`, correctly - **update:** the underlying
+  `plan_production` engine this was blocked on has since been ported for
+  real (see Stock Planner above), so Logistics is a live candidate for a
+  follow-up pass wiring its four report functions onto
+  `ProductionEngine.kt`'s output; that wiring hasn't happened yet as of
+  this note.
 - Production -> Asset-Optimized Planner was investigated the same way and
   found blocked for the identical reason: `engine.plan_asset_optimized`
   is explicitly documented as reusing `plan_production`'s own buy-vs-
@@ -682,7 +723,10 @@ which "careful reading" alone had caught):
   index/asset-sync machinery already missing for Planner, Special
   Orders, and Logistics. No smaller portable subset exists - it isn't a
   standalone asset-vs-material-tree cross-reference, it's a variant of
-  the same missing optimizer. Remains `PlaceholderScreen`, correctly.
+  the same missing optimizer. Remains `PlaceholderScreen`, correctly -
+  same update as Logistics above: the missing engine now exists
+  (`ProductionEngine.kt`), so this is a live candidate for a follow-up
+  pass, not yet done as of this note.
 - Production -> Invention Estimator (`data/production/
   InventionEstimator.kt`; extends `data/sde/` with a new
   `sde_invention_probability` table and widens `sde_blueprint_materials`/
@@ -724,10 +768,11 @@ which "careful reading" alone had caught):
   Minerals' config classes existed with no UI to change them outside a
   hand-edited settings blob.
 
-Not started: Logistics and Asset-Optimized Planner remain confirmed
-genuinely blocked on the same missing `plan_production` stock-target
-engine as Planner/Special Orders (see above for all four) - the only
-remaining confirmed-blocked feature family. Otherwise: tests for anything
+Not started: the `plan_production` stock-target engine that was blocking
+Logistics and Asset-Optimized Planner has been ported for real (see Stock
+Planner above) - both are now live candidates for a follow-up pass wiring
+their own logic onto it, not confirmed-blocked placeholders anymore, but
+that wiring itself hasn't been done yet. Otherwise: tests for anything
 beyond the pure logic already covered, a Play Store listing.
 
 **Two real bugs found and fixed the same day, worth recording since
