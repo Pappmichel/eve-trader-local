@@ -78,6 +78,8 @@ independently "discovered" too.
 from __future__ import annotations
 
 import math
+import threading
+import time
 from typing import Iterable, Optional
 
 from .. import storage
@@ -714,6 +716,40 @@ def build_material_tree(type_id: int, quantity: float, cfg: ProductionConfig, ho
 # ever legitimately want to raise it).
 MAX_PLAUSIBLE_BUILD_MARGIN = 3.0  # 300%
 
+# Single-user version of the parent's own discover_build_candidates cache
+# (production/engine.py there) - a plain time.time()-based TTL, no
+# per-tenant keying since there is only ever one user of this database (see
+# storage.py's own module docstring). What DOES make an already-cached scan
+# wrong isn't concurrency (there is none to protect against here - this was
+# the local repo's original, correct reasoning for skipping a cache
+# entirely) but simply staleness across repeat calls in one GUI session: the
+# GUI's Build Candidates page and the planner re-invoke this on every click,
+# and without a cache each one re-walks the whole SDE market-listed universe
+# from scratch (a Windows-local performance audit, 2026-09-06, traced the
+# local Windows install's "planner takes forever" complaint to exactly this
+# - the online repo's own TTL cache was never ported over). A Settings save
+# (min_margin/min_daily_profit/build costs) or an SDE refresh changes the
+# result set, so both call invalidate_discover_cache() explicitly rather
+# than waiting out the TTL (see their own call sites).
+_DISCOVER_CACHE_TTL = 600  # seconds
+_discover_cache: Optional[list[dict]] = None
+_discover_cache_at: float = 0.0
+# Guards the cache slot and the scan that fills it, held for the whole scan
+# (not just the read/write) so two callers racing on a cold cache serialize
+# instead of one redundantly re-walking the whole SDE universe a second time.
+_discover_cache_lock = threading.Lock()
+
+
+def invalidate_discover_cache() -> None:
+    """Forces the next discover_build_candidates call to re-scan instead of
+    reusing a cached result. Call after anything that changes its result set
+    - a Settings save (do_update_settings) or an SDE refresh (refresh_sde) -
+    same reasoning as the parent repo's own invalidate_discover_cache."""
+    global _discover_cache, _discover_cache_at
+    with _discover_cache_lock:
+        _discover_cache = None
+        _discover_cache_at = 0.0
+
 
 def discover_build_candidates(cfg: ProductionConfig = PRODUCTION_CONFIG, top_n: int = 200,
                               client: Optional["GoonmetricsClient"] = None) -> list[dict]:
@@ -762,19 +798,27 @@ def discover_build_candidates(cfg: ProductionConfig = PRODUCTION_CONFIG, top_n: 
     parent: production here is for the local home market, freighting
     finished goods to Jita to sell isn't part of this tool's business model.
 
-    Not cached: the parent's TTL cache + per-tenant keying exists to serve
-    concurrent web requests across tenants, neither of which applies to a
-    single local user driving this from the CLI - a fresh scan on every call
-    is simpler and correct here."""
-    return _scan_build_candidates(cfg, client)[:top_n]
+    Cached for _DISCOVER_CACHE_TTL seconds (see that constant's own comment)
+    - `top_n` only slices the cached, already-ranked list, so repeat calls
+    with a different `top_n` reuse the same scan instead of re-triggering
+    it. The scan itself runs under _discover_cache_lock so two callers
+    racing on a cold cache serialize instead of redundantly scanning twice."""
+    global _discover_cache, _discover_cache_at
+    with _discover_cache_lock:
+        if _discover_cache is not None and (time.time() - _discover_cache_at) < _DISCOVER_CACHE_TTL:
+            return _discover_cache[:top_n]
+        results = _scan_build_candidates(cfg, client)
+        _discover_cache = results
+        _discover_cache_at = time.time()
+        return results[:top_n]
 
 
 def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsClient"]) -> list[dict]:
     """The actual (slow - walks every published, market-listed SDE item) scan
-    behind discover_build_candidates - split out purely to mirror the
-    parent's own function split (see that module's own reasoning for why:
-    holding a cache lock across the whole scan without deep indentation),
-    even though nothing here currently needs a lock of its own."""
+    behind discover_build_candidates - split out so the public function can
+    hold _discover_cache_lock across the whole scan without an awkwardly
+    deep `with` indentation over this entire body, same split as the
+    parent's own function."""
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
     selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists yet - see SYNC.md

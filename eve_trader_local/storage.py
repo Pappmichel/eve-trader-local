@@ -39,6 +39,7 @@ import json
 import sqlite3
 import uuid
 from contextlib import contextmanager
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional, Sequence
 
@@ -1101,6 +1102,15 @@ def replace_sde_data(
         conn.executemany("INSERT INTO sde_categories VALUES (?,?)", categories)
         conn.executemany("INSERT INTO sde_type_slots VALUES (?,?)", type_slots)
         conn.executemany("INSERT INTO sde_type_materials VALUES (?,?,?)", type_materials)
+    # A fresh dump invalidates every lru_cache'd lookup keyed on the old rows
+    # (see each function's own "Cached" docstring note above) - same
+    # precedent as the parent repo's own replace_sde_data.
+    get_sde_type.cache_clear()
+    get_type_materials.cache_clear()
+    get_type_category.cache_clear()
+    get_blueprint_for_product.cache_clear()
+    get_blueprint_materials.cache_clear()
+    find_invention_recipe_candidates_by_product_type_id.cache_clear()
 
 
 def sde_row_counts(path: Optional[Path] = None) -> dict[str, int]:
@@ -1134,16 +1144,19 @@ def get_sde_refresh_state(path: Optional[Path] = None) -> Optional[tuple[str, Op
     return tuple(row) if row else None
 
 
+@lru_cache(maxsize=None)
 def get_sde_type(type_id: int, path: Optional[Path] = None) -> Optional[tuple]:
     """One sde_types row as a plain tuple, in the schema's column order
     (type_id, group_id, type_name, volume, published, market_group_id,
     meta_level, meta_group_id, portion_size), or None if the type isn't in
     the cache.
 
-    Not cached (the parent repo memoises this with lru_cache because a
-    recursive bill-of-materials traversal hits the same type_ids over and
-    over) - no such caller exists here yet, and a cache would need explicit
-    invalidation on every refresh."""
+    Cached: production/engine.py's classify_activity and its recursive
+    bill-of-materials traversal (structural_material_closure/_unit_cost) hit
+    the same type_ids over and over during a full build-candidate scan -
+    exactly the parent repo's own reasoning for caching this (see its
+    get_sde_type), which this repo's version had not picked up yet.
+    Invalidated by replace_sde_data() below."""
     with connect(path) as conn:
         row = conn.execute("SELECT * FROM sde_types WHERE type_id = ?", (type_id,)).fetchone()
     return tuple(row) if row else None
@@ -1159,6 +1172,7 @@ def get_portion_size(type_id: int, path: Optional[Path] = None) -> Optional[int]
     return row[8] if row else None
 
 
+@lru_cache(maxsize=None)
 def get_type_materials(type_id: int, path: Optional[Path] = None) -> list[tuple[int, float]]:
     """Returns [(material_type_id, quantity_per_portion), ...] from the SDE's
     invTypeMaterials.csv - GitHub issue #90's "Ore & Minerals" feature. Used
@@ -1166,8 +1180,8 @@ def get_type_materials(type_id: int, path: Optional[Path] = None) -> list[tuple[
     reprocessing.py) - both are "type -> material yield" lookups against this
     same table. `quantity_per_portion` is the raw SDE quantity, before any
     yield% or portion-size-batch rounding is applied (see
-    apply_reprocessing_yield). Not cached - see get_sde_type's own docstring
-    for why."""
+    apply_reprocessing_yield). Cached - see get_sde_type's own docstring for
+    why; invalidated by replace_sde_data() below."""
     with connect(path) as conn:
         return conn.execute(
             "SELECT material_type_id, quantity FROM sde_type_materials WHERE type_id = ? "
@@ -1176,11 +1190,13 @@ def get_type_materials(type_id: int, path: Optional[Path] = None) -> list[tuple[
         ).fetchall()
 
 
+@lru_cache(maxsize=None)
 def get_type_category(type_id: int, path: Optional[Path] = None) -> Optional[int]:
     """The SDE category_id for a type (via its group), or None if either the
     type or its group is missing from the cache. Category - not group - is
     what distinguishes a ship/module from everything else (see
-    esi_client.resolve_effective_volume)."""
+    esi_client.resolve_effective_volume). Cached - see get_sde_type's own
+    docstring for why; invalidated by replace_sde_data() below."""
     with connect(path) as conn:
         row = conn.execute(
             "SELECT g.category_id FROM sde_types t "
@@ -1222,12 +1238,14 @@ def set_cached_packaged_volume(type_id: int, volume: float, path: Optional[Path]
         )
 
 
+@lru_cache(maxsize=None)
 def get_blueprint_for_product(product_type_id: int,
                               path: Optional[Path] = None) -> Optional[tuple[int, int, float]]:
     """(blueprint_type_id, activity_id, product_qty) for the blueprint/formula
     that produces `product_type_id` via Manufacturing (1) or Reaction (11),
     preferring Manufacturing if (implausibly) both exist. None if the type
-    isn't producible.
+    isn't producible. Cached - see get_sde_type's own docstring for why;
+    invalidated by replace_sde_data() below.
 
     Confirmed real bug in the parent repo: some products (e.g. Tungsten
     Carbide, type 16672) have a leftover *unpublished* blueprint row in the
@@ -1268,7 +1286,11 @@ def find_invention_recipe_by_product_name(product_name: str,
     t1_blueprint_type_id - callers that need every candidate grade should use
     find_invention_recipe_candidates_by_product_type_id with the returned
     product_type_id's blueprint instead (see do_estimate_invention, which
-    only uses this function's product_type_id half for exactly that reason)."""
+    only uses this function's product_type_id half for exactly that reason).
+    Not cached: unlike the other SDE lookups here, this is looked up by name,
+    not by type_id, so it never lands in classify_activity's recursive
+    per-type_id BOM traversal (its one caller, do_estimate_invention, is a
+    single one-off CLI/GUI lookup, not a hot loop)."""
     product_name = product_name.strip()
     with connect(path) as conn:
         row = conn.execute(
@@ -1280,6 +1302,7 @@ def find_invention_recipe_by_product_name(product_name: str,
     return tuple(row) if row else None
 
 
+@lru_cache(maxsize=None)
 def find_invention_recipe_candidates_by_product_type_id(
     product_blueprint_type_id: int, path: Optional[Path] = None
 ) -> tuple[int, ...]:
@@ -1301,7 +1324,9 @@ def find_invention_recipe_candidates_by_product_type_id(
     the cheaper Malfunctioning/Wrecked grades unconsiderable (reported by a
     user, 2026-08-30). The ordering here just gives a deterministic first
     element; picking the cheapest net cost across candidates x decryptors is
-    the invention module's job, which isn't ported here yet."""
+    the invention module's job, which isn't ported here yet. Cached - see
+    get_sde_type's own docstring for why; invalidated by replace_sde_data()
+    below."""
     with connect(path) as conn:
         rows = conn.execute(
             "SELECT p.blueprint_type_id FROM sde_blueprint_products p "
@@ -1315,11 +1340,15 @@ def find_invention_recipe_candidates_by_product_type_id(
     return tuple(row[0] for row in rows)
 
 
+@lru_cache(maxsize=None)
 def get_blueprint_materials(blueprint_type_id: int, activity_id: int,
                             path: Optional[Path] = None) -> list[tuple[int, float]]:
     """[(material_type_id, quantity), ...] for ONE run at ME 0, before any
     reduction - applying a blueprint's/decryptor's own ME is the caller's
-    job."""
+    job. Cached - see get_sde_type's own docstring for why (this is the one
+    hit hardest by the recursive BOM walk: every level of a build tree calls
+    it again for the same blueprint_type_id); invalidated by
+    replace_sde_data() below."""
     with connect(path) as conn:
         rows = conn.execute(
             "SELECT material_type_id, quantity FROM sde_blueprint_materials "
