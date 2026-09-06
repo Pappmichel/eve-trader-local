@@ -9,9 +9,13 @@ import sys
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
-from .. import storage
+from .. import config, storage
+from ..doctrine import config as doctrine_config
 from ..logging_setup import configure_logging
 from ..paths import data_dir, is_frozen
+from ..production import config as production_config
+from ..refining import config as refining_config
+from ..station_trading import config as station_trading_config
 from . import theme
 from .main_window import MainWindow
 
@@ -19,6 +23,16 @@ from .main_window import MainWindow
 def main() -> int:
     configure_logging()
     storage.init_db()
+    # Same layered load (config.yaml + stored Settings overrides) as the CLI
+    # entry point's own main() - without this every module-level *_CONFIG
+    # singleton sits at its bare dataclass defaults (e.g. structure_id=None)
+    # until the user happens to open the Settings dialog, whose tabs call
+    # reload() as a side effect of populating themselves.
+    config.reload()
+    production_config.reload()
+    doctrine_config.reload()
+    refining_config.reload()
+    station_trading_config.reload()
     app = QApplication(sys.argv)
     theme.apply(app)
     # Organization name feeds QSettings' storage location (see
