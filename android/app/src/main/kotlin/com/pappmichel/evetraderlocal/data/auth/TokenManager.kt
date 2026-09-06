@@ -1,6 +1,7 @@
 package com.pappmichel.evetraderlocal.data.auth
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import com.pappmichel.evetraderlocal.BuildConfig
@@ -57,7 +58,16 @@ data class TokenRecord(
  * One request in flight at a time, same as the desktop build - `login()`
  * suspends on `pendingRedirect` until `onRedirect` (called from
  * MainActivity) delivers the callback Uri or the caller cancels/times out. */
-class TokenManager(private val context: Context, private val db: AppDatabase) {
+class TokenManager(
+    // Application context (see EveTraderApplication's construction call) -
+    // never an Activity, so the launched CustomTabsIntent below needs
+    // FLAG_ACTIVITY_NEW_TASK explicitly: Android requires it whenever
+    // startActivity() (which CustomTabsIntent.launchUrl calls internally)
+    // fires from outside an Activity context, and silently refuses to
+    // launch without it.
+    private val context: Context,
+    private val db: AppDatabase,
+) {
     private val http = OkHttpClient()
     private val json = Json { ignoreUnknownKeys = true }
     private var pendingRedirect: CompletableDeferred<Uri>? = null
@@ -101,7 +111,9 @@ class TokenManager(private val context: Context, private val db: AppDatabase) {
         val deferred = CompletableDeferred<Uri>()
         pendingRedirect = deferred
         withContext(Dispatchers.Main) {
-            CustomTabsIntent.Builder().build().launchUrl(context, authorizeUri)
+            val customTabsIntent = CustomTabsIntent.Builder().build()
+            customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            customTabsIntent.launchUrl(context, authorizeUri)
         }
         val redirect = try {
             deferred.await()
