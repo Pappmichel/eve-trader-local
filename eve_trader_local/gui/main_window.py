@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 from .dialogs.characters_dialog import CharactersDialog
 from .dialogs.esi_update_dialog import EsiUpdateDialog
+from .dialogs.sde_refresh_dialog import SdeRefreshDialog
 from .dialogs.settings_dialog import SettingsDialog
 from .dialogs.update_dialog import UpdateDialog
 from .views.doctrine_contract_history import ContractHistoryView
@@ -157,17 +158,20 @@ class MainWindow(QMainWindow):
 
     def _build_app_menu(self) -> None:
         """Cross-tool, app-level actions (Settings, Characters, Update Data,
-        Check for App Updates) - deliberately the one menu that isn't one of
-        `_TOOL_MENUS`' per-tool entries, since none of these dialogs belongs
-        to just one tool. All four are opened as modal `QDialog`s (`exec()`),
-        not workspace tabs - see `dialogs/__init__.py` for why they can't be
-        `views.base.BaseView` subclasses.
+        Refresh Static Data, Check for App Updates) - deliberately the one
+        menu that isn't one of `_TOOL_MENUS`' per-tool entries, since none of
+        these dialogs belongs to just one tool. All five are opened as modal
+        `QDialog`s (`exec()`), not workspace tabs - see `dialogs/__init__.py`
+        for why they can't be `views.base.BaseView` subclasses.
 
-        "Update Data..." (`EsiUpdateDialog`) and "Check for App Updates..."
-        (`UpdateDialog`) are two unrelated kinds of "update" that happen to
-        share the word - the first refreshes game data from ESI/Goonmetrics
-        (see esi_update.py's own docstring for why every such call in this
-        app now goes exclusively through that dialog), the second checks
+        Three of these are easily confused since they all involve some kind
+        of "update"/"refresh", but are unrelated: "Update Data..."
+        (`EsiUpdateDialog`) refreshes live game/character data from ESI/
+        Goonmetrics (see esi_update.py's own docstring for why every such
+        call in this app now goes exclusively through that dialog);
+        "Refresh Static Data (SDE)..." (`SdeRefreshDialog`) downloads
+        Fuzzwork's EVE Static Data Export (type/group/material info, not
+        live game state); "Check for App Updates..." (`UpdateDialog`) checks
         GitHub for a newer eve-trader-local release. Kept as distinctly
         labelled menu entries so they're never confused for each other."""
         menu = self.menuBar().addMenu("App")
@@ -184,6 +188,10 @@ class MainWindow(QMainWindow):
         esi_update_action.triggered.connect(self._open_esi_update)
         menu.addAction(esi_update_action)
 
+        sde_refresh_action = QAction("Refresh Static Data (SDE)...", self)
+        sde_refresh_action.triggered.connect(self._open_sde_refresh)
+        menu.addAction(sde_refresh_action)
+
         update_action = QAction("Check for App Updates...", self)
         update_action.triggered.connect(self._open_update_check)
         menu.addAction(update_action)
@@ -196,6 +204,9 @@ class MainWindow(QMainWindow):
 
     def _open_esi_update(self) -> None:
         EsiUpdateDialog(self).exec()
+
+    def _open_sde_refresh(self) -> None:
+        SdeRefreshDialog(self).exec()
 
     def _open_update_check(self) -> None:
         UpdateDialog(self).exec()

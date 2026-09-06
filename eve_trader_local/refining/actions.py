@@ -79,7 +79,11 @@ def do_add_ore_to_shortlist() -> dict:
     and stable, every candidate is worth tracking)."""
     candidates = build_ore_candidate_universe()
     if not candidates:
-        raise ActionError("No compressed ore/ice types found in the SDE cache - run refresh-sde first.")
+        raise ActionError(
+            "No compressed ore/ice types found in the SDE cache. Refresh it via "
+            "App > Refresh Static Data (SDE)... in the GUI (or "
+            "`eve-trader-local refresh-sde` on the CLI)."
+        )
     existing_ids = {item_id for item_id, *_ in storage.load_ore_shortlist()}
     new_rows = [(c.type_id, c.item, c.family, c.is_ice, True) for c in candidates if c.type_id not in existing_ids]
     if new_rows:
@@ -337,7 +341,11 @@ def do_save_mineral_requirements(requirements: list[dict]) -> dict:
             raise ActionError(f"Type {type_id} is listed twice - each mineral can only have one required quantity.")
         sde_row = storage.get_sde_type(type_id)
         if not sde_row:
-            raise ActionError(f"Type {type_id} isn't in the SDE cache - run refresh-sde first.")
+            raise ActionError(
+                f"Type {type_id} isn't in the SDE cache. Refresh it via "
+                "App > Refresh Static Data (SDE)... in the GUI (or "
+                "`eve-trader-local refresh-sde` on the CLI)."
+            )
         seen.add(type_id)
         rows.append((type_id, sde_row[2], qty))
     storage.replace_mineral_requirements(rows)
@@ -403,7 +411,11 @@ def do_optimize_mineral_shopping_list(requirements: Optional[list[dict]] = None,
 
     candidates = build_ore_candidate_universe()
     if not candidates:
-        raise ActionError("No compressed ore/ice types found in the SDE cache - run refresh-sde first.")
+        raise ActionError(
+            "No compressed ore/ice types found in the SDE cache. Refresh it via "
+            "App > Refresh Static Data (SDE)... in the GUI (or "
+            "`eve-trader-local refresh-sde` on the CLI)."
+        )
 
     ore_ids = [c.type_id for c in candidates]
     mineral_ids = [r.type_id for r in wanted]

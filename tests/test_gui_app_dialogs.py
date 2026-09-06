@@ -32,7 +32,17 @@ def test_main_window_has_an_app_menu_with_settings_and_characters(qapp, db):
 
     app_menu = window.menuBar().actions()[menu_labels.index("App")].menu()
     action_labels = [action.text() for action in app_menu.actions()]
-    assert action_labels == ["Settings...", "Characters...", "Update Data...", "Check for App Updates..."]
+    assert action_labels == [
+        "Settings...", "Characters...", "Update Data...",
+        "Refresh Static Data (SDE)...", "Check for App Updates...",
+    ]
+
+
+def test_sde_refresh_dialog_opens_and_shows_never_refreshed(qapp, db):
+    from eve_trader_local.gui.dialogs.sde_refresh_dialog import SdeRefreshDialog
+
+    dialog = SdeRefreshDialog()
+    assert "Never refreshed" in dialog.last_refreshed_label.text()
 
 
 def test_settings_dialog_opens_and_shows_all_five_tool_tabs(qapp, db):

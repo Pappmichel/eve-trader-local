@@ -111,7 +111,10 @@ def do_discover_build_candidates(top_n: int = 200, cfg: ProductionConfig = PRODU
     discover_build_candidates. Needs the SDE cache populated (refresh-sde)
     to find anything at all."""
     if not storage.sde_row_counts().get("sde_types"):
-        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+        raise ActionError(
+            "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "
+            "in the GUI (or `eve-trader-local refresh-sde` on the CLI)."
+        )
     candidates = engine.discover_build_candidates(cfg, top_n=top_n)
     return {"rows": [BuildCandidate(**c) for c in candidates]}
 
@@ -189,7 +192,10 @@ def do_plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     function's docstring for what it computes and what it deliberately
     doesn't yet."""
     if not storage.sde_row_counts().get("sde_types"):
-        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+        raise ActionError(
+            "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "
+            "in the GUI (or `eve-trader-local refresh-sde` on the CLI)."
+        )
     if not storage.load_stock_targets():
         raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
     return engine.plan_production(cfg)
@@ -199,7 +205,10 @@ def do_plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     """Runs the readiness-focused planner (engine.plan_asset_optimized) -
     same preconditions as do_plan_production."""
     if not storage.sde_row_counts().get("sde_types"):
-        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+        raise ActionError(
+            "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "
+            "in the GUI (or `eve-trader-local refresh-sde` on the CLI)."
+        )
     if not storage.load_stock_targets():
         raise ActionError("No stock targets configured. Run: eve-trader-local set-stock-target")
     return engine.plan_asset_optimized(cfg)
@@ -224,7 +233,10 @@ def do_get_ship_margins(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     """Margin page's list view - every ship's current home/Jita price, build
     cost, and both margins (engine.discover_ship_margins)."""
     if not storage.sde_row_counts().get("sde_types"):
-        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+        raise ActionError(
+            "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "
+            "in the GUI (or `eve-trader-local refresh-sde` on the CLI)."
+        )
     rows = engine.discover_ship_margins(cfg)
     return {"rows": [ShipMarginRow(**r) for r in rows]}
 
@@ -640,7 +652,10 @@ def do_compute_special_order(order_id: str, cfg: ProductionConfig = PRODUCTION_C
     - a special order has no stock_targets-equivalent precondition (it
     always has >=1 item, enforced at creation)."""
     if not storage.sde_row_counts().get("sde_types"):
-        raise ActionError("SDE cache is empty. Run: eve-trader-local refresh-sde")
+        raise ActionError(
+            "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "
+            "in the GUI (or `eve-trader-local refresh-sde` on the CLI)."
+        )
     row = storage.get_special_order(order_id)
     if row is None:
         raise ActionError(f"Special order {order_id} not found.")
