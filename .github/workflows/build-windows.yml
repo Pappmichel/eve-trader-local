@@ -53,6 +53,24 @@ jobs:
           )
           Set-Content -Path eve_trader_local\_version.py -Value $lines -Encoding utf8
 
+      - name: Stamp the EVE SSO client id into the package
+        # Same mechanism/timing as the VERSION stamp above: a source checkout
+        # keeps `_defaults.py`'s committed `None` (a dev registers their own
+        # EVE SSO application via `.env`), but a released `.exe` should just
+        # work, so this bakes the real client id in here instead - safe to
+        # do since it's a public OAuth client id (PKCE, no client secret),
+        # unlike EVE_TRADER_LOCAL_GITHUB_TOKEN which stays env/.env-only.
+        shell: pwsh
+        env:
+          EVE_SSO_CLIENT_ID: ${{ secrets.EVE_SSO_CLIENT_ID }}
+        run: |
+          $lines = @(
+            'from __future__ import annotations',
+            'from typing import Optional',
+            "EVE_SSO_CLIENT_ID: Optional[str] = ""$env:EVE_SSO_CLIENT_ID"""
+          )
+          Set-Content -Path eve_trader_local\_defaults.py -Value $lines -Encoding utf8
+
       - name: Install eve-trader-local with GUI + build extras
         run: pip install -e ".[gui,build]"
 

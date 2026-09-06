@@ -27,7 +27,7 @@ from typing import Any, Optional
 
 import yaml
 
-from . import storage
+from . import _defaults, storage
 from .errors import ConfigError
 from .paths import PROJECT_ROOT, config_path, is_frozen
 
@@ -322,7 +322,9 @@ class TradingConfig:
 class OAuthConfig:
     """EVE SSO (OAuth2 authorization code + PKCE). Secrets come from the
     environment, never config.yaml."""
-    client_id: str = field(default_factory=lambda: os.getenv("EVE_SSO_CLIENT_ID", ""))
+    client_id: str = field(
+        default_factory=lambda: os.getenv("EVE_SSO_CLIENT_ID") or _defaults.EVE_SSO_CLIENT_ID or ""
+    )
     callback_host: str = field(default_factory=lambda: os.getenv("EVE_SSO_CALLBACK_HOST", "localhost"))
     callback_port: int = field(default_factory=lambda: _int_env("EVE_SSO_CALLBACK_PORT", 8000))
     callback_path: str = field(default_factory=lambda: os.getenv("EVE_SSO_CALLBACK_PATH", "/callback"))
