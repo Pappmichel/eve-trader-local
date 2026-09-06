@@ -605,32 +605,52 @@ current scope.
   direct-buy half of the desktop behavior: no haul-cost term (the SDE
   cache doesn't carry mineral item-volume data in a form this screen
   reads) and no Goonmetrics home-market comparison.
-- **Production -> Logistics** was investigated, not just left as a
-  placeholder: all four of desktop's Logistics report tabs (Logistics
-  Status, Distribution Recommendations, Invention Logistics, T1 BPC
-  Invention Needs) call `engine.plan_production` first and feed its
-  output to their own report function - the same missing stock-target/
-  multi-character-asset buy/build engine already found blocking Planner
-  and Special Orders (see those entries above). Its two "cheap local
-  config" panels only serve as input to those same unportable reports,
-  and its structure-name-resolution helper only exists to label that
-  config UI and has no `EsiClient.kt` endpoint to call anyway. Confirmed
-  nothing meaningful is portable in isolation - remains
-  `PlaceholderScreen`, correctly, not for lack of trying. **Update:** the
-  `plan_production` engine this was blocked on now exists for real (see
-  Stock Planner above) - Logistics is a live candidate for a follow-up
-  pass wiring its four report functions onto it, not done yet as of this
-  note.
-- **Production -> Asset-Optimized Planner** got the same investigation
-  and the same answer: `engine.plan_asset_optimized` is documented as
-  reusing `plan_production`'s own buy-vs-build decision function, just
-  netting real owned stock against demand at every level of the
-  recursive material tree - so it needs the identical stock-target/
-  manual-override storage and recursive buy-vs-build engine already
-  missing for Planner/Special Orders/Logistics, not a smaller standalone
-  asset-vs-material-tree feature. Remains `PlaceholderScreen`, correctly -
-  same update as Logistics: the missing engine now exists
-  (`ProductionEngine.kt`), a live follow-up candidate, not done yet.
+- **Production -> Logistics** (`data/production/JobCategory.kt`,
+  `LogisticsEngine.kt`, `CategoryLocations.kt`; `ui/screens/
+  LogisticsScreen.kt`): Logistics Status and Distribution
+  Recommendations are now real ports of `engine.logistics_status`/
+  `distribution_recommendations`, unblocked once `ProductionEngine.kt`
+  landed. Two real gaps closed this, not assumed away: `job_category` is
+  a pure `groupId`/`categoryId` lookup already backed by published SDE
+  data (`JobCategory.kt`, minus the unreachable Reactions bucket - no
+  Reaction activity in this cache), and `plan_production`'s own
+  `StockSource` answers "owned anywhere" corp-wide with no location
+  filter, so a new `LocationStockSource`/`LiveLocationStockSource`
+  (reading `CharacterAsset.locationId`) supplies the "owned at *this*
+  structure" read Logistics actually needs. Category-location
+  assignments are real Room storage (`CategoryLocations.kt`, mirroring
+  desktop's `job_category_locations`/`category_location_options` tables
+  exactly) - no longer dead configuration now that real reports read
+  them. Invention Logistics and T1 BPC Invention Needs remain unported:
+  both need `plan_production`'s `invention_list` (Tech II/III
+  recommended invention runs), which `ProductionEngine.kt`'s own port
+  explicitly doesn't produce (no Reaction/decryptor SDE data in this
+  Manufacturing-only cache). "Resolve Structure Name" stays out of scope
+  too - re-checked, `EsiClient.kt` still has no structure/corporation
+  name endpoint.
+- **Production -> Asset-Optimized Planner** (`data/production/
+  ProductionAssetOptimizedEngine.kt`; `ui/screens/
+  AssetOptimizedPlannerScreen.kt`): a real port of
+  `engine.plan_asset_optimized`, unblocked now that `ProductionEngine.kt`
+  exists. Makes the identical buy-vs-build calls as `plan_production`
+  (never disagreeing on *whether* to build something) but nets owned
+  stock against demand at *every* level of the recursive BOM, not just
+  the top-level stock target, tracked breadth-first round by round. When
+  several jobs in the same round compete for a scarce shared material,
+  on-hand stock goes to the *smallest* claims first
+  (`allocateScarceStock`) to maximize how many whole jobs become
+  startable - this view answers "which jobs can I start right now"
+  (`runsReadyNow` per job), a question `plan_production` itself never
+  asks. Two parallel stock ledgers run throughout - incoming-inclusive
+  for sizing demand, physically-on-hand-only for readiness - mirroring
+  desktop's own documented bug guard (an in-progress job's eventual
+  output can't make a *different* job "ready now"). Reuses
+  `ProductionEngine.kt`'s `StockSource`/`currentStock`/
+  `buyOrBuildDecision`/`buildMargin`/`baseRuns`/`materialQty` directly;
+  only the per-job round bookkeeping is new. Scope gaps are all
+  inherited from `plan_production` itself (no job-category/decryptor
+  columns, margin always `marginHome`, no live cost-index wiring into
+  the shared cost function), not new to this view.
 - **Settings** (`ui/screens/SettingsScreen.kt`), reachable from the drawer
   next to Characters: a `TabRow` with one tab per tool that has a config on
   this platform - Trading, Station Trading, Production, Ore & Minerals
