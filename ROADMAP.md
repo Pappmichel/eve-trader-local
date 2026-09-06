@@ -611,12 +611,13 @@ which "careful reading" alone had caught):
   already existed (from Station Trading), this view can show a real
   total/free slot count, which the desktop build's own
   `character_slot_overview` explicitly cannot (see that function's own
-  docstring). Invention Estimator was evaluated and confirmed out of
-  scope: it needs `industryActivityProbabilities`/`industryActivitySkills`
-  SDE tables this cache doesn't carry. Asset-Optimized Planner and
-  Logistics remain `PlaceholderScreen` - each needs real additional
-  infrastructure (character-asset cross-referencing, or ESI
-  endpoints/business rules not yet modeled here).
+  docstring). An early pass this session judged Invention Estimator out of
+  scope for needing `industryActivityProbabilities`/`industryActivitySkills`
+  SDE tables this cache doesn't carry - that call was wrong and reversed
+  later the same day (see Invention Estimator's own entry below). Asset-
+  Optimized Planner and Logistics remain `PlaceholderScreen` - each needs
+  real additional infrastructure (character-asset cross-referencing, or
+  ESI endpoints/business rules not yet modeled here).
 - Production -> Owned Blueprints (new `EsiClient.characterBlueprints`;
   `data/production/OwnedBlueprints.kt`; `ui/screens/
   OwnedBlueprintsScreen.kt`) - a live ESI read ported from
@@ -682,6 +683,40 @@ which "careful reading" alone had caught):
   Orders, and Logistics. No smaller portable subset exists - it isn't a
   standalone asset-vs-material-tree cross-reference, it's a variant of
   the same missing optimizer. Remains `PlaceholderScreen`, correctly.
+- Production -> Invention Estimator (`data/production/
+  InventionEstimator.kt`; extends `data/sde/` with a new
+  `sde_invention_probability` table and widens `sde_blueprint_materials`/
+  `sde_blueprint_products`; `ui/screens/InventionEstimatorScreen.kt`) - an
+  earlier pass this session judged this out of scope for needing
+  `industryActivityProbabilities`/`industryActivitySkills` SDE tables this
+  cache doesn't carry. That call was wrong: both are plain Fuzzwork CSVs
+  this repo's own desktop `sde.py` already fetches via the exact same
+  pipeline `SdeDownloader.kt` already uses for every other SDE table - not
+  an unreachable data source, just two tables nobody had added to the
+  Android cache yet. `industryActivityProbabilities.csv` is now added
+  (`sde_invention_probability`, Room v5 -> v6); `sde_blueprint_materials`/
+  `sde_blueprint_products` are widened to also carry Invention
+  (activityID=8) rows alongside their existing Manufacturing rows, with
+  `activityId` joining their composite primary keys so a blueprint's
+  Manufacturing and Invention rows can't collide.
+  `industryActivitySkills.csv` is deliberately *not* added - confirmed via
+  grep that nothing in `eve_trader_local/` or its tests reads it at all;
+  `invention.py`'s real skill bonus is three flat `ProductionConfig`
+  fields the user sets once (`encryptionSkillLevel`/
+  `datacoreSkill1Level`/`datacoreSkill2Level`), not a per-blueprint SDE
+  lookup, so porting an unused table would have broken this app's own
+  "port only what's used" precedent. `InventionEstimator.kt` ports
+  `invention.py`'s real math case-for-case (`skillMultiplier`, `estimate`,
+  `compareDecryptors`/`compareRecipesAndDecryptors`/`bestDecryptorForItem`/
+  `bestRecipeAndDecryptor`/`bestRecipeForDecryptor`, the 9-row `DECRYPTORS`
+  table, `reducibleMaterialCost` reusing `ProductionBuildCost.kt`'s
+  `ProductionBomSource`) - 21 tests ported case-for-case from
+  `tests/test_production_invention.py`, all passing. Tech III (Sleeper
+  relic) invention is *not* scoped down either, despite that being a
+  reasonable guess going in: it uses the identical `activityId=8`
+  mechanic as Tech II, and the cache already carries what's needed
+  (the category-id join) to price a relic input differently from a T1
+  blueprint, so full Tech II/III decryptor comparison both work for real.
 - Every configured tool now has its own Settings tab (`ui/screens/
   SettingsScreen.kt` grew a `TabRow`: Trading, Station Trading,
   Production, Ore & Minerals - Doctrine has no config yet). Previously
@@ -689,38 +724,59 @@ which "careful reading" alone had caught):
   Minerals' config classes existed with no UI to change them outside a
   hand-edited settings blob.
 
-Not started: Production's Invention Estimator (see correction note below -
-being revisited, not actually blocked; Logistics and Asset-Optimized
-Planner remain confirmed genuinely blocked on the same missing
-`plan_production` stock-target engine as Planner/Special Orders - see
-above for those three), tests for anything beyond the pure logic already
-covered, a Play Store listing.
+Not started: Logistics and Asset-Optimized Planner remain confirmed
+genuinely blocked on the same missing `plan_production` stock-target
+engine as Planner/Special Orders (see above for all four) - the only
+remaining confirmed-blocked feature family. Otherwise: tests for anything
+beyond the pure logic already covered, a Play Store listing.
 
-**Correction, same day:** the Invention Estimator "confirmed genuinely
-blocked" conclusion above was wrong in its implication. `industryActivity
-Probabilities.csv`/`industryActivitySkills.csv` are plain Fuzzwork CSVs
-already fetched by this repo's own desktop Python code (`sde.py`) via the
-exact same pipeline Android's `SdeDownloader.kt` already uses for every
-other SDE table - not some unreachable data source, just two tables
-nobody had gotten around to adding to the Android cache yet, same as
-`invTypeMaterials`/`industryActivityMaterials`+`Products` before them.
-Being ported for real now, same established pattern (new CSV entries,
-new Room entities, a version bump, DAO/`SdeRepository` mirrors, then the
-actual probability/decryptor math from `production/invention.py`).
+**Two real bugs found and fixed the same day, worth recording since
+neither was a logic error:**
+- The CI push trigger silently stopped firing on ordinary branch pushes
+  for a while: adding `tags: ["v*.*.*"]` under `on.push` (for the tagged-
+  release workflow addition, see `android/README.md`'s CI entry) without
+  also specifying `branches` makes GitHub treat that trigger as tag-only -
+  a documented GitHub Actions gotcha, not something this repo's CI had
+  hit before. Several pushes built nothing, with no error surfaced
+  anywhere. Fixed by adding `branches: ["**"]` alongside the existing
+  `tags`/`paths` filters.
+- Two Compose scope-member imports broke real builds this session, the
+  same bug class `android/README.md`'s "Honest limitations" section
+  already documented once (`CharactersScreen.kt`'s original `weight`/
+  `ExposedDropdownMenu` imports): `MineralShoppingListScreen.kt`
+  separately reintroduced the `weight` import, and
+  `InventionEstimatorScreen.kt` reintroduced the `ExposedDropdownMenu`
+  one. Neither is a top-level symbol - both resolve via an implicit
+  `RowScope`/`ColumnScope`/`ExposedDropdownMenuBox` receiver, and
+  importing them by name shadows that. Worth a standing note for any
+  future Compose code in this app: don't import `weight` or
+  `ExposedDropdownMenu` by name.
 
 At this point every ROADMAP item that was open going into this Android
 push has either landed for real or been investigated and confirmed
 genuinely blocked by a specific, documented missing piece of
 infrastructure - never just left alone without checking. That includes
-items that looked like they might be permanently out of reach going in:
-multi-character pooling for Realized Trades and Unlisted Stock &
-Undercut Check, and `average_daily_sold_by_type`, both turned out to be
-straightforwardly portable once someone actually read the desktop source
-instead of assuming from the ROADMAP's own earlier (and, in hindsight,
-imprecise) description of what they needed. What remains above is
-genuinely down to one confirmed-blocked Production view family and
-non-feature work (broader test coverage, an icon, store packaging) - the
-real feature backlog for this Android port is exhausted.
+several items that looked like they might be permanently out of reach
+going in: multi-character pooling for Realized Trades and Unlisted Stock
+& Undercut Check, `average_daily_sold_by_type`, and the Invention
+Estimator all turned out to be straightforwardly portable once someone
+actually read the desktop source instead of assuming from this ROADMAP's
+own earlier (and, in hindsight, imprecise) descriptions of what they
+needed. What remains above is genuinely down to one confirmed-blocked
+Production view family and non-feature work (broader test coverage, an
+icon, store packaging) - the real feature backlog for this Android port
+is exhausted.
+
+**Git history note, same day:** this branch's entire commit history (68
+commits) was rewritten via `git filter-branch` to correct the git
+author/committer identity - every commit had been made under
+"Claude <noreply@anthropic.com>" (a real git-level identity, not a
+message trailer), which is exactly the "Claude/Anthropic attribution
+anywhere" this repo's own CLAUDE.md rule forbids. Rewritten to the actual
+user's identity and force-pushed; tree contents are byte-for-byte
+unchanged, only author/committer metadata and commit SHAs differ. A
+`backup-before-author-rewrite-<timestamp>` tag was left in the local
+working copy (not pushed) in case anything needed recovering.
 
 Options considered before deciding above, kept for the record:
 - **BeeWare/Toga** — one Python codebase for desktop *and* Android, calling

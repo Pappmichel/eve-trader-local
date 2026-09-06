@@ -342,13 +342,13 @@ current scope.
   (from Station Trading), this view shows a *real* total/free slot
   count, something the desktop build's own `character_slot_overview`
   explicitly can't do (see that function's own docstring - it has no
-  such skill read wired up). Invention Estimator was evaluated and
-  confirmed out of scope: `invention.py`'s recipe lookup needs
-  `industryActivityProbabilities`/`industryActivitySkills` SDE tables
-  this cache doesn't carry. Asset-Optimized Planner and Logistics remain
-  `PlaceholderScreen` - each needs real additional infrastructure
-  (character-asset cross-referencing, or ESI endpoints/business rules
-  not yet modeled here).
+  such skill read wired up). An early pass this session judged Invention
+  Estimator out of scope for needing `industryActivityProbabilities`/
+  `industryActivitySkills` SDE tables this cache doesn't carry - wrong,
+  and reversed the same day (see Invention Estimator's own entry below).
+  Asset-Optimized Planner and Logistics remain `PlaceholderScreen` - each
+  needs real additional infrastructure (character-asset cross-
+  referencing, or ESI endpoints/business rules not yet modeled here).
 - **Production -> Owned Blueprints** (new `EsiClient.characterBlueprints`
   + `CharacterBlueprint`; `data/production/OwnedBlueprints.kt`; `ui/
   screens/OwnedBlueprintsScreen.kt`): a live ESI read ported from
@@ -397,6 +397,37 @@ current scope.
   much smaller, clearly-labeled per-line-item Buy-vs-Build estimate on
   top of the existing single-item `unitBuildCost`, not a narrowed port of
   the real planner.
+- **Production -> Invention Estimator** (`data/production/
+  InventionEstimator.kt`; extends `data/sde/` with a new
+  `sde_invention_probability` table and widens `sde_blueprint_materials`/
+  `sde_blueprint_products`; `ui/screens/InventionEstimatorScreen.kt`) -
+  the earlier "confirmed out of scope" call above was wrong:
+  `industryActivityProbabilities.csv`/`industryActivitySkills.csv` are
+  plain Fuzzwork CSVs this repo's own desktop `sde.py` already fetches
+  via the exact same pipeline `SdeDownloader.kt` already uses for every
+  other SDE table. `industryActivityProbabilities.csv` is now added
+  (new `sde_invention_probability` table, Room v5 -> v6);
+  `sde_blueprint_materials`/`sde_blueprint_products` are widened to also
+  carry Invention (activityID=8) rows alongside their existing
+  Manufacturing rows, with `activityId` joining their composite primary
+  keys so a blueprint's Manufacturing and Invention rows can't collide.
+  `industryActivitySkills.csv` is deliberately *not* added - confirmed
+  via grep that nothing in `eve_trader_local/` or its tests reads it at
+  all; `invention.py`'s real skill bonus is three flat `ProductionConfig`
+  fields the user sets once, not a per-blueprint SDE lookup, so porting
+  an unused table would have broken this app's own "port only what's
+  used" precedent. `InventionEstimator.kt` ports `invention.py`'s real
+  math case-for-case (`skillMultiplier`, `estimate`,
+  `compareDecryptors`/`compareRecipesAndDecryptors`/
+  `bestDecryptorForItem`/`bestRecipeAndDecryptor`/`bestRecipeForDecryptor`,
+  the 9-row `DECRYPTORS` table, `reducibleMaterialCost` reusing
+  `ProductionBuildCost.kt`'s `ProductionBomSource`) - 21 tests ported
+  case-for-case from `tests/test_production_invention.py`, all passing.
+  Tech III (Sleeper relic) invention is *not* scoped down either: it uses
+  the identical `activityId=8` mechanic as Tech II, and the cache already
+  carries what's needed (the category-id join) to price a relic input
+  differently from a T1 blueprint, so full Tech II/III decryptor
+  comparison both work for real.
 - **Doctrine -> Fittings** (`data/doctrine/EftFittingParser.kt`,
   `DoctrineSdeResolver.kt`; `ui/screens/DoctrineFittingsScreen.kt`): a
   Kotlin port of `doctrine/parser.py`'s EFT fitting-text parser (paste a
@@ -679,6 +710,17 @@ current scope.
   changelog'd release, not a real Play-Store-grade signed release build.
   `versionCode` is left untouched by the stamping step - it's a plain
   manual counter in `build.gradle.kts`, not derived from the tag.
+- **Real CI bug, found and fixed 2026-09-06:** adding `tags: ["v*.*.*"]`
+  under `on.push` (for the tagged-release addition above) without also
+  specifying `branches` makes GitHub treat that push trigger as tag-only -
+  a documented GitHub Actions gotcha. Every ordinary branch push silently
+  stopped building anything, with no error surfaced anywhere - several
+  real commits (including the Invention Estimator's Room v5->v6 schema
+  change) went uncompiled and unverified until this was noticed and
+  diagnosed. Fixed by adding `branches: ["**"]` alongside the existing
+  `tags`/`paths` filters. Worth remembering for any future edit to this
+  workflow's `on.push` block: `branches`/`tags` are separate ref
+  namespaces, and specifying only one silently excludes the other.
 - CI (`.github/workflows/build-android.yml`) runs JVM unit tests
   (`app/src/test/`, JUnit 4) then assembles the debug APK. Test coverage is
   `ShortlistTest.kt` (a Kotlin port of `tests/test_shortlist.py`'s
