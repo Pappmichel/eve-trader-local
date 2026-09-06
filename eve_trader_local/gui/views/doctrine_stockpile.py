@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QTabWidget, QVBoxLayout)
 
 from ...doctrine import actions as doctrine_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_pct, populate
 
@@ -95,10 +96,10 @@ class StockpileStatusView(BaseView):
         form.addWidget(QLabel("Doctrine ID (blank = all):"))
         self.doctrine_filter_input = QLineEdit()
         form.addWidget(self.doctrine_filter_input)
-        validate_btn = QPushButton("Validate Contracts")
+        validate_btn = QPushButton(icons.icon("validate"), "Validate Contracts")
         validate_btn.clicked.connect(self._validate)
         form.addWidget(validate_btn)
-        refresh_btn = QPushButton("Refresh Status")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh Status")
         refresh_btn.clicked.connect(self._refresh_status)
         form.addWidget(refresh_btn)
         outer.addLayout(form)

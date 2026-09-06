@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLabel,
 
 from ... import updater
 from ...paths import is_frozen
+from .. import icons, theme
 from ..workers import BusyMixin
 
 
@@ -45,23 +46,26 @@ class UpdateDialog(QDialog, BusyMixin):
         self._frozen = is_frozen()
 
         layout = QVBoxLayout(self)
+        theme.apply_layout_rhythm(layout)
 
         self.info_label = QLabel("Checking for updates...")
         self.info_label.setWordWrap(True)
         layout.addWidget(self.info_label)
 
         button_row = QHBoxLayout()
-        self.action_btn = QPushButton("Update")
+        button_row.setSpacing(8)
+        self.action_btn = QPushButton(icons.icon("check-updates", color="#06222b"), "Update")
+        self.action_btn.setProperty("cssClass", "primary")
         self.action_btn.setEnabled(False)
         self.action_btn.clicked.connect(self._on_action)
         button_row.addWidget(self.action_btn)
-        recheck_btn = QPushButton("Check Again")
+        recheck_btn = QPushButton(icons.icon("refresh"), "Check Again")
         recheck_btn.clicked.connect(self._check)
         button_row.addWidget(recheck_btn)
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
-        layout.addWidget(self.status_label)
+        layout.addWidget(self.status_row)
 
         self._check()
 

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QHeaderView, QPushButton,
                                QTableWidget, QTableWidgetItem, QVBoxLayout)
 
 from ... import esi_update
+from .. import icons, theme
 from ..workers import BusyMixin
 
 _COLUMNS = ["Update", "Scope", "Last Synced", "Next Update Available"]
@@ -53,6 +54,7 @@ class EsiUpdateDialog(QDialog, BusyMixin):
         self._init_busy()
 
         layout = QVBoxLayout(self)
+        theme.apply_layout_rhythm(layout)
 
         self.table = QTableWidget(0, len(_COLUMNS))
         self.table.setHorizontalHeaderLabels(_COLUMNS)
@@ -60,19 +62,24 @@ class EsiUpdateDialog(QDialog, BusyMixin):
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(28)
         layout.addWidget(self.table)
 
         button_row = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh")
+        button_row.setSpacing(8)
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh")
         refresh_btn.clicked.connect(self._refresh_table)
         button_row.addWidget(refresh_btn)
         button_row.addStretch(1)
-        update_btn = QPushButton("Update Selected")
+        update_btn = QPushButton(icons.icon("update-data", color="#06222b"), "Update Selected")
+        update_btn.setProperty("cssClass", "primary")
         update_btn.clicked.connect(self._update_selected)
         button_row.addWidget(update_btn)
         layout.addLayout(button_row)
 
-        layout.addWidget(self.status_label)
+        layout.addWidget(self.status_row)
 
         self._refresh_table()
 

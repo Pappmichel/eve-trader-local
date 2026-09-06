@@ -32,6 +32,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ... import actions, storage
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_pct, populate
 
@@ -63,10 +64,10 @@ class CandidateDiscoveryView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        reload_btn = QPushButton("Reload")
+        reload_btn = QPushButton(icons.icon("reload"), "Reload")
         reload_btn.clicked.connect(self._load_local)
         toolbar.addWidget(reload_btn)
-        add_btn = QPushButton("Add Recommended To Shortlist")
+        add_btn = QPushButton(icons.icon("add"), "Add Recommended To Shortlist")
         add_btn.clicked.connect(self._add_to_shortlist)
         toolbar.addWidget(add_btn)
         toolbar.addStretch(1)

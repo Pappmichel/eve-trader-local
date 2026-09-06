@@ -39,6 +39,7 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget
 
 logger = logging.getLogger(__name__)
 
+from . import icons
 from .dialogs.characters_dialog import CharactersDialog
 from .dialogs.esi_update_dialog import EsiUpdateDialog
 from .dialogs.sde_refresh_dialog import SdeRefreshDialog
@@ -114,6 +115,19 @@ _TOOL_MENUS: dict[str, list[tuple[str, type]]] = {
     ],
 }
 
+# icons.py semantic name for each top-level tool menu's own icon (shown next
+# to the menu bar label, e.g. "Trading") - a quick-glance visual anchor for
+# which section of the app a menu belongs to, distinct from any icon a
+# dialog/toolbar button inside that section might use.
+_TOOL_MENU_ICONS: dict[str, str] = {
+    "Trading": "trading",
+    "Production": "production",
+    "Portfolio": "portfolio",
+    "Doctrine": "doctrine",
+    "Ore && Minerals": "refining",
+    "Station Trading": "station-trading",
+}
+
 # Reverse lookup built once from _TOOL_MENUS: view class -> (tool menu label,
 # view menu-item label) - what closeEvent/restore_state serialize an open tab
 # as, and what _open_view's own action-click handler effectively does the
@@ -132,6 +146,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("eve-trader-local")
+        self.setWindowIcon(icons.icon("app"))
         self.resize(1200, 800)
 
         self.tabs = QTabWidget()
@@ -146,6 +161,9 @@ class MainWindow(QMainWindow):
         self._build_app_menu()
         for tool_label, views in _TOOL_MENUS.items():
             menu = self.menuBar().addMenu(tool_label)
+            icon_name = _TOOL_MENU_ICONS.get(tool_label)
+            if icon_name is not None:
+                menu.menuAction().setIcon(icons.icon(icon_name))
             if not views:
                 placeholder = QAction("(not built yet)", self)
                 placeholder.setEnabled(False)
@@ -176,23 +194,23 @@ class MainWindow(QMainWindow):
         labelled menu entries so they're never confused for each other."""
         menu = self.menuBar().addMenu("App")
 
-        settings_action = QAction("Settings...", self)
+        settings_action = QAction(icons.icon("settings"), "Settings...", self)
         settings_action.triggered.connect(self._open_settings)
         menu.addAction(settings_action)
 
-        characters_action = QAction("Characters...", self)
+        characters_action = QAction(icons.icon("characters"), "Characters...", self)
         characters_action.triggered.connect(self._open_characters)
         menu.addAction(characters_action)
 
-        esi_update_action = QAction("Update Data...", self)
+        esi_update_action = QAction(icons.icon("update-data"), "Update Data...", self)
         esi_update_action.triggered.connect(self._open_esi_update)
         menu.addAction(esi_update_action)
 
-        sde_refresh_action = QAction("Refresh Static Data (SDE)...", self)
+        sde_refresh_action = QAction(icons.icon("refresh-sde"), "Refresh Static Data (SDE)...", self)
         sde_refresh_action.triggered.connect(self._open_sde_refresh)
         menu.addAction(sde_refresh_action)
 
-        update_action = QAction("Check for App Updates...", self)
+        update_action = QAction(icons.icon("check-updates"), "Check for App Updates...", self)
         update_action.triggered.connect(self._open_update_check)
         menu.addAction(update_action)
 

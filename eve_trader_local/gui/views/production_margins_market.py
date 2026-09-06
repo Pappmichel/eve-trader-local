@@ -21,6 +21,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ...production import actions as production_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, fmt_pct, populate
 
@@ -65,16 +66,16 @@ class MarginsMarketView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        margins_btn = QPushButton("Show Ship Margins")
+        margins_btn = QPushButton(icons.icon("show"), "Show Ship Margins")
         margins_btn.clicked.connect(self._refresh_margins)
         toolbar.addWidget(margins_btn)
-        market_btn = QPushButton("Show Market Status")
+        market_btn = QPushButton(icons.icon("show"), "Show Market Status")
         market_btn.clicked.connect(self._refresh_market_status)
         toolbar.addWidget(market_btn)
-        value_btn = QPushButton("Show Stock Value")
+        value_btn = QPushButton(icons.icon("show"), "Show Stock Value")
         value_btn.clicked.connect(self._refresh_stock_value)
         toolbar.addWidget(value_btn)
-        indices_btn = QPushButton("Show System Cost Indices")
+        indices_btn = QPushButton(icons.icon("show"), "Show System Cost Indices")
         indices_btn.clicked.connect(self._refresh_cost_indices)
         toolbar.addWidget(indices_btn)
         toolbar.addStretch(1)

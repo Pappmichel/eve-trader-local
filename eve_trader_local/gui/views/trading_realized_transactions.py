@@ -29,6 +29,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QPushButton, QTabWidget
 
 from ... import actions, storage
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -68,7 +69,7 @@ class RealizedTransactionsView(BaseView):
         super().__init__(parent)
 
         realized_toolbar = QHBoxLayout()
-        reconcile_btn = QPushButton("Show Reconciliation")
+        reconcile_btn = QPushButton(icons.icon("show"), "Show Reconciliation")
         reconcile_btn.clicked.connect(self._reconcile)
         realized_toolbar.addWidget(reconcile_btn)
         realized_toolbar.addStretch(1)
@@ -79,7 +80,7 @@ class RealizedTransactionsView(BaseView):
         self.character_combo = QComboBox()
         self._reload_characters()
         txn_toolbar.addWidget(self.character_combo)
-        load_txn_btn = QPushButton("Show Transactions")
+        load_txn_btn = QPushButton(icons.icon("show"), "Show Transactions")
         load_txn_btn.clicked.connect(self._load_transactions)
         txn_toolbar.addWidget(load_txn_btn)
         txn_toolbar.addStretch(1)

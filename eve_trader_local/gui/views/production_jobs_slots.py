@@ -14,6 +14,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ...production import actions as production_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -45,10 +46,10 @@ class JobsSlotsView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        jobs_btn = QPushButton("Refresh Current Jobs")
+        jobs_btn = QPushButton(icons.icon("refresh"), "Refresh Current Jobs")
         jobs_btn.clicked.connect(self._refresh_jobs)
         toolbar.addWidget(jobs_btn)
-        slots_btn = QPushButton("Refresh Character Slots")
+        slots_btn = QPushButton(icons.icon("refresh"), "Refresh Character Slots")
         slots_btn.clicked.connect(self._refresh_slots)
         toolbar.addWidget(slots_btn)
         toolbar.addStretch(1)

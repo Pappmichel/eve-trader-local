@@ -71,6 +71,7 @@ from ...refining import config as refining_config
 from ...refining.constants import implant_options, rig_options, structure_options
 from ...station_trading import actions as station_trading_actions
 from ...station_trading import config as station_trading_config
+from .. import icons, theme
 from ..workers import BusyMixin
 
 # Wide-but-finite fallbacks for numeric fields with no _FIELD_RANGES entry -
@@ -128,10 +129,11 @@ class _DictIntTableEditor(QWidget):
         layout.addWidget(self.table)
 
         buttons = QHBoxLayout()
-        add_btn = QPushButton("Add Row")
+        buttons.setSpacing(8)
+        add_btn = QPushButton(icons.icon("add"), "Add Row")
         add_btn.clicked.connect(lambda: self._append_row("", "5"))
         buttons.addWidget(add_btn)
-        remove_btn = QPushButton("Remove Selected Row")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove Selected Row")
         remove_btn.clicked.connect(self._remove_selected_row)
         buttons.addWidget(remove_btn)
         buttons.addStretch(1)
@@ -297,9 +299,10 @@ class SettingsDialog(QDialog, BusyMixin):
         self._forms: dict[str, tuple[_ConfigForm, Callable, Any]] = {}
 
         layout = QVBoxLayout(self)
+        theme.apply_layout_rhythm(layout)
         self.tab_widget = QTabWidget()
         layout.addWidget(self.tab_widget)
-        layout.addWidget(self.status_label)
+        layout.addWidget(self.status_row)
 
         self._add_tab("Trading", trading_config.reload(), actions.do_update_settings)
         self._add_tab("Production", production_config.reload(), production_actions.do_update_settings,
@@ -334,7 +337,8 @@ class SettingsDialog(QDialog, BusyMixin):
         scroll.setWidget(form_widget)
         page_layout.addWidget(scroll)
 
-        save_btn = QPushButton(f"Save {title} Settings")
+        save_btn = QPushButton(icons.icon("save", color="#06222b"), f"Save {title} Settings")
+        save_btn.setProperty("cssClass", "primary")
         save_btn.clicked.connect(functools.partial(self._save_tab, title))
         page_layout.addWidget(save_btn)
 

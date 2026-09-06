@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ...station_trading import actions as station_trading_actions
 from ...station_trading.constants import SKILL_LABELS
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -60,10 +61,10 @@ class UndercutSkillsView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        undercut_btn = QPushButton("Show Undercuts")
+        undercut_btn = QPushButton(icons.icon("show"), "Show Undercuts")
         undercut_btn.clicked.connect(self._check_undercut)
         toolbar.addWidget(undercut_btn)
-        skills_btn = QPushButton("Show Trader Skills")
+        skills_btn = QPushButton(icons.icon("show"), "Show Trader Skills")
         skills_btn.clicked.connect(self._refresh_skills)
         toolbar.addWidget(skills_btn)
         toolbar.addStretch(1)

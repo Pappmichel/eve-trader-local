@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
 from ...production import actions as production_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -73,7 +74,7 @@ class SpecialOrdersView(BaseView):
         self.root_layout.addWidget(self._build_create_box())
 
         toolbar = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh List")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh List")
         refresh_btn.clicked.connect(self._load_orders)
         toolbar.addWidget(refresh_btn)
         toolbar.addStretch(1)
@@ -114,7 +115,7 @@ class SpecialOrdersView(BaseView):
         form.addWidget(self.note_input)
         self.net_against_stock_checkbox = QCheckBox("Net against stock")
         form.addWidget(self.net_against_stock_checkbox)
-        create_btn = QPushButton("Create")
+        create_btn = QPushButton(icons.icon("add"), "Create")
         create_btn.clicked.connect(self._create_order)
         form.addWidget(create_btn)
         outer.addLayout(form)
@@ -127,16 +128,16 @@ class SpecialOrdersView(BaseView):
         self.order_id_input = QLineEdit()
         self.order_id_input.setPlaceholderText("select a row above, or paste an order id")
         outer.addWidget(self.order_id_input)
-        done_btn = QPushButton("Mark Done")
+        done_btn = QPushButton(icons.icon("check"), "Mark Done")
         done_btn.clicked.connect(lambda: self._update_status("done"))
         outer.addWidget(done_btn)
-        reopen_btn = QPushButton("Reopen")
+        reopen_btn = QPushButton(icons.icon("undo"), "Reopen")
         reopen_btn.clicked.connect(lambda: self._update_status("open"))
         outer.addWidget(reopen_btn)
-        remove_btn = QPushButton("Remove")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove")
         remove_btn.clicked.connect(self._remove_order)
         outer.addWidget(remove_btn)
-        compute_btn = QPushButton("Compute")
+        compute_btn = QPushButton(icons.icon("calculate"), "Compute")
         compute_btn.clicked.connect(self._compute_order)
         outer.addWidget(compute_btn)
         outer.addStretch(1)

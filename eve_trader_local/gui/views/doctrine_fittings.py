@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPlainTextEdit, QPushButton, QSpinBox, QVBoxLayout)
 
 from ...doctrine import actions as doctrine_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, populate
 
@@ -54,14 +55,14 @@ class FittingsView(BaseView):
         self.root_layout.addWidget(self._build_add_fitting_box())
 
         toolbar = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh Fittings")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh Fittings")
         refresh_btn.clicked.connect(self._load_fittings)
         toolbar.addWidget(refresh_btn)
         toolbar.addWidget(QLabel("Remove Fitting ID:"))
         self.remove_fitting_input = QLineEdit()
         self.remove_fitting_input.setMaximumWidth(280)
         toolbar.addWidget(self.remove_fitting_input)
-        remove_btn = QPushButton("Remove")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove")
         remove_btn.clicked.connect(self._remove_fitting)
         toolbar.addWidget(remove_btn)
         toolbar.addStretch(1)
@@ -85,10 +86,10 @@ class FittingsView(BaseView):
         form.addWidget(QLabel("Description:"))
         self.doctrine_description_input = QLineEdit()
         form.addWidget(self.doctrine_description_input)
-        create_btn = QPushButton("Create Doctrine")
+        create_btn = QPushButton(icons.icon("add"), "Create Doctrine")
         create_btn.clicked.connect(self._create_doctrine)
         form.addWidget(create_btn)
-        refresh_btn = QPushButton("Refresh List")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh List")
         refresh_btn.clicked.connect(self._load_doctrines)
         form.addWidget(refresh_btn)
         outer.addLayout(form)
@@ -124,7 +125,7 @@ class FittingsView(BaseView):
         self.eft_input.setMaximumHeight(160)
         outer.addWidget(self.eft_input)
 
-        add_btn = QPushButton("Add Fitting")
+        add_btn = QPushButton(icons.icon("add"), "Add Fitting")
         add_btn.clicked.connect(self._add_fitting)
         outer.addWidget(add_btn)
         return box

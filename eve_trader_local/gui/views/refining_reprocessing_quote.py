@@ -21,6 +21,7 @@ import functools
 from PySide6.QtWidgets import QPlainTextEdit, QPushButton
 
 from ...refining import actions as refining_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -51,7 +52,8 @@ class ReprocessingQuoteView(BaseView):
         self.paste_input.setMaximumHeight(160)
         self.root_layout.addWidget(self.paste_input)
 
-        quote_btn = QPushButton("Quote")
+        quote_btn = QPushButton(icons.icon("quote", color="#06222b"), "Quote")
+        quote_btn.setProperty("cssClass", "primary")
         quote_btn.clicked.connect(self._quote)
         self.root_layout.addWidget(quote_btn)
 

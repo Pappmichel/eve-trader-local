@@ -27,6 +27,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
 
 from ... import actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -63,10 +64,10 @@ class UnlistedUndercutView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        unlisted_btn = QPushButton("Show Unlisted Stock")
+        unlisted_btn = QPushButton(icons.icon("show"), "Show Unlisted Stock")
         unlisted_btn.clicked.connect(self._check_unlisted)
         toolbar.addWidget(unlisted_btn)
-        undercut_btn = QPushButton("Show Undercut")
+        undercut_btn = QPushButton(icons.icon("show"), "Show Undercut")
         undercut_btn.clicked.connect(self._check_undercut)
         toolbar.addWidget(undercut_btn)
         toolbar.addStretch(1)

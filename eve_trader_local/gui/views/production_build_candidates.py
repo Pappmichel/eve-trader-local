@@ -39,7 +39,7 @@ class BuildCandidatesView(TableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_toolbar([
-            ("Discover", self._discover),
+            ("Discover", self._discover, "discover", True),
         ])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()

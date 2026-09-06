@@ -26,6 +26,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton
 
 from ... import portfolio
+from .. import icons
 from .base import BaseView
 
 _LABEL_FONT = "font-weight: bold;"
@@ -38,7 +39,7 @@ class PortfolioOverviewView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        refresh_btn = QPushButton("Refresh")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh")
         refresh_btn.clicked.connect(self._refresh)
         toolbar.addWidget(refresh_btn)
         toolbar.addStretch(1)

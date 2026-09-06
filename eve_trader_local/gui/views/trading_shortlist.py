@@ -49,7 +49,7 @@ class TradingShortlistView(TableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_toolbar([
-            ("Reload", self._reload),
+            ("Reload", self._reload, "reload"),
         ])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._add_staleness_label(["market_orders", "assets", "market_prices"])

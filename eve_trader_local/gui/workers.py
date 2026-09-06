@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
-from PySide6.QtWidgets import QLabel
+from PySide6.QtCore import QObject, QThread, QSize, Signal, Slot
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel
 
+from . import icons
 from ..errors import ActionError
 
 
@@ -131,26 +132,54 @@ class BusyMixin:
     it only assumes `self.setEnabled(...)` is provided by whichever real Qt
     widget/dialog class it's mixed into, and that `_init_busy()` has been
     called (from that class's own `__init__`, after `super().__init__()`)
-    before any of these methods are used."""
+    before any of these methods are used.
+
+    `status_row` is what callers actually put in a layout (`self.status_row`,
+    not `self.status_label` - that name is kept only for the plain text
+    itself, still used directly by anything that just wants to read/set the
+    message). It's a small icon + text banner styled via `theme.py`'s
+    `banner-error`/`banner-info`/`banner-busy` cssClass, hidden entirely
+    (`setVisible(False)`) until the first `set_busy`/`show_error`/
+    `show_info` call - an empty bordered box sitting under every view before
+    anything ever happened would look like a rendering glitch, not a status
+    area."""
 
     def _init_busy(self) -> None:
         self._threads: list = []  # keeps QThreads alive until they finish - see run_action above
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
+        self._status_icon = QLabel()
+        self._status_icon.setFixedSize(16, 16)
+
+        # QFrame, not a plain QWidget - a bare QWidget ignores QSS
+        # background-color/border unless WA_StyledBackground is set; QFrame
+        # paints its own stylesheet background out of the box.
+        self.status_row = QFrame()
+        self.status_row.setVisible(False)
+        row_layout = QHBoxLayout(self.status_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_layout.addWidget(self._status_icon, 0)
+        row_layout.addWidget(self.status_label, 1)
+
+    def _set_banner(self, css_class: str, icon_name: str, message: str) -> None:
+        self.status_label.setText(message)
+        self._status_icon.setPixmap(icons.icon(icon_name).pixmap(QSize(16, 16)))
+        self.status_row.setProperty("cssClass", css_class)
+        self.status_row.style().unpolish(self.status_row)
+        self.status_row.style().polish(self.status_row)
+        self.status_row.setVisible(True)
 
     def set_busy(self, busy: bool, message: str = "Wird geladen...") -> None:
         self.setEnabled(not busy)
         if busy:
-            self.status_label.setStyleSheet("")
-            self.status_label.setText(message)
+            self._set_banner("banner-busy", "refresh", message)
 
     def show_error(self, message: str) -> None:
-        self.status_label.setStyleSheet("color: #c0392b;")
-        self.status_label.setText(message)
+        self._set_banner("banner-error", "warning", message)
 
     def show_info(self, message: str) -> None:
-        self.status_label.setStyleSheet("color: #27632a;")
-        self.status_label.setText(message)
+        self._set_banner("banner-info", "check", message)
 
     def run_action(self, fn: Callable[[], Any], on_success: Callable[[Any], None],
                    busy_message: str = "Wird geladen...") -> None:

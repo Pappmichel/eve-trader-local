@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLa
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
 from ...production import actions as production_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, fmt_pct, populate
 
@@ -110,7 +111,8 @@ class ProductionPlannerView(BaseView):
         super().__init__(parent)
 
         toolbar = QHBoxLayout()
-        run_btn = QPushButton("Run Planner")
+        run_btn = QPushButton(icons.icon("run", color="#06222b"), "Run Planner")
+        run_btn.setProperty("cssClass", "primary")
         run_btn.clicked.connect(self._run_planner)
         toolbar.addWidget(run_btn)
         toolbar.addStretch(1)
@@ -150,13 +152,13 @@ class ProductionPlannerView(BaseView):
         form.addWidget(self.quantity_input)
         self.jita_checkbox = QCheckBox("Sells at Jita")
         form.addWidget(self.jita_checkbox)
-        set_btn = QPushButton("Set Target")
+        set_btn = QPushButton(icons.icon("target"), "Set Target")
         set_btn.clicked.connect(self._set_stock_target)
         form.addWidget(set_btn)
-        remove_btn = QPushButton("Remove Target")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove Target")
         remove_btn.clicked.connect(self._remove_stock_target)
         form.addWidget(remove_btn)
-        refresh_btn = QPushButton("Refresh List")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh List")
         refresh_btn.clicked.connect(self._load_stock_targets)
         form.addWidget(refresh_btn)
         form.addStretch(1)
@@ -181,7 +183,7 @@ class ProductionPlannerView(BaseView):
         self.update_jita_combo.addItem("home", False)
         self.update_jita_combo.addItem("Jita", True)
         update_form.addWidget(self.update_jita_combo)
-        update_btn = QPushButton("Update Target")
+        update_btn = QPushButton(icons.icon("save"), "Update Target")
         update_btn.clicked.connect(self._update_stock_target)
         update_form.addWidget(update_btn)
         update_form.addStretch(1)
@@ -206,13 +208,13 @@ class ProductionPlannerView(BaseView):
         self.manual_stock_count_input.setPlaceholderText("e.g. 50")
         self.manual_stock_count_input.setMaximumWidth(100)
         form.addWidget(self.manual_stock_count_input)
-        set_btn = QPushButton("Set Count")
+        set_btn = QPushButton(icons.icon("target"), "Set Count")
         set_btn.clicked.connect(self._set_manual_stock)
         form.addWidget(set_btn)
-        remove_btn = QPushButton("Remove Override")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove Override")
         remove_btn.clicked.connect(self._remove_manual_stock)
         form.addWidget(remove_btn)
-        refresh_btn = QPushButton("Refresh List")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh List")
         refresh_btn.clicked.connect(self._load_manual_stock)
         form.addWidget(refresh_btn)
         form.addStretch(1)

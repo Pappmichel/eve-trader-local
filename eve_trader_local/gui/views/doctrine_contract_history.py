@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton
 
 from ...doctrine import actions as doctrine_actions
+from .. import icons
 from .base import TableView
 
 _COLUMNS = ["Contract ID", "Hull", "Fitting", "Character", "Price", "Buyer", "Issued", "Completed"]
@@ -37,7 +38,7 @@ class ContractHistoryView(TableView):
         filter_row.addWidget(QLabel("Doctrine ID (blank = all):"))
         self.doctrine_filter_input = QLineEdit()
         filter_row.addWidget(self.doctrine_filter_input)
-        refresh_btn = QPushButton("Refresh")
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh")
         refresh_btn.clicked.connect(self._load_history)
         filter_row.addWidget(refresh_btn)
         filter_row.addStretch(1)

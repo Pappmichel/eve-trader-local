@@ -16,13 +16,14 @@ commands need on screen:
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Optional, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QHBoxLayout, QHeaderView, QLabel, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
 from ... import esi_update
+from .. import icons, theme
 from ..workers import BusyMixin
 
 
@@ -35,6 +36,12 @@ class BaseView(QWidget, BusyMixin):
         super().__init__(parent)
         self._init_busy()
         self.root_layout = QVBoxLayout(self)
+        # Qt's own layout defaults (contentsMargins ~11px, spacing ~6px,
+        # inherited from the platform style) read as cramped once
+        # tables/buttons have real padding of their own (see theme.py) -
+        # every view gets this same, more generous rhythm instead of each
+        # hand-tuning its own root_layout.
+        theme.apply_layout_rhythm(self.root_layout)
 
     def _add_staleness_label(self, scope_keys: str | list[str]) -> None:
         """A small "Data as of ..." line (esi_update.describe/describe_many)
@@ -64,7 +71,17 @@ class BaseView(QWidget, BusyMixin):
         """Call once, after subclasses have added their own widgets to
         `root_layout`, to place the status label last (errors/info always
         read at the bottom, under whatever content/toolbar the view has)."""
-        self.root_layout.addWidget(self.status_label)
+        self.root_layout.addWidget(self.status_row)
+
+    def _add_section_header(self, text: str) -> None:
+        """A small bold/amber heading with a bottom rule (theme.py's
+        `section-header` cssClass) - for a view whose `root_layout` holds
+        more than one logically distinct block (e.g. a summary readout above
+        a detail table) and wants a labelled seam between them, instead of
+        the two blocks just running together."""
+        label = QLabel(text)
+        label.setProperty("cssClass", "section-header")
+        self.root_layout.addWidget(label)
 
 
 class _SortableTableWidgetItem(QTableWidgetItem):
@@ -109,10 +126,26 @@ class TableView(BaseView):
     `_build_table([...column headers...])` in `__init__`, then use
     `populate_table` inside their own success handlers."""
 
-    def _build_toolbar(self, buttons: Sequence[tuple[str, Callable[[], None]]]) -> None:
+    def _build_toolbar(self, buttons: Sequence[tuple]) -> None:
+        """Each entry is `(label, handler)`, optionally extended with an
+        `icons.py` name and/or a `primary=True` marker:
+        `(label, handler)`, `(label, handler, icon_name)`, or
+        `(label, handler, icon_name, primary)`. `icon_name=None` renders a
+        plain text button (some toolbars have no natural icon per action);
+        at most one button in a given toolbar should be `primary` - the one
+        obvious next action a user would take, styled as a filled button
+        instead of the default outline (see theme.py's `primary` cssClass)."""
         row = QHBoxLayout()
-        for label, handler in buttons:
+        row.setSpacing(8)
+        for spec in buttons:
+            label, handler = spec[0], spec[1]
+            icon_name = spec[2] if len(spec) > 2 else None
+            primary = spec[3] if len(spec) > 3 else False
             btn = QPushButton(label)
+            if icon_name is not None:
+                btn.setIcon(icons.icon(icon_name, color="#06222b" if primary else None))
+            if primary:
+                btn.setProperty("cssClass", "primary")
             btn.clicked.connect(handler)
             row.addWidget(btn)
         row.addStretch(1)
@@ -138,6 +171,15 @@ class TableView(BaseView):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSortingEnabled(True)
         self.table.horizontalHeader().setStretchLastSection(True)
+        # theme.py's QSS sets alternate-background-color, but Qt only
+        # actually alternates row colors once this is turned on in code -
+        # a plain QSS rule alone is silently inert. Row-number column hidden
+        # too: no view ever gives it meaning, and a bare 1/2/3... column
+        # reads as leftover Designer scaffolding rather than a deliberate
+        # part of the UI.
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(28)
         if column_widths:
             for index, width in enumerate(column_widths):
                 if width is not None:

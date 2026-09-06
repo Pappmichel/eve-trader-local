@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QPushBu
 
 from ...production import actions as production_actions
 from ...production.constants import DECRYPTORS
+from .. import icons
 from .base import TableView
 from .production_common import fmt_isk, fmt_pct
 
@@ -53,7 +54,7 @@ class InventionEstimatorView(TableView):
         for name in DECRYPTORS:
             self.decryptor_combo.addItem(name, name)
         form.addWidget(self.decryptor_combo)
-        estimate_btn = QPushButton("Estimate")
+        estimate_btn = QPushButton(icons.icon("calculate"), "Estimate")
         estimate_btn.clicked.connect(self._estimate)
         form.addWidget(estimate_btn)
         form.addStretch(1)

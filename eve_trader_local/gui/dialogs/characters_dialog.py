@@ -30,6 +30,7 @@ from ...auth import TokenManager
 from ...doctrine import esi_sync as doctrine_esi_sync
 from ...production import esi_sync as production_esi_sync
 from ...station_trading import esi_sync as station_trading_esi_sync
+from .. import icons, theme
 from ..workers import BusyMixin
 
 # (dropdown label, role prefix, scopes) - scopes=None means "use OAuthConfig's
@@ -60,6 +61,7 @@ class CharactersDialog(QDialog, BusyMixin):
         self._token_manager = TokenManager()
 
         layout = QVBoxLayout(self)
+        theme.apply_layout_rhythm(layout)
 
         self.table = QTableWidget(0, len(_COLUMNS))
         self.table.setHorizontalHeaderLabels(_COLUMNS)
@@ -67,22 +69,27 @@ class CharactersDialog(QDialog, BusyMixin):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(28)
         layout.addWidget(self.table)
 
         login_row = QHBoxLayout()
+        login_row.setSpacing(8)
         self.role_combo = QComboBox()
         self.role_combo.addItems([label for label, _, _ in _LOGIN_ROLES])
         login_row.addWidget(self.role_combo)
-        login_btn = QPushButton("Log In...")
+        login_btn = QPushButton(icons.icon("login", color="#06222b"), "Log In...")
+        login_btn.setProperty("cssClass", "primary")
         login_btn.clicked.connect(self._start_login)
         login_row.addWidget(login_btn)
         login_row.addStretch(1)
-        remove_btn = QPushButton("Remove Selected")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove Selected")
         remove_btn.clicked.connect(self._remove_selected)
         login_row.addWidget(remove_btn)
         layout.addLayout(login_row)
 
-        layout.addWidget(self.status_label)
+        layout.addWidget(self.status_row)
 
         self._refresh_table()
 

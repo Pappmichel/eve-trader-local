@@ -17,6 +17,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ... import sde, storage
+from .. import icons, theme
 from ..workers import BusyMixin
 
 
@@ -36,6 +37,7 @@ class SdeRefreshDialog(QDialog, BusyMixin):
         self._init_busy()
 
         layout = QVBoxLayout(self)
+        theme.apply_layout_rhythm(layout)
         layout.addWidget(QLabel(
             "Downloads the EVE Static Data Export (type/group/material info) "
             "from Fuzzwork. Needed once before Production, Refining, or "
@@ -47,12 +49,13 @@ class SdeRefreshDialog(QDialog, BusyMixin):
 
         button_row = QHBoxLayout()
         button_row.addStretch(1)
-        refresh_btn = QPushButton("Refresh Static Data")
+        refresh_btn = QPushButton(icons.icon("refresh-sde", color="#06222b"), "Refresh Static Data")
+        refresh_btn.setProperty("cssClass", "primary")
         refresh_btn.clicked.connect(self._refresh)
         button_row.addWidget(refresh_btn)
         layout.addLayout(button_row)
 
-        layout.addWidget(self.status_label)
+        layout.addWidget(self.status_row)
 
     def _refresh(self) -> None:
         self.run_action(sde.refresh_sde, self._on_refreshed,

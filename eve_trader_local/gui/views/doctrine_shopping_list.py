@@ -48,7 +48,7 @@ class ShoppingListView(TableView):
         filter_row.addStretch(1)
         self.root_layout.addLayout(filter_row)
 
-        self._build_toolbar([("Refresh", self._refresh)])
+        self._build_toolbar([("Refresh", self._refresh, "refresh")])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._add_staleness_label(["assets", "market_prices"])
         self._finish_status_row()

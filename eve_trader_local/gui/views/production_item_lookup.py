@@ -16,6 +16,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget
 
 from ...production import actions as production_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, fmt_pct, populate
 
@@ -69,13 +70,13 @@ class ItemLookupView(BaseView):
         self.quantity_input = QLineEdit("1")
         self.quantity_input.setMaximumWidth(80)
         form.addWidget(self.quantity_input)
-        margin_btn = QPushButton("Look Up Margin")
+        margin_btn = QPushButton(icons.icon("search"), "Look Up Margin")
         margin_btn.clicked.connect(self._lookup_margin)
         form.addWidget(margin_btn)
-        tree_btn = QPushButton("Build Material Tree")
+        tree_btn = QPushButton(icons.icon("tree"), "Build Material Tree")
         tree_btn.clicked.connect(self._build_tree)
         form.addWidget(tree_btn)
-        locations_btn = QPushButton("Search Locations")
+        locations_btn = QPushButton(icons.icon("search"), "Search Locations")
         locations_btn.clicked.connect(self._search_locations)
         form.addWidget(locations_btn)
         form.addStretch(1)

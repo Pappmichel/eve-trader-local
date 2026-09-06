@@ -32,7 +32,7 @@ class OwnedBlueprintsView(TableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_toolbar([
-            ("Refresh", self._refresh),
+            ("Refresh", self._refresh, "refresh"),
         ])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._finish_status_row()

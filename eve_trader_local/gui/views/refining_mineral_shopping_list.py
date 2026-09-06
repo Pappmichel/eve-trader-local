@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QTabWidget, QVBoxLayout)
 
 from ...refining import actions as refining_actions
+from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, populate
 
@@ -79,7 +80,8 @@ class MineralShoppingListView(BaseView):
 
         self.root_layout.addWidget(self._build_requirement_box())
 
-        solve_btn = QPushButton("Solve Shopping List")
+        solve_btn = QPushButton(icons.icon("calculate", color="#06222b"), "Solve Shopping List")
+        solve_btn.setProperty("cssClass", "primary")
         solve_btn.clicked.connect(self._solve)
         self.root_layout.addWidget(solve_btn)
 
@@ -107,10 +109,10 @@ class MineralShoppingListView(BaseView):
         self.qty_input = QLineEdit()
         self.qty_input.setMaximumWidth(120)
         form.addWidget(self.qty_input)
-        add_btn = QPushButton("Set/Update")
+        add_btn = QPushButton(icons.icon("target"), "Set/Update")
         add_btn.clicked.connect(self._set_requirement)
         form.addWidget(add_btn)
-        remove_btn = QPushButton("Remove")
+        remove_btn = QPushButton(icons.icon("remove"), "Remove")
         remove_btn.clicked.connect(self._remove_requirement)
         form.addWidget(remove_btn)
         outer.addLayout(form)

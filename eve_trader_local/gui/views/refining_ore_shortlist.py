@@ -58,8 +58,8 @@ class OreShortlistView(TableView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_toolbar([
-            ("Add New Candidates", self._add_candidates),
-            ("Reload", self._reload),
+            ("Add New Candidates", self._add_candidates, "add"),
+            ("Reload", self._reload, "reload"),
         ])
         self._build_table(_COLUMNS, column_widths=_COLUMN_WIDTHS, default_sort=_DEFAULT_SORT)
         self._add_staleness_label("market_prices")
