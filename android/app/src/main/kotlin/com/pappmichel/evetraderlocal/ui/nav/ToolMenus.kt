@@ -7,8 +7,8 @@ package com.pappmichel.evetraderlocal.ui.nav
  * PlaceholderScreen except Trading/Candidate Discovery, Trading/Shortlist,
  * Trading/Unlisted Stock & Undercut Check, Production/Item Lookup,
  * Production/Ship Margins & Market Status, Production/Build Candidates,
- * Production/Planner, Production/Current Jobs & Slots,
- * Production/Owned Blueprints, Production/Special Orders, and
+ * Production/Planner, Production/Stock Planner, Production/Current Jobs &
+ * Slots, Production/Owned Blueprints, Production/Special Orders, and
  * Production/Invention Estimator (see
  * ROADMAP.md's Android section for what's actually ported vs. still
  * pending, and see AppNavHost.kt's own routing docstring for the fuller,
@@ -17,14 +17,20 @@ package com.pappmichel.evetraderlocal.ui.nav
  * Production/Planner's real screen is a recursive BOM-explosion feature,
  * not a port of desktop's actual Planner tab (a stock-target-driven buy/
  * build optimizer this app has no infrastructure for) - see
- * `data/production/ProductionPlanner.kt`'s own module docstring. */
+ * `data/production/ProductionPlanner.kt`'s own module docstring.
+ * Production/Stock Planner is the real port of that stock-target-driven
+ * optimizer (`engine.plan_production`) - a distinct new menu entry rather
+ * than replacing Planner, so both real, working features stay reachable
+ * under their own correctly-scoped names - see `data/production/
+ * ProductionEngine.kt`'s own module docstring and `StockPlannerScreen.kt`'s
+ * own docstring for why. */
 val TOOL_MENUS: List<Pair<String, List<String>>> = listOf(
     "Trading" to listOf(
         "Shortlist", "Candidate Discovery", "Realized Trades & Transactions",
         "Unlisted Stock & Undercut Check", "Price History",
     ),
     "Production" to listOf(
-        "Build Candidates", "Planner", "Asset-Optimized Planner", "Logistics",
+        "Build Candidates", "Planner", "Stock Planner", "Asset-Optimized Planner", "Logistics",
         "Special Orders", "Ship Margins & Market Status", "Item Lookup",
         "Invention Estimator", "Owned Blueprints", "Current Jobs & Slots",
     ),

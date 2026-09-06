@@ -53,6 +53,7 @@ import com.pappmichel.evetraderlocal.ui.screens.ShipMarginScreen
 import com.pappmichel.evetraderlocal.ui.screens.ShortlistScreen
 import com.pappmichel.evetraderlocal.ui.screens.StationTradingShortlistScreen
 import com.pappmichel.evetraderlocal.ui.screens.StationTradingUndercutScreen
+import com.pappmichel.evetraderlocal.ui.screens.StockPlannerScreen
 import com.pappmichel.evetraderlocal.ui.screens.UnlistedUndercutScreen
 import kotlinx.coroutines.launch
 
@@ -77,6 +78,7 @@ private const val BUILD_CANDIDATES_ROUTE = "production/build-candidates"
 private const val CURRENT_JOBS_ROUTE = "production/current-jobs"
 private const val OWNED_BLUEPRINTS_ROUTE = "production/owned-blueprints"
 private const val PLANNER_ROUTE = "production/planner"
+private const val STOCK_PLANNER_ROUTE = "production/stock-planner"
 private const val SPECIAL_ORDERS_ROUTE = "production/special-orders"
 private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
 
@@ -99,7 +101,10 @@ private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
  * (`production_planner.py`/`engine.plan_production`, a stock-target-driven
  * buy/build optimizer this app has no infrastructure for). See
  * `data/production/ProductionPlanner.kt`'s own module docstring for the
- * full finding and the substitution this makes. */
+ * full finding and the substitution this makes. Production/Stock Planner
+ * routes to [StockPlannerScreen] - the real port of that stock-target-
+ * driven optimizer, added as its own distinct entry rather than replacing
+ * Planner above (see that screen's own module docstring for why). */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -127,6 +132,8 @@ private fun routeFor(tool: String, view: String): String =
         OWNED_BLUEPRINTS_ROUTE
     } else if (tool == "Production" && view == "Planner") {
         PLANNER_ROUTE
+    } else if (tool == "Production" && view == "Stock Planner") {
+        STOCK_PLANNER_ROUTE
     } else if (tool == "Production" && view == "Special Orders") {
         SPECIAL_ORDERS_ROUTE
     } else if (tool == "Production" && view == "Invention Estimator") {
@@ -270,6 +277,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(CURRENT_JOBS_ROUTE) { ProductionCurrentJobsScreen(database, tokenManager) }
                 composable(OWNED_BLUEPRINTS_ROUTE) { OwnedBlueprintsScreen(database, tokenManager) }
                 composable(PLANNER_ROUTE) { ProductionPlannerScreen(database, tokenManager) }
+                composable(STOCK_PLANNER_ROUTE) { StockPlannerScreen(database, tokenManager) }
                 composable(SPECIAL_ORDERS_ROUTE) { ProductionSpecialOrdersScreen(database, tokenManager) }
                 composable(INVENTION_ESTIMATOR_ROUTE) { InventionEstimatorScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }

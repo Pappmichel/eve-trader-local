@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -156,6 +158,29 @@ data class IndustryJob(
     @SerialName("end_date") val endDate: String = "",
 )
 
+/** One row of `GET /markets/prices/` - CCP's own regulated, market-price-
+ * decoupled valuation for a published type, used to price a manufacturing
+ * job's EIV ("Estimated Item Value") - see `EsiClient.getAdjustedPrices`. */
+@Serializable
+data class AdjustedPriceEntry(
+    @SerialName("type_id") val typeId: Int = 0,
+    @SerialName("adjusted_price") val adjustedPrice: Double? = null,
+)
+
+/** One activity's cost index within one row of `GET /industry/systems/`. */
+@Serializable
+data class SystemCostIndexEntry(
+    val activity: String = "",
+    @SerialName("cost_index") val costIndex: Double = 0.0,
+)
+
+/** One solar system's row of `GET /industry/systems/`. */
+@Serializable
+data class SystemCostIndicesResponse(
+    @SerialName("solar_system_id") val solarSystemId: Int = 0,
+    @SerialName("cost_indices") val costIndices: List<SystemCostIndexEntry> = emptyList(),
+)
+
 /** One row of `/characters/{character_id}/blueprints/` - the counterpart of
  * esi_client.py's own blueprints read (see production/esi_sync.py's
  * blueprint sync, and `OwnedBlueprints.kt`). `runs` is ESI's own "-1 means
@@ -244,6 +269,83 @@ internal fun summarizeOrders(orders: List<MarketOrder>): OrderStats {
  * retries, 5xx backs off and retries, anything else raises immediately. */
 class EsiClient(private val http: OkHttpClient = OkHttpClient()) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    // ---------------------------------------------------------- industry
+    // Class-wide (not per-instance) caches for the two whole-catalog/whole-
+    // universe industry endpoints below - mirrors esi_client.py's own
+    // `_adjusted_prices_cache`/`_cost_indices_cache` exactly, including the
+    // reason: ESI has no per-type_id/per-system filter on either endpoint,
+    // so every caller needs the same one full download, not a fresh one per
+    // screen visit. A `Mutex` (this app has no multi-threaded shared-state
+    // lock elsewhere in EsiClient - every other method is naturally
+    // stateless - but this one genuinely needs one) guards the read-check-
+    // fetch-write sequence so two concurrent callers within one process
+    // can't both miss the cache and issue duplicate downloads.
+    private companion object {
+        val industryCacheLock = Mutex()
+        var adjustedPricesCache: Map<Int, Double>? = null
+        var adjustedPricesCacheAt: Long = 0
+        var costIndicesCache: Map<Int, Map<String, Double>>? = null
+        var costIndicesCacheAt: Long = 0
+    }
+
+    /** Every published type's ESI-regulated "Estimated Item Value" price
+     * (`GET /markets/prices/`) - the counterpart of esi_client.py's
+     * `get_adjusted_prices`. ESI returns the whole catalog in one call (no
+     * per-type filter), so the result is cached class-wide for
+     * `cacheSeconds` (matching desktop's own 3600s default) and filtered
+     * locally to `typeIds` when given. A type with no adjusted-price row at
+     * all (should not normally happen for a published type) reads as `0.0`
+     * when `typeIds` is given, same as desktop's own `cache.get(t, 0)`
+     * fallback - never null, since a caller asking for a *specific* type_id
+     * wants a usable number to multiply into an EIV sum, not an extra null
+     * check. Passing no `typeIds` returns the full map exactly as cached. */
+    suspend fun getAdjustedPrices(typeIds: List<Int>? = null, cacheSeconds: Long = 3600): Map<Int, Double> {
+        val cache = industryCacheLock.withLock {
+            val now = System.currentTimeMillis() / 1000
+            if (adjustedPricesCache == null || (now - adjustedPricesCacheAt) > cacheSeconds) {
+                val rows: List<AdjustedPriceEntry> =
+                    json.decodeFromString(getBody("/markets/prices/", mapOf("datasource" to "tranquility")))
+                adjustedPricesCache = rows.mapNotNull { row -> row.adjustedPrice?.let { row.typeId to it } }.toMap()
+                adjustedPricesCacheAt = now
+            }
+            adjustedPricesCache!!
+        }
+        return if (typeIds == null) cache else typeIds.associateWith { cache[it] ?: 0.0 }
+    }
+
+    /** Every solar system's live Manufacturing/Reaction/Invention job-cost
+     * index (`GET /industry/systems/`) - the counterpart of esi_client.py's
+     * `get_system_cost_indices`. Same "ESI returns everything in one call,
+     * so cache it class-wide" shape as [getAdjustedPrices] (default
+     * `cacheSeconds` matches desktop's own 21600s/6h default - a system's
+     * index moves far more slowly than a market price). Returns `null` when
+     * `systemId` has no row at all (an unrecognized/non-industry system,
+     * matching desktop's own `ESIError` case) rather than throwing - the one
+     * caller this app has ([com.pappmichel.evetraderlocal.data.production
+     * .jobCostRate]) already has a flat-rate fallback for exactly this case,
+     * same as desktop's `pricing.system_cost_indices_for` wrapping
+     * `get_system_cost_indices`'s own `ESIError` in a try/except. */
+    suspend fun getSystemCostIndices(
+        systemId: Int,
+        activities: Set<String> = setOf("manufacturing", "reaction", "invention"),
+        cacheSeconds: Long = 21_600,
+    ): Map<String, Double>? {
+        val cache = industryCacheLock.withLock {
+            val now = System.currentTimeMillis() / 1000
+            if (costIndicesCache == null || (now - costIndicesCacheAt) > cacheSeconds) {
+                val rows: List<SystemCostIndicesResponse> =
+                    json.decodeFromString(getBody("/industry/systems/", mapOf("datasource" to "tranquility")))
+                costIndicesCache = rows.associate { row ->
+                    row.solarSystemId to row.costIndices.associate { it.activity to it.costIndex }
+                }
+                costIndicesCacheAt = now
+            }
+            costIndicesCache!!
+        }
+        val systemIndices = cache[systemId] ?: return null
+        return systemIndices.filterKeys { it in activities }
+    }
 
     suspend fun listMarketGroupIds(): List<Int> =
         json.decodeFromString(getBody("/markets/groups/", mapOf("datasource" to "tranquility")))

@@ -6,6 +6,12 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.pappmichel.evetraderlocal.data.doctrine.DoctrineContractHistoryDao
 import com.pappmichel.evetraderlocal.data.doctrine.DoctrineContractHistoryEntity
+import com.pappmichel.evetraderlocal.data.production.ManualBuildBuyDao
+import com.pappmichel.evetraderlocal.data.production.ManualBuildBuyEntity
+import com.pappmichel.evetraderlocal.data.production.ManualStockDao
+import com.pappmichel.evetraderlocal.data.production.ManualStockEntity
+import com.pappmichel.evetraderlocal.data.production.StockTargetDao
+import com.pappmichel.evetraderlocal.data.production.StockTargetEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintMaterialEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeBlueprintProductEntity
 import com.pappmichel.evetraderlocal.data.sde.SdeCategoryEntity
@@ -42,7 +48,13 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
  * `sde_blueprint_materials` to also carry Invention (activityId=8) rows
  * (previously Manufacturing-only - see those two entities' own docstrings
  * for the primary-key change that required) for the real Invention
- * Estimator port (`data/production/InventionEstimator.kt`). */
+ * Estimator port (`data/production/InventionEstimator.kt`). Version 7 adds
+ * `stock_targets`/`manual_stock`/`manual_build_buy` (mirroring the desktop
+ * build's own tables of the same name exactly) - real Room entities rather
+ * than the settings-blob-JSON pattern, the same "meant to grow, not a small
+ * fixed config" reasoning `doctrine_contract_history` already established
+ * - for the real stock-aware planner (`data/production/ProductionEngine.kt`,
+ * the actual port of `engine.plan_production` this app was missing). */
 @Database(
     entities = [
         TokenEntity::class, SettingsEntity::class,
@@ -51,8 +63,9 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
         SdeRefreshStateEntity::class, SdeTypeMaterialEntity::class,
         SdeBlueprintProductEntity::class, SdeBlueprintMaterialEntity::class,
         DoctrineContractHistoryEntity::class, SdeInventionProbabilityEntity::class,
+        StockTargetEntity::class, ManualStockEntity::class, ManualBuildBuyEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -60,6 +73,9 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun settingsDao(): SettingsDao
     abstract fun sdeDao(): SdeDao
     abstract fun doctrineContractHistoryDao(): DoctrineContractHistoryDao
+    abstract fun stockTargetDao(): StockTargetDao
+    abstract fun manualStockDao(): ManualStockDao
+    abstract fun manualBuildBuyDao(): ManualBuildBuyDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null

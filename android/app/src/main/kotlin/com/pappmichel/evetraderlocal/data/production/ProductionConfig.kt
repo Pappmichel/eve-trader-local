@@ -106,6 +106,36 @@ data class ProductionConfig(
     val encryptionSkillLevel: Int = 4,
     val datacoreSkill1Level: Int = 4,
     val datacoreSkill2Level: Int = 4,
+
+    // -- Added for the Stock Planner (data/production/ProductionEngine.kt,
+    // the real port of desktop `engine.plan_production`) --
+
+    // Live ESI system-cost-index lookup target (`EsiClient.
+    // getSystemCostIndices`) - a single system id, unlike desktop's
+    // `component_system_id`/`manufacturing_system_id` 2-way split (that
+    // split exists only to separate reaction/rig-covered-component jobs
+    // from everything else, which needs the structure/rig data this app
+    // doesn't model at all - see ProductionBuildCost.kt's own module
+    // docstring, point 3). Real, working config for the new
+    // getSystemCostIndices ESI call this task's own instructions asked for,
+    // but not yet consumed by [jobCostIndexRate]'s own flat rate or
+    // [unitBuildCost]'s job-cost math - see ProductionEngine.kt's own module
+    // docstring for why this pass deliberately stops short of rewiring that
+    // shared function's cost formula.
+    val manufacturingSystemId: Int? = null,
+    // Manual override for the live-looked-up index above - matches
+    // production/config.py's own `*_cost_index_override` fields (collapsed
+    // to the one system-id split this app models). Same "real config, not
+    // yet consumed" status as [manufacturingSystemId] above.
+    val manufacturingCostIndexOverride: Double? = null,
+    // Extra safety margin built into every intermediate material's target
+    // quantity, sized off that material's whole-tree stock-oblivious run
+    // count (see `ProductionEngine.kt`'s own `baseRuns`/`expandAll`
+    // docstrings for exactly how) - matches production/config.py's
+    // `component_overbuild` default exactly (70%: build noticeably more of
+    // a shared component than the bare minimum, so a small demand swing
+    // doesn't immediately create a new shortfall).
+    val componentOverbuild: Double = 0.7,
 ) {
     companion object {
         const val SCOPE = "production"
