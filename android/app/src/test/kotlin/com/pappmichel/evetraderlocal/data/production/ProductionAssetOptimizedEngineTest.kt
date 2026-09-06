@@ -1,5 +1,6 @@
 package com.pappmichel.evetraderlocal.data.production
 
+import com.pappmichel.evetraderlocal.data.esi.OrderStats
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
