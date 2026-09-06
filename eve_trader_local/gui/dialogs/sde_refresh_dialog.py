@@ -17,6 +17,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from ... import sde, storage
+from ...production import engine as production_engine
 from .. import icons, theme
 from ..workers import BusyMixin
 
@@ -62,6 +63,9 @@ class SdeRefreshDialog(QDialog, BusyMixin):
                          busy_message="Downloading the SDE from Fuzzwork - this takes a minute...")
 
     def _on_refreshed(self, counts: dict) -> None:
+        # A fresh SDE changes discover_build_candidates' whole result set -
+        # don't leave the cached scan serving the previous SDE's numbers.
+        production_engine.invalidate_discover_cache()
         self.last_refreshed_label.setText(_format_last_refreshed())
         total = sum(counts.values())
         self.show_info(f"SDE refreshed: {total:,} rows across {len(counts)} tables.")

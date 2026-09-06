@@ -197,6 +197,11 @@ def cmd_refresh_sde(args: argparse.Namespace) -> None:
     for table, count in counts.items():
         print(f"  {table:<{width}}  {count:>9,}")
     print("SDE refreshed.")
+    # A fresh SDE changes discover_build_candidates' whole result set
+    # (new/changed blueprints, materials, meta groups) - don't leave the
+    # cached scan (up to _DISCOVER_CACHE_TTL seconds stale) serving the
+    # previous SDE's numbers.
+    production_actions.engine.invalidate_discover_cache()
 
 
 def cmd_sde_status(args: argparse.Namespace) -> None:

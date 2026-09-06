@@ -32,6 +32,10 @@ def do_update_settings(updates: dict, cfg: ProductionConfig = PRODUCTION_CONFIG)
         save_config_overrides(updates, cfg)
     except ConfigError as e:
         raise ActionError(str(e)) from e
+    # min_margin/min_daily_profit/build-cost fields all feed
+    # discover_build_candidates' result set - a stale cached scan would
+    # otherwise keep showing pre-save numbers for up to the full TTL.
+    engine.invalidate_discover_cache()
     return {"updated": list(updates.keys())}
 
 
