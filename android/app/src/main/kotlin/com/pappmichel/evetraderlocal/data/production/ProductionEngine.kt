@@ -142,13 +142,17 @@ import kotlin.math.min
  *   2-way system split this app collapses to one system id - see
  *   `ProductionConfig.manufacturingSystemId`'s own comment) - not dead code,
  *   just not yet a caller of it.
- * - **No `plan_special_order`/`plan_asset_optimized`.** Out of scope for
- *   this task by its own instructions (the former needs a Special Orders
- *   line-item table this app models separately in `SpecialOrders.kt` and
- *   its own from-scratch/net-against-stock mode switch; the latter -
- *   Asset-Optimized Planner - is explicitly the *next* piece of work this
- *   port's own [StockSource]/[baseRuns]/overbuild-buffer machinery is built
- *   to support without re-deriving it).
+ * - **No `plan_special_order`.** Out of scope for this task by its own
+ *   instructions - it needs a Special Orders line-item table this app
+ *   models separately in `SpecialOrders.kt` and its own from-scratch/
+ *   net-against-stock mode switch.
+ * - **`plan_asset_optimized` now lives in `ProductionAssetOptimizedEngine.kt`,
+ *   not here.** It reuses [StockSource]/[currentStock]/[buyOrBuildDecision]/
+ *   [buildMargin]/[baseRuns]/[parentBaseRunsForBuffer]/[materialQty] from
+ *   this file directly (see that file's own module docstring for exactly
+ *   what's new on top - per-level stock netting and the readiness/
+ *   scarce-stock-allocation math `plan_production` itself never needed)
+ *   rather than duplicating any of it.
  */
 
 // ---------------------------------------------------------------- stock
@@ -317,7 +321,7 @@ suspend fun baseRuns(
  * target) - without this guard, that reappearance would read the same
  * whole-tree aggregate fresh again and add a second full buffer on top of
  * the first. Mutates `bufferedParents` as a side effect. */
-private fun parentBaseRunsForBuffer(typeId: Int, baseRuns: Map<Int, Double>, bufferedParents: MutableSet<Int>): Double {
+internal fun parentBaseRunsForBuffer(typeId: Int, baseRuns: Map<Int, Double>, bufferedParents: MutableSet<Int>): Double {
     if (typeId in bufferedParents) return 0.0
     bufferedParents += typeId
     return baseRuns[typeId] ?: 0.0

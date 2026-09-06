@@ -28,6 +28,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.pappmichel.evetraderlocal.data.auth.TokenManager
 import com.pappmichel.evetraderlocal.data.db.AppDatabase
+import com.pappmichel.evetraderlocal.ui.screens.AssetOptimizedPlannerScreen
 import com.pappmichel.evetraderlocal.ui.screens.CandidateDiscoveryScreen
 import com.pappmichel.evetraderlocal.ui.screens.CharactersScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineContractHistoryScreen
@@ -83,6 +84,7 @@ private const val STOCK_PLANNER_ROUTE = "production/stock-planner"
 private const val SPECIAL_ORDERS_ROUTE = "production/special-orders"
 private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
 private const val LOGISTICS_ROUTE = "production/logistics"
+private const val ASSET_OPTIMIZED_PLANNER_ROUTE = "production/asset-optimized-planner"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
@@ -93,7 +95,8 @@ private const val LOGISTICS_ROUTE = "production/logistics"
  * Margins & Market Status, Production/Build Candidates, Production/Planner,
  * Production/Current Jobs & Slots, Production/Owned Blueprints,
  * Production/Special Orders, Production/Invention Estimator,
- * Production/Logistics, Doctrine/Fittings, and Ore & Minerals' own
+ * Production/Logistics, Production/Asset-Optimized Planner,
+ * Doctrine/Fittings, and Ore & Minerals' own
  * Reprocessing Quote, Mineral Shopping List, and Ore Shortlist (see
  * ROADMAP.md's Android section for what's ported so far). Add a route here
  * as each new screen replaces its placeholder.
@@ -111,7 +114,10 @@ private const val LOGISTICS_ROUTE = "production/logistics"
  * Logistics Status/Distribution Recommendations (GitHub issue #4), now that
  * [StockPlannerScreen]'s planner exists to feed them; Invention Logistics/
  * T1 BPC Invention Needs stay unported (see that screen's own module
- * docstring for exactly why). */
+ * docstring for exactly why). Production/Asset-Optimized Planner routes to
+ * [AssetOptimizedPlannerScreen] - the real port of `engine.
+ * plan_asset_optimized` (see `data/production/
+ * ProductionAssetOptimizedEngine.kt`'s own module docstring). */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -147,6 +153,8 @@ private fun routeFor(tool: String, view: String): String =
         INVENTION_ESTIMATOR_ROUTE
     } else if (tool == "Production" && view == "Logistics") {
         LOGISTICS_ROUTE
+    } else if (tool == "Production" && view == "Asset-Optimized Planner") {
+        ASSET_OPTIMIZED_PLANNER_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Doctrine" && view == "Stockpile Status") {
@@ -290,6 +298,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(SPECIAL_ORDERS_ROUTE) { ProductionSpecialOrdersScreen(database, tokenManager) }
                 composable(INVENTION_ESTIMATOR_ROUTE) { InventionEstimatorScreen(database, tokenManager) }
                 composable(LOGISTICS_ROUTE) { LogisticsScreen(database, tokenManager) }
+                composable(ASSET_OPTIMIZED_PLANNER_ROUTE) { AssetOptimizedPlannerScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(DOCTRINE_STOCKPILE_STATUS_ROUTE) { DoctrineStockpileStatusScreen(database, tokenManager) }
                 composable(DOCTRINE_SHOPPING_LIST_ROUTE) { DoctrineShoppingListScreen(database) }
