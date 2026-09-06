@@ -6,6 +6,10 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.pappmichel.evetraderlocal.data.doctrine.DoctrineContractHistoryDao
 import com.pappmichel.evetraderlocal.data.doctrine.DoctrineContractHistoryEntity
+import com.pappmichel.evetraderlocal.data.production.CategoryLocationDao
+import com.pappmichel.evetraderlocal.data.production.CategoryLocationEntity
+import com.pappmichel.evetraderlocal.data.production.CategoryLocationOptionDao
+import com.pappmichel.evetraderlocal.data.production.CategoryLocationOptionEntity
 import com.pappmichel.evetraderlocal.data.production.ManualBuildBuyDao
 import com.pappmichel.evetraderlocal.data.production.ManualBuildBuyEntity
 import com.pappmichel.evetraderlocal.data.production.ManualStockDao
@@ -54,7 +58,13 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
  * than the settings-blob-JSON pattern, the same "meant to grow, not a small
  * fixed config" reasoning `doctrine_contract_history` already established
  * - for the real stock-aware planner (`data/production/ProductionEngine.kt`,
- * the actual port of `engine.plan_production` this app was missing). */
+ * the actual port of `engine.plan_production` this app was missing).
+ * Version 8 adds `category_locations`/`category_location_options`
+ * (mirroring the desktop build's own `job_category_locations`/
+ * `category_location_options` tables exactly) - Logistics' per-category
+ * "which structure builds this" config, the real Room-backed input its now-
+ * portable `logisticsStatus`/`distributionRecommendations` reports need -
+ * see `data/production/LogisticsEngine.kt`'s own module docstring. */
 @Database(
     entities = [
         TokenEntity::class, SettingsEntity::class,
@@ -64,8 +74,9 @@ import com.pappmichel.evetraderlocal.data.sde.SdeTypeMaterialEntity
         SdeBlueprintProductEntity::class, SdeBlueprintMaterialEntity::class,
         DoctrineContractHistoryEntity::class, SdeInventionProbabilityEntity::class,
         StockTargetEntity::class, ManualStockEntity::class, ManualBuildBuyEntity::class,
+        CategoryLocationEntity::class, CategoryLocationOptionEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -76,6 +87,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun stockTargetDao(): StockTargetDao
     abstract fun manualStockDao(): ManualStockDao
     abstract fun manualBuildBuyDao(): ManualBuildBuyDao
+    abstract fun categoryLocationDao(): CategoryLocationDao
+    abstract fun categoryLocationOptionDao(): CategoryLocationOptionDao
 
     companion object {
         @Volatile private var instance: AppDatabase? = null

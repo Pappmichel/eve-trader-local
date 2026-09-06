@@ -7,9 +7,9 @@ package com.pappmichel.evetraderlocal.ui.nav
  * PlaceholderScreen except Trading/Candidate Discovery, Trading/Shortlist,
  * Trading/Unlisted Stock & Undercut Check, Production/Item Lookup,
  * Production/Ship Margins & Market Status, Production/Build Candidates,
- * Production/Planner, Production/Stock Planner, Production/Current Jobs &
- * Slots, Production/Owned Blueprints, Production/Special Orders, and
- * Production/Invention Estimator (see
+ * Production/Planner, Production/Stock Planner, Production/Logistics,
+ * Production/Current Jobs & Slots, Production/Owned Blueprints,
+ * Production/Special Orders, and Production/Invention Estimator (see
  * ROADMAP.md's Android section for what's actually ported vs. still
  * pending, and see AppNavHost.kt's own routing docstring for the fuller,
  * more current list this comment doesn't fully track).
@@ -23,7 +23,13 @@ package com.pappmichel.evetraderlocal.ui.nav
  * than replacing Planner, so both real, working features stay reachable
  * under their own correctly-scoped names - see `data/production/
  * ProductionEngine.kt`'s own module docstring and `StockPlannerScreen.kt`'s
- * own docstring for why. */
+ * own docstring for why. Production/Logistics is a real port of
+ * Logistics Status/Distribution Recommendations (GitHub issue #4) plus
+ * category-location config, now that Stock Planner's engine feeds them a
+ * real build list - Invention Logistics/T1 BPC Invention Needs stay
+ * unported (still need Tech II/III invention data this SDE cache doesn't
+ * carry) - see `data/production/LogisticsEngine.kt`'s own module
+ * docstring. */
 val TOOL_MENUS: List<Pair<String, List<String>>> = listOf(
     "Trading" to listOf(
         "Shortlist", "Candidate Discovery", "Realized Trades & Transactions",

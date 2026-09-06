@@ -59,3 +59,39 @@ class LiveStockSource(
         return runs
     }
 }
+
+/** Hangar divisions an item can sit in that don't count as usable stock -
+ * mirrors `storage.NON_STOCK_LOCATION_FLAGS` exactly: Asset Safety needs a
+ * paid retrieval trip first, and the delivery/market flags are items in
+ * transit or already sold, not material a job can start with today. */
+private val NON_STOCK_LOCATION_FLAGS = setOf("AssetSafety", "Deliveries", "CorpDeliveries", "CorpMarket")
+
+/** Real, live implementation of [LocationStockSource] - Logistics'
+ * "how much of this is sitting at *this specific* structure" question,
+ * which [LiveStockSource]'s own corp-wide, no-location-filter
+ * [StockSource.ownedQuantity] cannot answer (see `LogisticsEngine.kt`'s own
+ * module docstring for why this is a genuinely separate interface).
+ *
+ * **Character assets only, not corp** - the exact same gap
+ * [LiveStockSource] itself documents (this app's `EsiClient` has no
+ * `/corporations/{id}/assets/` method yet), inherited here rather than
+ * re-derived since both classes are missing the identical underlying ESI
+ * endpoint. A failed lookup for one producer character is skipped rather
+ * than aborting the whole read, matching [LiveStockSource]'s own
+ * precedent. */
+class LiveLocationStockSource(
+    private val tokenManager: TokenManager,
+    private val esi: EsiClient,
+) : LocationStockSource {
+    override suspend fun stockAt(typeId: Int, locationId: Long): Double {
+        var total = 0.0
+        for (record in tokenManager.listRecords(PRODUCER_ROLE_PREFIX)) {
+            val assets = runCatching { esi.characterAssets(record.characterId, record.accessToken) }.getOrNull()
+                ?: continue
+            total += assets
+                .filter { it.typeId == typeId && it.locationId == locationId && it.locationFlag !in NON_STOCK_LOCATION_FLAGS }
+                .sumOf { it.quantity }
+        }
+        return total
+    }
+}

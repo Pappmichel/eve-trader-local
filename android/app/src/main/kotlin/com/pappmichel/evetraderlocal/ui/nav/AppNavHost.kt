@@ -36,6 +36,7 @@ import com.pappmichel.evetraderlocal.ui.screens.DoctrineShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.DoctrineStockpileStatusScreen
 import com.pappmichel.evetraderlocal.ui.screens.InventionEstimatorScreen
 import com.pappmichel.evetraderlocal.ui.screens.ItemLookupScreen
+import com.pappmichel.evetraderlocal.ui.screens.LogisticsScreen
 import com.pappmichel.evetraderlocal.ui.screens.MineralShoppingListScreen
 import com.pappmichel.evetraderlocal.ui.screens.OreShortlistScreen
 import com.pappmichel.evetraderlocal.ui.screens.OwnedBlueprintsScreen
@@ -81,6 +82,7 @@ private const val PLANNER_ROUTE = "production/planner"
 private const val STOCK_PLANNER_ROUTE = "production/stock-planner"
 private const val SPECIAL_ORDERS_ROUTE = "production/special-orders"
 private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
+private const val LOGISTICS_ROUTE = "production/logistics"
 
 /** Every tool/view from `TOOL_MENUS` routes to `PlaceholderScreen` (see that
  * function's own docstring) except the ones a real screen has been built
@@ -91,7 +93,7 @@ private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
  * Margins & Market Status, Production/Build Candidates, Production/Planner,
  * Production/Current Jobs & Slots, Production/Owned Blueprints,
  * Production/Special Orders, Production/Invention Estimator,
- * Doctrine/Fittings, and Ore & Minerals' own
+ * Production/Logistics, Doctrine/Fittings, and Ore & Minerals' own
  * Reprocessing Quote, Mineral Shopping List, and Ore Shortlist (see
  * ROADMAP.md's Android section for what's ported so far). Add a route here
  * as each new screen replaces its placeholder.
@@ -104,7 +106,12 @@ private const val INVENTION_ESTIMATOR_ROUTE = "production/invention-estimator"
  * full finding and the substitution this makes. Production/Stock Planner
  * routes to [StockPlannerScreen] - the real port of that stock-target-
  * driven optimizer, added as its own distinct entry rather than replacing
- * Planner above (see that screen's own module docstring for why). */
+ * Planner above (see that screen's own module docstring for why).
+ * Production/Logistics routes to [LogisticsScreen] - real ports of
+ * Logistics Status/Distribution Recommendations (GitHub issue #4), now that
+ * [StockPlannerScreen]'s planner exists to feed them; Invention Logistics/
+ * T1 BPC Invention Needs stay unported (see that screen's own module
+ * docstring for exactly why). */
 private fun routeFor(tool: String, view: String): String =
     if (tool == "Trading" && view == "Candidate Discovery") {
         CANDIDATE_DISCOVERY_ROUTE
@@ -138,6 +145,8 @@ private fun routeFor(tool: String, view: String): String =
         SPECIAL_ORDERS_ROUTE
     } else if (tool == "Production" && view == "Invention Estimator") {
         INVENTION_ESTIMATOR_ROUTE
+    } else if (tool == "Production" && view == "Logistics") {
+        LOGISTICS_ROUTE
     } else if (tool == "Doctrine" && view == "Fittings") {
         DOCTRINE_FITTINGS_ROUTE
     } else if (tool == "Doctrine" && view == "Stockpile Status") {
@@ -280,6 +289,7 @@ fun AppNavHost(tokenManager: TokenManager, database: AppDatabase) {
                 composable(STOCK_PLANNER_ROUTE) { StockPlannerScreen(database, tokenManager) }
                 composable(SPECIAL_ORDERS_ROUTE) { ProductionSpecialOrdersScreen(database, tokenManager) }
                 composable(INVENTION_ESTIMATOR_ROUTE) { InventionEstimatorScreen(database, tokenManager) }
+                composable(LOGISTICS_ROUTE) { LogisticsScreen(database, tokenManager) }
                 composable(DOCTRINE_FITTINGS_ROUTE) { DoctrineFittingsScreen(database) }
                 composable(DOCTRINE_STOCKPILE_STATUS_ROUTE) { DoctrineStockpileStatusScreen(database, tokenManager) }
                 composable(DOCTRINE_SHOPPING_LIST_ROUTE) { DoctrineShoppingListScreen(database) }

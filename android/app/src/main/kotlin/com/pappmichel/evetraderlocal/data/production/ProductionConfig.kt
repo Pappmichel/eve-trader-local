@@ -136,6 +136,19 @@ data class ProductionConfig(
     // a shared component than the bare minimum, so a small demand swing
     // doesn't immediately create a new shortfall).
     val componentOverbuild: Double = 0.7,
+
+    // -- Added for Logistics (data/production/LogisticsEngine.kt, the real
+    // port of desktop `engine.distribution_recommendations`) --
+
+    // Structure ID `distributionRecommendations` treats as the central
+    // warehouse it moves stock *from* - matches production/config.py's own
+    // `distribution_source_location_id`. Falls back to [homeLocationId]
+    // when unset, exactly like desktop's own `distribution_source_location_id
+    // or home_location_id` ("the home market acts as the central warehouse"
+    // by default, GitHub issue #4) - both `logisticsStatus`'s own "pull
+    // from" hint and `distributionRecommendations` itself apply that same
+    // fallback, never this field alone.
+    val distributionSourceLocationId: Long? = null,
 ) {
     companion object {
         const val SCOPE = "production"
