@@ -93,6 +93,11 @@ Persisting previews; changing event schema.
 
 `tests/test_phase_g2_reliability.py` (`pytest.mark.release`).
 
+Recorded 2026-09-07: 20 action-path cycles, CLI `--recompute` vs wrapper, and
+GUI auto-recompute cycles all keep hangar ESI stock, event counts (one
+`item_set` per Set), and fingerprints aligned. Auto-recompute checkbox is
+still session-only after a new view.
+
 ---
 
 ## G.3 — Data integrity & failure recovery
