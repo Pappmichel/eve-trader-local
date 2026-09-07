@@ -266,15 +266,15 @@ def test_s2_several_orders_share_components(order_sde, monkeypatch):
 
     combined = actions.do_compute_combined_special_orders(
         [first, second], net_against_stock=True, cfg=_cfg())
-    assert planner_calls == [((FINISHED_A, 50.0), (FINISHED_B, 30.0))] or (
-        dict(planner_calls[0]) == {FINISHED_A: 50.0, FINISHED_B: 30.0}
-        and len(planner_calls) == 1
-    )
+    assert len(planner_calls) == 1
+    assert dict(planner_calls[0]) == {FINISHED_A: 50.0, FINISHED_B: 30.0}
     assert _lines(combined) == {FINISHED_A: 50.0, FINISHED_B: 30.0}
     assert COMPONENT in _runs(combined)
     isolated_a = actions.do_compute_special_order(first, cfg=_cfg())
     isolated_b = actions.do_compute_special_order(second, cfg=_cfg())
-    assert _runs(combined)[COMPONENT] < _runs(isolated_a)[COMPONENT] + _runs(isolated_b)[COMPONENT]
+    # Isolated nets each subtract the same 20 COMPONENT; Combined subtracts
+    # them once, so it must schedule more component runs (SF-2).
+    assert _runs(combined)[COMPONENT] > _runs(isolated_a)[COMPONENT] + _runs(isolated_b)[COMPONENT]
     assert _items(first) == before[first]
     assert _items(second) == before[second]
 
