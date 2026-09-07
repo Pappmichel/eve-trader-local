@@ -22,10 +22,18 @@ producer character's own sync), so it belongs alongside stock-target
 management as this planner's other real input, not off in Logistics
 (which is about *where* a build happens, not how much is already on hand).
 
+Decryptor overrides (`set/clear/list-selected-decryptors`) live here too:
+they change the invented BPC's ME/TE (and therefore Cost/Unit and the
+Build List / Invention Needs Decryptor column) for a Tech II/III *product*,
+matching the parent's Stock Targets "Decryptor (Tech II only)" picker.
+Clearing a row returns to automatic Best; choosing "None" is a real
+decryptor (invent without one), not the same as Clear.
+
 `do_plan_production` re-runs the full priced BOM traversal every time (no
 "last plan" table to load cheaply on open, unlike Trading's Shortlist) -
-so only the stock targets/manual stock lists themselves are loaded on open;
-the planner output tables start empty until "Run Planner" is clicked.
+so only the stock targets/manual stock/decryptor lists themselves are
+loaded on open; the planner output tables start empty until "Run Planner"
+is clicked.
 """
 from __future__ import annotations
 
@@ -36,6 +44,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLa
                                QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
 
 from ...production import actions as production_actions
+from ...production.constants import DECRYPTORS
 from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, fmt_pct, populate
@@ -52,6 +61,10 @@ _MANUAL_STOCK_WIDTHS = [200, None]
 # storage.list_manual_stock: "ORDER BY type_name" - alphabetical, same
 # reasoning as the stock target list above.
 _MANUAL_STOCK_SORT = (0, Qt.SortOrder.AscendingOrder)
+
+_DECRYPTOR_COLUMNS = ["Item", "Decryptor"]
+_DECRYPTOR_WIDTHS = [200, None]
+_DECRYPTOR_SORT = (0, Qt.SortOrder.AscendingOrder)
 
 _INVENTORY_COLUMNS = ["Item", "Activity", "Target", "On Hand", "Missing"]
 _INVENTORY_WIDTHS = [200, 120, None, None, None]
@@ -82,6 +95,11 @@ def _stock_target_row(row) -> list:
 def _manual_stock_row(row) -> list:
     type_id, type_name, count = row
     return [type_name, f"{count:,.0f}"]
+
+
+def _decryptor_override_row(row) -> list:
+    type_id, type_name, decryptor = row
+    return [type_name, decryptor]
 
 
 def _inventory_row(row) -> list:
@@ -120,6 +138,7 @@ class ProductionPlannerView(BaseView):
 
         self.root_layout.addWidget(self._build_stock_target_box())
         self.root_layout.addWidget(self._build_manual_stock_box())
+        self.root_layout.addWidget(self._build_decryptor_override_box())
 
         self.tabs = QTabWidget()
         self.inventory_table = build_table(_INVENTORY_COLUMNS, column_widths=_INVENTORY_WIDTHS)
@@ -135,6 +154,7 @@ class ProductionPlannerView(BaseView):
         self._finish_status_row()
         self._load_stock_targets()
         self._load_manual_stock()
+        self._load_decryptor_overrides()
 
     def _build_stock_target_box(self) -> QGroupBox:
         box = QGroupBox("Stock Targets")
@@ -223,6 +243,37 @@ class ProductionPlannerView(BaseView):
         self.manual_stock_table = build_table(_MANUAL_STOCK_COLUMNS, column_widths=_MANUAL_STOCK_WIDTHS)
         self.manual_stock_table.setMaximumHeight(160)
         outer.addWidget(self.manual_stock_table)
+        return box
+
+    def _build_decryptor_override_box(self) -> QGroupBox:
+        box = QGroupBox("Decryptor Overrides")
+        outer = QVBoxLayout(box)
+
+        form = QHBoxLayout()
+        form.addWidget(QLabel("Item:"))
+        self.decryptor_item_input = QLineEdit()
+        self.decryptor_item_input.setPlaceholderText("type_id or exact item name")
+        form.addWidget(self.decryptor_item_input)
+        form.addWidget(QLabel("Decryptor:"))
+        self.decryptor_combo = QComboBox()
+        for name in DECRYPTORS:
+            self.decryptor_combo.addItem(name, name)
+        form.addWidget(self.decryptor_combo)
+        set_btn = QPushButton(icons.icon("target"), "Set Override")
+        set_btn.clicked.connect(self._set_decryptor_override)
+        form.addWidget(set_btn)
+        clear_btn = QPushButton(icons.icon("clear"), "Clear (auto / Best)")
+        clear_btn.clicked.connect(self._clear_decryptor_override)
+        form.addWidget(clear_btn)
+        refresh_btn = QPushButton(icons.icon("refresh"), "Refresh List")
+        refresh_btn.clicked.connect(self._load_decryptor_overrides)
+        form.addWidget(refresh_btn)
+        form.addStretch(1)
+        outer.addLayout(form)
+
+        self.decryptor_override_table = build_table(_DECRYPTOR_COLUMNS, column_widths=_DECRYPTOR_WIDTHS)
+        self.decryptor_override_table.setMaximumHeight(160)
+        outer.addWidget(self.decryptor_override_table)
         return box
 
     def _load_stock_targets(self) -> None:
@@ -322,6 +373,38 @@ class ProductionPlannerView(BaseView):
             self.show_info(f"Manual stock set: {result['type_name']} -> {result['count']:,.0f} units.")
         else:
             self.show_info(f"Removed manual stock override: {result['type_name']}")
+
+    def _load_decryptor_overrides(self) -> None:
+        result = production_actions.do_list_selected_decryptors()
+        populate(self.decryptor_override_table,
+                 [_decryptor_override_row(r) for r in result["rows"]],
+                 default_sort=_DECRYPTOR_SORT)
+
+    def _set_decryptor_override(self) -> None:
+        item = self.decryptor_item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        decryptor = self.decryptor_combo.currentData()
+        self.run_action(
+            functools.partial(production_actions.do_set_selected_decryptor, item, decryptor),
+            self._on_decryptor_override_changed, busy_message="Setting decryptor override...")
+
+    def _clear_decryptor_override(self) -> None:
+        item = self.decryptor_item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        self.run_action(
+            functools.partial(production_actions.do_clear_selected_decryptor, item),
+            self._on_decryptor_override_changed, busy_message="Clearing decryptor override...")
+
+    def _on_decryptor_override_changed(self, result: dict) -> None:
+        self._load_decryptor_overrides()
+        if result["decryptor"] == "Best":
+            self.show_info(f"Decryptor override for {result['type_name']} cleared (auto / Best).")
+        else:
+            self.show_info(f"Invention of {result['type_name']} will use decryptor {result['decryptor']}.")
 
     def _run_planner(self) -> None:
         self.run_action(functools.partial(production_actions.do_plan_production), self._on_plan,

@@ -184,6 +184,48 @@ def test_planner_update_stock_target_end_to_end(qapp, db):
     assert rows == [(34, "Tritanium", 250.0, True)]
 
 
+def test_planner_set_and_clear_decryptor_override_end_to_end(qapp, db):
+    """Exercises Set Override / Clear (auto) on the Planner Decryptor
+    Overrides box - same run_action -> table path as the BPC-cost e2e."""
+    from eve_trader_local import storage
+    from eve_trader_local.gui.views.production_planner import ProductionPlannerView
+
+    storage.replace_sde_data(
+        types=[(34, 18, "Tritanium", 0.01, 1, 100, 0, 1, 1)],
+        groups=[(18, 4, "Mineral")],
+        market_groups=[(100, None, "Manufacture & Research")],
+        blueprint_time=[], blueprint_materials=[], blueprint_products=[],
+        categories=[(4, "Material")],
+    )
+
+    view = ProductionPlannerView()
+    assert view.decryptor_override_table.rowCount() == 0
+    assert view.decryptor_combo.count() > 1
+
+    view.decryptor_item_input.setText("Tritanium")
+    view.decryptor_combo.setCurrentText("Process")
+    view._set_decryptor_override()
+    _wait_for_threads(qapp, view)
+
+    assert "will use decryptor Process" in view.status_label.text()
+    assert view.decryptor_override_table.rowCount() == 1
+    assert storage.load_selected_decryptors() == {34: "Process"}
+
+    view.decryptor_combo.setCurrentText("Accelerant")
+    view._set_decryptor_override()
+    _wait_for_threads(qapp, view)
+
+    assert "will use decryptor Accelerant" in view.status_label.text()
+    assert storage.load_selected_decryptors() == {34: "Accelerant"}
+
+    view._clear_decryptor_override()
+    _wait_for_threads(qapp, view)
+
+    assert "cleared (auto / Best)" in view.status_label.text()
+    assert view.decryptor_override_table.rowCount() == 0
+    assert storage.load_selected_decryptors() == {}
+
+
 def test_main_window_opens_every_production_view_including_new_ones(qapp, db):
     from eve_trader_local.gui.main_window import MainWindow, _TOOL_MENUS
 
