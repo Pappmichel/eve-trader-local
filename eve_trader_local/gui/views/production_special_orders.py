@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLa
 
 from ...errors import ActionError
 from ...production import actions as production_actions
+from ...production import preview_refresh
 from .. import icons
 from .base import BaseView
 from .production_common import build_table, fmt_isk, fmt_pct, populate
@@ -187,6 +188,8 @@ class SpecialOrdersView(BaseView):
         self.selected_net_checkbox = QCheckBox("Net against stock")
         self.selected_net_checkbox.clicked.connect(self._save_net_against_stock)
         meta.addWidget(self.selected_net_checkbox)
+        self.auto_recompute_checkbox = QCheckBox("Auto-recompute after edit")
+        meta.addWidget(self.auto_recompute_checkbox)
         meta.addStretch(1)
         outer.addLayout(meta)
 
@@ -360,9 +363,14 @@ class SpecialOrdersView(BaseView):
         except ValueError:
             self.show_error("Quantity must be a number.")
             return
-        self.run_action(
-            functools.partial(production_actions.do_set_special_order_item, order_id, item, quantity),
-            self._on_item_set, busy_message="Updating special-order item...")
+        if self.auto_recompute_checkbox.isChecked():
+            self.run_action(
+                functools.partial(preview_refresh.set_item_and_preview, order_id, item, quantity),
+                self._on_item_mutated_with_plan, busy_message="Updating item and recomputing...")
+        else:
+            self.run_action(
+                functools.partial(production_actions.do_set_special_order_item, order_id, item, quantity),
+                self._on_item_set, busy_message="Updating special-order item...")
 
     def _on_item_set(self, result: dict) -> None:
         self._load_orders()
@@ -380,9 +388,14 @@ class SpecialOrdersView(BaseView):
         if not item:
             self.show_error("Enter an item (type_id or name) first.")
             return
-        self.run_action(
-            functools.partial(production_actions.do_remove_special_order_item, order_id, item),
-            self._on_item_removed, busy_message="Removing special-order item...")
+        if self.auto_recompute_checkbox.isChecked():
+            self.run_action(
+                functools.partial(preview_refresh.remove_item_and_preview, order_id, item),
+                self._on_item_mutated_with_plan, busy_message="Removing item and recomputing...")
+        else:
+            self.run_action(
+                functools.partial(production_actions.do_remove_special_order_item, order_id, item),
+                self._on_item_removed, busy_message="Removing special-order item...")
 
     def _on_item_removed(self, result: dict) -> None:
         self._load_orders()
@@ -390,6 +403,13 @@ class SpecialOrdersView(BaseView):
         self.tabs.setCurrentWidget(self.line_items_table)
         names = ", ".join(f"{r['type_name']} x{r['quantity']:,.0f}" for r in result["items"])
         self.show_info(f"Special order {result['order'].order_id} items: {names}.")
+
+    def _on_item_mutated_with_plan(self, result: dict) -> None:
+        self._load_orders()
+        self._populate_plan(result["plan"])
+        names = ", ".join(f"{r['type_name']} x{r['quantity']:,.0f}" for r in result["items"])
+        self.show_info(self._plan_summary(
+            result["plan"], f"Special order {result['order'].order_id} items: {names}. "))
 
     def _compute_order(self) -> None:
         order_id = self.order_id_input.text().strip()
