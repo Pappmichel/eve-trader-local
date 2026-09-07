@@ -120,15 +120,75 @@ state.
 | `character_job_slot_totals` / industry jobs | E.5 overlay vs `jobs.character_slot_overview` | Overlay joins used counts with optional totals. Used-only overview unchanged. Neither table is read by `plan_special_order`. |
 | CLI vs GUI | E.3 ergonomics, E.4 `--recompute` / checkbox | Both call `production.actions` (and the E.4 wrapper). No second item or note store. |
 
-Extension-point corrections found during F.1, if any, are listed next to
-the failing test — not as new product rules.
+Extension-point correction in F.1: `create-special-order` prints the stored
+(pooled) item count, not the raw CLI payload length. No core changes.
 
 ---
 
 ## Operator workflows (F.2)
 
-Filled when the F.2 suite lands. Until then this section is the scenario
-table above, not a placeholder for unimplemented behavior.
+These are the real local-tool paths. CLI and GUI both go through
+`eve_trader_local/production/actions.py`. Combined preview is never saved.
+Auto-recompute is a **session** checkbox / `--recompute` flag — it is not
+stored on the order.
+
+### Canonical session
+
+1. CLI `create-special-order NAME:QTY` (optional `--note`, `--net-against-stock`).
+2. CLI `set-special-order-item` to add or change a line (no plan yet).
+3. GUI Special Orders: select the row, edit quantity with **Auto-recompute
+   after edit** checked so Buy/Build/Invention fill immediately.
+4. GUI **Save Note**, then **Mark Done**.
+5. Quit and reopen (new view). Status filter **Done** still shows the order;
+   line items match SQLite.
+6. Select this order plus another open order → **Compute Combined**. Source
+   rows stay as stored. Combined `net_against_stock` is the Combine checkbox
+   / CLI `--net-against-stock`, not the stored per-order flags.
+7. Optional: set a cost-index override and/or manual job-slot totals. Those
+   do not rewrite special-order items or events.
+8. **Compute** the original order again. Same line items as after step 5.
+
+Covered by `test_canonical_operator_path_survives_restart`.
+
+### S1 — Small single order
+
+One product, create → set → compute. Events: `created` then `item_set`.
+Compute does not add events.
+
+### S2 — Several larger orders, shared components
+
+Two orders (Finished Widget A / B) that share COMPONENT. Combined preview
+is one planner run over pooled top-level qty. Isolated Computes that each
+net the same hangar would over-claim; Combined does not. Source orders
+unchanged.
+
+### S3 — Tech II / invention
+
+T2 modules on one or more orders. Invention list is a preview
+(`_invention_need_row` only). Combined same-type qty is one invention row.
+Hangar stock of the finished T2 does not reduce the ordered top-level qty.
+
+### S4 — Hangar present
+
+Stored `net_against_stock=true` on one order. One-order Compute may net
+COMPONENT. Combined with `net_against_stock=false` ignores hangar for
+materials and does not write the stored flags.
+
+### S5 — Missing market prices
+
+No home/Jita quotes: unpriced Buy of the ordered type, empty build list,
+BOM not expanded, SQLite unchanged (current freeze policy).
+
+### S6 — After restart
+
+A second `SpecialOrdersView` (or a new CLI process) sees the same orders,
+notes, status, items, events, slot totals. It does **not** restore the last
+Compute tables or the auto-recompute checkbox.
+
+### S7 — CLI ↔ GUI handoff
+
+CLI create/list/compute and GUI note/set/combined read the same rows. There
+is no GUI-only note field and no CLI-only item table.
 
 ---
 
