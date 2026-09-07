@@ -127,13 +127,15 @@ decision.
 ## Scope boundaries (not this core)
 
 These are intentionally out of the frozen Special-Order core. Do not
-implement them as a side effect of touching this path:
+implement them *inside* this path. Isolated Phase E modules (see
+`PHASE_E_EXPANSION.md`) may add them **around** the core without changing
+SF-1..SF-8:
 
-- persisting a combined preview
+- persisting a combined preview (still forbidden)
 - invention logistics on special orders (stays on `plan_production`)
-- auto-recompute after Set Item
-- job-slot totals/free counts
-- per-category cost-index overrides
+- auto-recompute after Set Item (E.4 wrapper only)
+- job-slot totals/free counts (E.5, manual totals, not ESI skills)
+- per-category cost-index overrides (E.5, existing config fields)
 - persistent invention workflows
 
 ## Release regression

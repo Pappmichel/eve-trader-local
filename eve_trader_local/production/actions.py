@@ -15,7 +15,7 @@ from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError, ConfigError
 from ..esi_client import ESIClient, ESIError
-from . import engine, esi_sync, invention, jobs, pricing
+from . import engine, esi_sync, invention, jobs, order_integrity, pricing
 from .config import PRODUCTION_CONFIG, ProductionConfig, save_config_overrides
 from .constants import DECRYPTORS, JOB_CATEGORIES
 from .models import AssetLocationRow, BuildCandidate, ManualBlueprintCopyCostRow, ShipMarginRow, SpecialOrder
@@ -677,10 +677,12 @@ def do_create_special_order(items: list[dict], note: str | None = None,
     """`items`: [{"type_id": int, "quantity": float}, ...] - at least one,
     each validated the same way do_add_stock_target validates an existing
     type_id (storage.get_sde_type(type_id) is not None). Raises on the first
-    invalid item rather than silently skipping it."""
+    invalid item rather than silently skipping it. Duplicate type_ids are
+    summed (one row per type, matching the items PK). Header and items are
+    written in one transaction."""
     if not items:
         raise ActionError("A special order needs at least one item.")
-    resolved: list[tuple[int, str, float]] = []
+    pooled: dict[int, list] = {}
     for item in items:
         type_id = item["type_id"]
         quantity = item["quantity"]
@@ -689,17 +691,25 @@ def do_create_special_order(items: list[dict], note: str | None = None,
         sde_type = storage.get_sde_type(type_id)
         if sde_type is None:
             raise ActionError(f"Unknown type_id {type_id} - refresh SDE first?")
-        resolved.append((type_id, sde_type[2], quantity))
-
-    order_id = storage.create_special_order(note, net_against_stock)
-    for type_id, type_name, quantity in resolved:
-        storage.upsert_special_order_item(order_id, type_id, type_name, quantity)
+        if type_id in pooled:
+            pooled[type_id][1] += quantity
+        else:
+            pooled[type_id] = [sde_type[2], quantity]
+    resolved = [(type_id, type_name, quantity) for type_id, (type_name, quantity) in pooled.items()]
+    order_id = storage.create_special_order_with_items(note, net_against_stock, resolved)
     return {"order_id": order_id}
 
 
-def do_list_special_orders() -> list[SpecialOrder]:
+def do_list_special_orders(status: str | None = None) -> list[SpecialOrder]:
+    """`status` None lists every order (previous behavior). ``open`` / ``done``
+    filters; any other value is an error."""
+    if status is not None and status not in ("open", "done"):
+        raise ActionError(f"Unknown status {status!r} - must be 'open' or 'done'.")
+    rows = storage.list_special_orders()
+    if status is not None:
+        rows = [row for row in rows if row[3] == status]
     return [_special_order_to_model(row, len(storage.list_special_order_items(row[0])))
-            for row in storage.list_special_orders()]
+            for row in rows]
 
 
 def do_get_special_order(order_id: str) -> dict:
@@ -713,10 +723,13 @@ def do_get_special_order(order_id: str) -> dict:
     }
 
 
-def do_update_special_order(order_id: str, status: str | None = None, note: str | None = None) -> dict:
+def do_update_special_order(order_id: str, status: str | None = None, note: str | None = None,
+                            net_against_stock: bool | None = None) -> dict:
     """Partial update - same dynamic-dict shape as doctrine/actions.py's
     do_update_fitting/storage.update_doctrine. Used for both "mark complete"
-    (status="done") and "reopen" (status="open")."""
+    (status="done") and "reopen" (status="open"). `net_against_stock` is the
+    stored per-order flag used only by do_compute_special_order (SF-5:
+    combined preview still takes its own argument)."""
     if storage.get_special_order(order_id) is None:
         raise ActionError(f"Special order {order_id} not found.")
     if status is not None and status not in ("open", "done"):
@@ -726,6 +739,8 @@ def do_update_special_order(order_id: str, status: str | None = None, note: str 
         updates["status"] = status
     if note is not None:
         updates["note"] = note
+    if net_against_stock is not None:
+        updates["net_against_stock"] = net_against_stock
     storage.update_special_order(order_id, updates)
     return do_get_special_order(order_id)
 
@@ -845,3 +860,22 @@ def do_compute_combined_special_orders(order_ids: list[str], net_against_stock: 
     _require_sde_for_special_order()
     items = _pooled_special_order_items(order_ids)
     return _plan_special_order_items(items, net_against_stock, cfg)
+
+
+def do_audit_special_orders() -> dict:
+    """Read-only integrity report (Phase E.2). Never mutates orders or
+    runs the planner."""
+    issues = order_integrity.audit()
+    return {"ok": not issues, "issues": issues}
+
+
+def do_list_special_order_events(order_id: str | None = None) -> dict:
+    """Append-only lifecycle log. Unknown `order_id` still returns whatever
+    events were recorded for it (including after delete)."""
+    rows = storage.list_special_order_events(order_id)
+    return {
+        "rows": [
+            {"event_id": event_id, "order_id": oid, "event": event, "detail": detail, "at": at}
+            for event_id, oid, event, detail, at in rows
+        ]
+    }

@@ -597,6 +597,19 @@ CREATE TABLE IF NOT EXISTS special_order_items (
 );
 CREATE INDEX IF NOT EXISTS idx_special_order_items_order ON special_order_items (order_id);
 
+-- Phase E.2: append-only order lifecycle log. Not a second order model —
+-- SpecialOrder fields stay as above. Survives header delete so audit still
+-- shows that an order existed. Single-user SQLite: no tenant_id (see
+-- PHASE_E_EXPANSION.md).
+CREATE TABLE IF NOT EXISTS special_order_events (
+    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id TEXT NOT NULL,
+    event    TEXT NOT NULL,
+    detail   TEXT,
+    at       TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_special_order_events_order ON special_order_events (order_id);
+
 -- GitHub issue #40: purchase cost + included run count for a blueprint *copy*
 -- that must be bought outright (never owned as a BPO, not inventable) - e.g. a
 -- faction/officer BPC only obtainable from an LP store or the market. type_id
@@ -2741,13 +2754,46 @@ def delete_category_location_option(category: str, location_id: int, path: Optio
 _SPECIAL_ORDER_COLUMNS = ("order_id", "note", "net_against_stock", "status", "created_at")
 
 
+def _insert_special_order_event(conn: sqlite3.Connection, order_id: str, event: str,
+                                detail: Optional[str] = None) -> None:
+    conn.execute(
+        "INSERT INTO special_order_events (order_id, event, detail) VALUES (?, ?, ?)",
+        (order_id, event, detail),
+    )
+
+
 def create_special_order(note: Optional[str], net_against_stock: bool, path: Optional[Path] = None) -> str:
+    """Header only — tests/audit use this to seed incomplete rows. Production
+    create goes through create_special_order_with_items so items cannot be
+    dropped mid-write."""
     order_id = str(uuid.uuid4())
     with connect(path) as conn:
         conn.execute(
             "INSERT INTO special_orders (order_id, note, net_against_stock) VALUES (?, ?, ?)",
             (order_id, note, int(net_against_stock)),
         )
+        _insert_special_order_event(conn, order_id, "created")
+    return order_id
+
+
+def create_special_order_with_items(note: Optional[str], net_against_stock: bool,
+                                    items: list[tuple[int, str, float]],
+                                    path: Optional[Path] = None) -> str:
+    """Header + line items in one transaction (Phase E.2). `items` is
+    `(type_id, type_name, quantity)` already pooled and validated."""
+    order_id = str(uuid.uuid4())
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO special_orders (order_id, note, net_against_stock) VALUES (?, ?, ?)",
+            (order_id, note, int(net_against_stock)),
+        )
+        for type_id, type_name, quantity in items:
+            conn.execute(
+                "INSERT INTO special_order_items (order_id, type_id, type_name, quantity) "
+                "VALUES (?,?,?,?)",
+                (order_id, type_id, type_name, quantity),
+            )
+        _insert_special_order_event(conn, order_id, "created", f"{len(items)} item(s)")
     return order_id
 
 
@@ -2781,6 +2827,9 @@ def update_special_order(order_id: str, updates: dict, path: Optional[Path] = No
     values = [int(v) if k == "net_against_stock" else v for k, v in updates.items()]
     with connect(path) as conn:
         conn.execute(f"UPDATE special_orders SET {cols} WHERE order_id = ?", (*values, order_id))
+        _insert_special_order_event(
+            conn, order_id, "updated", ", ".join(sorted(updates.keys())),
+        )
 
 
 def delete_special_order(order_id: str, path: Optional[Path] = None) -> None:
@@ -2788,6 +2837,7 @@ def delete_special_order(order_id: str, path: Optional[Path] = None) -> None:
     this codebase's explicit-not-implicit convention for cross-table deletes
     (see delete_doctrine/delete_fitting precedent)."""
     with connect(path) as conn:
+        _insert_special_order_event(conn, order_id, "deleted")
         conn.execute("DELETE FROM special_order_items WHERE order_id = ?", (order_id,))
         conn.execute("DELETE FROM special_orders WHERE order_id = ?", (order_id,))
 
@@ -2801,6 +2851,9 @@ def upsert_special_order_item(order_id: str, type_id: int, type_name: str, quant
             "type_name=excluded.type_name, quantity=excluded.quantity",
             (order_id, type_id, type_name, quantity),
         )
+        _insert_special_order_event(
+            conn, order_id, "item_set", f"{type_name} x{quantity:g}",
+        )
 
 
 def delete_special_order_item(order_id: str, type_id: int, path: Optional[Path] = None) -> None:
@@ -2812,6 +2865,7 @@ def delete_special_order_item(order_id: str, type_id: int, path: Optional[Path] 
             "DELETE FROM special_order_items WHERE order_id = ? AND type_id = ?",
             (order_id, type_id),
         )
+        _insert_special_order_event(conn, order_id, "item_removed", str(type_id))
 
 
 def list_special_order_items(order_id: str, path: Optional[Path] = None) -> list[tuple[int, str, float]]:
@@ -2820,6 +2874,33 @@ def list_special_order_items(order_id: str, path: Optional[Path] = None) -> list
         return conn.execute(
             "SELECT type_id, type_name, quantity FROM special_order_items WHERE order_id = ? ORDER BY type_name",
             (order_id,),
+        ).fetchall()
+
+
+def list_special_order_events(order_id: Optional[str] = None,
+                              path: Optional[Path] = None) -> list[tuple[int, str, str, Optional[str], str]]:
+    """(event_id, order_id, event, detail, at), oldest first. `order_id` None
+    lists every event in the file."""
+    with connect(path) as conn:
+        if order_id is None:
+            return conn.execute(
+                "SELECT event_id, order_id, event, detail, at FROM special_order_events "
+                "ORDER BY event_id"
+            ).fetchall()
+        return conn.execute(
+            "SELECT event_id, order_id, event, detail, at FROM special_order_events "
+            "WHERE order_id = ? ORDER BY event_id",
+            (order_id,),
+        ).fetchall()
+
+
+def list_all_special_order_item_rows(path: Optional[Path] = None) -> list[tuple[str, int, str, float]]:
+    """(order_id, type_id, type_name, quantity) across every order — audit
+    only (Phase E.2). Not a second listing API for the GUI."""
+    with connect(path) as conn:
+        return conn.execute(
+            "SELECT order_id, type_id, type_name, quantity FROM special_order_items "
+            "ORDER BY order_id, type_name"
         ).fetchall()
 
 

@@ -179,7 +179,9 @@ What exists:
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
 was deliberately left out, and why. Frozen Production/Special-Order rules
-are in `PRODUCTION_SEMANTICS.md` (`pytest -m release`).
+are in `PRODUCTION_SEMANTICS.md` (`pytest -m release`). Isolated Phase E
+expansions (persistence, UX, auto-recompute wrappers, job-slot totals,
+cost-index override *actions*) are specified in `PHASE_E_EXPANSION.md`.
 
 ## Native GUI (started 2026-09-04)
 
