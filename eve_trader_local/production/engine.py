@@ -1582,7 +1582,9 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     stockpile_pct denominator is this order's own ordered quantity, not a
     standing stock target. Duplicate ``type_id``s in ``items`` are pooled
     into one invention row (combined special-order preview) so the list
-    doesn't repeat the same product."""
+    doesn't repeat the same product. Manufacturing demand (``seed_missing``)
+    is summed the same way, so a shared product in one planner run is sized
+    once rather than last-write-wins."""
     manual_stock = storage.load_manual_stock()
     manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
@@ -1636,8 +1638,10 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
             invention_qty[type_id] = (prev_name, prev_qty + quantity)
         _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
         # No margin gate here (see docstring) - every missing quantity feeds
-        # the Buy/Build result regardless of cfg.min_margin.
-        seed_missing[type_id] = missing
+        # the Buy/Build result regardless of cfg.min_margin. Sum duplicate
+        # type_ids so a combined planner run sizes shared products once
+        # (same pooling as invention_qty / gross_demand).
+        seed_missing[type_id] = seed_missing.get(type_id, 0.0) + missing
         gross_demand[type_id] = gross_demand.get(type_id, 0.0) + quantity
 
     invention_list: list[InventionNeedRow] = []

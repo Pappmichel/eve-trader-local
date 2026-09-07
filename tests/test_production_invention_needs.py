@@ -281,6 +281,27 @@ def test_combined_special_order_invention_does_not_duplicate_products(invention_
     row = plan["invention_list"][0]
     assert row.type_id == T2_MODULE
     assert row.runs_needed == 100
+    build_by_type = {r.type_id: r.job_runs for r in plan["build_list"]}
+    assert build_by_type[T2_MODULE] == 100
+
+
+def test_combined_orders_share_one_invention_preview(invention_sde):
+    first = actions.do_create_special_order(
+        [{"type_id": T2_MODULE, "quantity": 40.0}])["order_id"]
+    second = actions.do_create_special_order(
+        [{"type_id": T2_MODULE, "quantity": 60.0}])["order_id"]
+    isolated_a = actions.do_compute_special_order(first, cfg=_cfg())
+    isolated_b = actions.do_compute_special_order(second, cfg=_cfg())
+    combined = actions.do_compute_combined_special_orders(
+        [first, second], net_against_stock=False, cfg=_cfg())
+
+    assert len(combined["invention_list"]) == 1
+    assert combined["invention_list"][0].runs_needed == 100
+    assert isolated_a["invention_list"][0].runs_needed == 40
+    assert isolated_b["invention_list"][0].runs_needed == 60
+    assert (isolated_a["invention_list"][0].recommended_invention_runs
+            + isolated_b["invention_list"][0].recommended_invention_runs
+            >= combined["invention_list"][0].recommended_invention_runs)
 
 
 def test_special_order_invention_does_not_net_top_level_hangar_stock(invention_sde):

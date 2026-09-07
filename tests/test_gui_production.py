@@ -69,6 +69,8 @@ def test_special_orders_view_opens_with_empty_db(qapp, db):
     assert view.orders_table.rowCount() == 0
     assert view.line_items_table.rowCount() == 0
     assert view.invention_table.rowCount() == 0
+    assert view.edit_item_input.placeholderText()
+    assert view.combine_ids_input.placeholderText()
 
 
 def test_special_orders_invention_needs_preview(qapp, db, monkeypatch):
