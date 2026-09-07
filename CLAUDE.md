@@ -5,6 +5,13 @@ is and its current status, `ROADMAP.md` for where it's headed, and
 `SYNC.md` for which parts of the parent `eve-trader` repo are meant to stay
 aligned with this one (and which never should be).
 
+Production Special-Order semantics (B1 hangar rule, combined preview,
+pooling, preview purity, invention single-source, CLI/GUI shared path)
+are frozen in `PRODUCTION_SEMANTICS.md`. Do not change those rules as a
+side effect of a feature or refactor; treat a change as an explicit
+product decision and update the freeze doc plus `pytest -m release` in
+the same change.
+
 ## No Claude/Anthropic attribution anywhere (confirmed 2026-09-02)
 
 Never add a `Co-Authored-By: Claude ...` or `Claude-Session: ...` line to a
