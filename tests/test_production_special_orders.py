@@ -284,3 +284,156 @@ def test_compute_special_order_raises_without_sde(db):
 def test_compute_special_order_unknown_id_raises(order_sde):
     with pytest.raises(ActionError):
         actions.do_compute_special_order("nonexistent")
+
+
+# ------------------------------------------------------------------- edit item
+
+
+def test_do_set_special_order_item_updates_quantity(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+
+    result = actions.do_set_special_order_item(order_id, "Finished Widget A", 25.0)
+
+    assert result["items"] == [
+        {"type_id": FINISHED_A, "type_name": "Finished Widget A", "quantity": 25.0}]
+    assert result["order"].item_count == 1
+    plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+    build_by_type = {row.type_id: row for row in plan["build_list"]}
+    assert build_by_type[FINISHED_A].job_runs == 25
+
+
+def test_do_set_special_order_item_adds_a_new_line(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+
+    result = actions.do_set_special_order_item(order_id, str(FINISHED_B), 3.0)
+
+    by_id = {row["type_id"]: row["quantity"] for row in result["items"]}
+    assert by_id == {FINISHED_A: 10.0, FINISHED_B: 3.0}
+    assert result["order"].item_count == 2
+
+
+def test_do_set_special_order_item_rejects_nonpositive_quantity(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    with pytest.raises(ActionError, match="must be positive"):
+        actions.do_set_special_order_item(order_id, "Finished Widget A", 0)
+
+
+def test_do_set_special_order_item_rejects_unknown_item(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    with pytest.raises(ActionError):
+        actions.do_set_special_order_item(order_id, "Not A Real Item", 1.0)
+
+
+def test_do_set_special_order_item_unknown_order_raises(order_sde):
+    with pytest.raises(ActionError, match="not found"):
+        actions.do_set_special_order_item("nonexistent", "Finished Widget A", 1.0)
+
+
+# ------------------------------------------------------------------- combine
+
+
+def _runs(plan: dict) -> dict[int, int]:
+    return {row.type_id: row.job_runs for row in plan["build_list"]}
+
+
+def test_combine_one_order_matches_compute_special_order(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    single = actions.do_compute_special_order(order_id, cfg=_cfg())
+    combined = actions.do_compute_combined_special_orders([order_id], net_against_stock=False, cfg=_cfg())
+    assert _runs(combined) == _runs(single)
+    assert combined["line_items"][0].quantity == 10.0
+
+
+def test_combine_pools_shared_top_level_items(order_sde):
+    first = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    second = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 5.0}])["order_id"]
+
+    plan = actions.do_compute_combined_special_orders(
+        [first, second], net_against_stock=False, cfg=_cfg())
+
+    by_type = {row.type_id: row.quantity for row in plan["line_items"]}
+    assert by_type == {FINISHED_A: 15.0}
+    assert _runs(plan)[FINISHED_A] == 15
+
+
+def test_combine_nets_shared_components_like_one_order_with_both_items(order_sde):
+    """Two orders that share COMPONENT must plan the same as one order that
+    lists both finished items - the BOM walk pools material demand once."""
+    first = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    second = actions.do_create_special_order(
+        [{"type_id": FINISHED_B, "quantity": 10.0}])["order_id"]
+    both = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0},
+         {"type_id": FINISHED_B, "quantity": 10.0}])["order_id"]
+
+    combined = actions.do_compute_combined_special_orders(
+        [first, second], net_against_stock=False, cfg=_cfg())
+    single = actions.do_compute_special_order(both, cfg=_cfg())
+
+    assert _runs(combined) == _runs(single)
+    assert _runs(combined)[FINISHED_A] == 10
+    assert _runs(combined)[FINISHED_B] == 10
+    # Together they need more COMPONENT than either order alone.
+    assert _runs(combined)[COMPONENT] > 18
+
+
+def test_combine_net_against_stock_does_not_net_top_level_quantity(order_sde):
+    """B1: hangar stock of the ordered product never reduces its job runs,
+    including when several orders are pooled."""
+    storage.replace_assets("character_assets", [
+        (1, FINISHED_A, 60003760, "Hangar", 6, 0, "Test Character"),
+        (2, COMPONENT, 60003760, "Hangar", 6, 0, "Test Character"),
+    ])
+    first = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    second = actions.do_create_special_order(
+        [{"type_id": FINISHED_B, "quantity": 10.0}])["order_id"]
+
+    scratch = actions.do_compute_combined_special_orders(
+        [first, second], net_against_stock=False, cfg=_cfg())
+    netted = actions.do_compute_combined_special_orders(
+        [first, second], net_against_stock=True, cfg=_cfg())
+
+    assert _runs(scratch)[FINISHED_A] == _runs(netted)[FINISHED_A] == 10
+    assert _runs(scratch)[FINISHED_B] == _runs(netted)[FINISHED_B] == 10
+    assert _runs(netted)[COMPONENT] == _runs(scratch)[COMPONENT] - 6
+
+
+def test_combine_does_not_persist_or_mutate_source_orders(order_sde):
+    first = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], note="a")["order_id"]
+    second = actions.do_create_special_order(
+        [{"type_id": FINISHED_B, "quantity": 3.0}], note="b")["order_id"]
+
+    actions.do_compute_combined_special_orders([first, second], net_against_stock=False, cfg=_cfg())
+
+    assert actions.do_get_special_order(first)["items"] == [
+        {"type_id": FINISHED_A, "type_name": "Finished Widget A", "quantity": 10.0}]
+    assert actions.do_get_special_order(second)["items"] == [
+        {"type_id": FINISHED_B, "type_name": "Finished Widget B", "quantity": 3.0}]
+    assert len(actions.do_list_special_orders()) == 2
+
+
+def test_combine_rejects_empty_list(order_sde):
+    with pytest.raises(ActionError, match="Select at least one"):
+        actions.do_compute_combined_special_orders([], net_against_stock=False)
+
+
+def test_combine_unknown_order_raises(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 1.0}])["order_id"]
+    with pytest.raises(ActionError, match="not found"):
+        actions.do_compute_combined_special_orders([order_id, "missing"], net_against_stock=False)
+
+
+def test_combine_raises_without_sde(db):
+    with pytest.raises(ActionError, match="SDE cache is empty"):
+        actions.do_compute_combined_special_orders(["anything"], net_against_stock=False)

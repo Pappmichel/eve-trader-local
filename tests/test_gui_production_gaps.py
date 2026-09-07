@@ -184,6 +184,66 @@ def test_planner_update_stock_target_end_to_end(qapp, db):
     assert rows == [(34, "Tritanium", 250.0, True)]
 
 
+def _seed_tritanium():
+    from eve_trader_local import storage
+    storage.replace_sde_data(
+        types=[(34, 18, "Tritanium", 0.01, 1, 100, 0, 1, 1)],
+        groups=[(18, 4, "Mineral")],
+        market_groups=[(100, None, "Manufacture & Research")],
+        blueprint_time=[], blueprint_materials=[], blueprint_products=[],
+        categories=[(4, "Material")],
+    )
+
+
+def test_special_orders_set_item_end_to_end(qapp, db):
+    from eve_trader_local import storage
+    from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
+    from eve_trader_local.production import actions as production_actions
+
+    _seed_tritanium()
+    view = SpecialOrdersView()
+    view.items_input.setText("Tritanium:10")
+    view._create_order()
+    _wait_for_threads(qapp, view)
+    assert view.orders_table.rowCount() == 1
+    order_id = production_actions.do_list_special_orders()[0].order_id
+
+    view.order_id_input.setText(order_id)
+    view.edit_item_input.setText("Tritanium")
+    view.edit_qty_input.setText("25")
+    view._set_item()
+    _wait_for_threads(qapp, view)
+
+    assert "Tritanium x25" in view.status_label.text()
+    assert view.line_items_table.rowCount() == 1
+    stored = storage.list_special_order_items(order_id)
+    assert [(row[0], row[1], row[2]) for row in stored] == [(34, "Tritanium", 25.0)]
+
+
+def test_special_orders_combine_end_to_end(qapp, db):
+    from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
+    from eve_trader_local.production import actions as production_actions
+
+    _seed_tritanium()
+    view = SpecialOrdersView()
+    view.items_input.setText("Tritanium:10")
+    view._create_order()
+    _wait_for_threads(qapp, view)
+    view.items_input.setText("Tritanium:5")
+    view._create_order()
+    _wait_for_threads(qapp, view)
+    ids = [row.order_id for row in production_actions.do_list_special_orders()]
+    assert len(ids) == 2
+
+    view.combine_ids_input.setText(", ".join(ids))
+    view._compute_combined()
+    _wait_for_threads(qapp, view)
+
+    assert "Combined preview" in view.status_label.text()
+    assert view.line_items_table.rowCount() == 1
+    assert view.line_items_table.item(0, 1).text() == "15"
+
+
 def test_main_window_opens_every_production_view_including_new_ones(qapp, db):
     from eve_trader_local.gui.main_window import MainWindow, _TOOL_MENUS
 

@@ -34,7 +34,9 @@
     eve-trader-local set-manual-stock <item> <count> / remove-manual-stock <item> / list-manual-stock
     eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--net-against-stock]
     eve-trader-local list-special-orders / remove-special-order <order_id>
+    eve-trader-local set-special-order-item <order_id> <item> <quantity>
     eve-trader-local compute-special-order <order_id>
+    eve-trader-local compute-combined-special-orders <order_id> [<order_id> ...] [--net-against-stock]
     eve-trader-local pipeline [--rebuild-universe]
     eve-trader-local parse-fitting <path>
     eve-trader-local auth --role doctrine
@@ -736,8 +738,15 @@ def cmd_update_special_order(args: argparse.Namespace) -> None:
     print(f"Special order {result['order'].order_id} updated - status: {result['order'].status}.")
 
 
-def cmd_compute_special_order(args: argparse.Namespace) -> None:
-    plan = production_actions.do_compute_special_order(args.order_id)
+def cmd_set_special_order_item(args: argparse.Namespace) -> None:
+    result = production_actions.do_set_special_order_item(args.order_id, args.item, args.quantity)
+    order = result["order"]
+    print(f"Special order {order.order_id} now has {order.item_count} item(s):")
+    for item in result["items"]:
+        print(f"  {item['type_name']:<40} {item['quantity']:>10,.0f}")
+
+
+def _print_special_order_plan(plan: dict) -> None:
     print("Line Items:")
     for row in plan["line_items"]:
         print(f"  {row.type_name:<40} {row.quantity:>10,.0f} units")
@@ -759,6 +768,18 @@ def cmd_compute_special_order(args: argparse.Namespace) -> None:
         print("\nStock overlap warning (shared with configured stock targets):")
         for row in plan["stock_overlap_warning"]:
             print(f"  {row.type_name:<40} {row.current_stock:>10,.0f} units on hand")
+
+
+def cmd_compute_special_order(args: argparse.Namespace) -> None:
+    _print_special_order_plan(production_actions.do_compute_special_order(args.order_id))
+
+
+def cmd_compute_combined_special_orders(args: argparse.Namespace) -> None:
+    plan = production_actions.do_compute_combined_special_orders(
+        args.order_id, net_against_stock=args.net_against_stock)
+    print(f"Combined preview of {len(args.order_id)} order(s)"
+          f"{' (net against stock)' if args.net_against_stock else ' (from scratch)'}:")
+    _print_special_order_plan(plan)
 
 
 def cmd_parse_fitting(args: argparse.Namespace) -> None:
@@ -1347,11 +1368,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_update_order.add_argument("--note", default=None)
     p_update_order.set_defaults(func=cmd_update_special_order)
 
+    p_set_item = sub.add_parser(
+        "set-special-order-item",
+        help="add or update one line item on an existing special order",
+    )
+    p_set_item.add_argument("order_id")
+    p_set_item.add_argument("item", help="type_id or exact item name")
+    p_set_item.add_argument("quantity", type=float)
+    p_set_item.set_defaults(func=cmd_set_special_order_item)
+
     p_compute_order = sub.add_parser(
         "compute-special-order", help="run the buy/build planner for one special order's current line items"
     )
     p_compute_order.add_argument("order_id")
     p_compute_order.set_defaults(func=cmd_compute_special_order)
+
+    p_combine_orders = sub.add_parser(
+        "compute-combined-special-orders",
+        help="preview a pooled buy/build plan for several special orders without changing them",
+    )
+    p_combine_orders.add_argument("order_id", nargs="+", help="one or more special-order ids")
+    p_combine_orders.add_argument(
+        "--net-against-stock", dest="net_against_stock", action="store_true",
+        help="net component/material demand against current stock for this combined preview",
+    )
+    p_combine_orders.set_defaults(func=cmd_compute_combined_special_orders)
 
     p_pipeline = sub.add_parser("pipeline", help="run the daily workflow (each step isolated)")
     p_pipeline.add_argument("--safe", dest="safe", action="store_true", default=True,

@@ -67,6 +67,8 @@ def test_special_orders_view_opens_with_empty_db(qapp, db):
     view = SpecialOrdersView()
     assert view.orders_table.rowCount() == 0
     assert view.line_items_table.rowCount() == 0
+    assert view.edit_item_input.placeholderText()
+    assert view.combine_ids_input.placeholderText()
 
 
 def test_margins_market_view_opens_with_empty_db(qapp, db):

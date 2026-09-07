@@ -703,19 +703,63 @@ def do_remove_special_order(order_id: str) -> dict:
     return {"removed": order_id}
 
 
-def do_compute_special_order(order_id: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
-    """Runs engine.plan_special_order for one order's current line items.
-    Raises under the same SDE-cache-empty precondition as do_plan_production
-    - a special order has no stock_targets-equivalent precondition (it
-    always has >=1 item, enforced at creation)."""
+def do_set_special_order_item(order_id: str, type_id_or_name: str, quantity: float) -> dict:
+    """Adds a line item to an existing order, or updates that item's
+    quantity (upsert, same per-item validation as do_create_special_order).
+    `type_id_or_name` is name or numeric type_id, matching the rest of this
+    module's do_* lookups."""
+    if storage.get_special_order(order_id) is None:
+        raise ActionError(f"Special order {order_id} not found.")
+    if quantity <= 0:
+        raise ActionError(f"Quantity for '{type_id_or_name}' must be positive.")
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.upsert_special_order_item(order_id, type_id, type_name, quantity)
+    return do_get_special_order(order_id)
+
+
+def _require_sde_for_special_order() -> None:
     if not storage.sde_row_counts().get("sde_types"):
         raise ActionError(
             "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "
             "in the GUI (or `eve-trader-local refresh-sde` on the CLI)."
         )
+
+
+def do_compute_special_order(order_id: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Runs engine.plan_special_order for one order's current line items.
+    Raises under the same SDE-cache-empty precondition as do_plan_production
+    - a special order has no stock_targets-equivalent precondition (it
+    always has >=1 item, enforced at creation)."""
+    _require_sde_for_special_order()
     row = storage.get_special_order(order_id)
     if row is None:
         raise ActionError(f"Special order {order_id} not found.")
     _order_id, _note, net_against_stock, _status, _created_at = row
     items = storage.list_special_order_items(order_id)
+    return engine.plan_special_order(items, cfg, net_against_stock=net_against_stock)
+
+
+def do_compute_combined_special_orders(order_ids: list[str], net_against_stock: bool,
+                                       cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Temporary, unsaved combination of existing orders' line items into
+    one pooled Buy/Build computation. The individual orders are never
+    modified. Items sharing a type_id across the selected orders are
+    summed, then handed to the same plan_special_order a single order
+    uses - so shared components/materials net once, and B1's "never net
+    the ordered top-level quantity" rule still applies. `net_against_stock`
+    is chosen for this combined view, independent of each order's own
+    flag (there is no single correct merge of disagreeing flags)."""
+    if not order_ids:
+        raise ActionError("Select at least one special order to combine.")
+    _require_sde_for_special_order()
+    pooled: dict[int, list] = {}  # type_id -> [type_name, quantity]
+    for order_id in order_ids:
+        if storage.get_special_order(order_id) is None:
+            raise ActionError(f"Special order {order_id} not found.")
+        for type_id, type_name, quantity in storage.list_special_order_items(order_id):
+            if type_id in pooled:
+                pooled[type_id][1] += quantity
+            else:
+                pooled[type_id] = [type_name, quantity]
+    items = [(type_id, type_name, quantity) for type_id, (type_name, quantity) in pooled.items()]
     return engine.plan_special_order(items, cfg, net_against_stock=net_against_stock)
