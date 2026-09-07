@@ -167,6 +167,7 @@ pytest -m release
 | Phase G.1 scale baseline | `tests/test_phase_g1_scale_baseline.py` (see `PHASE_G_SCALE.md`; timings are documentation, not gates) |
 | Phase G.2 reliability | `tests/test_phase_g2_reliability.py` |
 | Phase G.3 failure recovery | `tests/test_phase_g3_failure_recovery.py` |
+| Phase H release candidate | `PHASE_H_RELEASE.md`, `RELEASE_NOTES.md`, `KNOWN_LIMITATIONS.md`, `VERSIONING.md` (`0.4.0rc1` / `v0.4.0-rc1`) |
 
 End-to-end workflows (create → upsert → compute; combined pooling; stock
 modes 1==3; T2 invention aggregation) live in
