@@ -1,21 +1,25 @@
 """Production's Special Orders tab: one-off build orders, tracked separately
-from the permanent stock_targets list - `create/list/update/remove/compute-
-special-order`, all grouped into one tab since they all operate on the same
-underlying list (matching trading_shortlist.py's own "several CLI commands,
-one screen" precedent).
+from the permanent stock_targets list - `create/list/update/remove/set-item/
+compute/compute-combined-special-order`, all grouped into one tab since they
+all operate on the same underlying list (matching trading_shortlist.py's own
+"several CLI commands, one screen" precedent).
 
 The orders list itself is a cheap local read (`storage.list_special_orders`,
-no network) so it's loaded on open; `compute-special-order` re-runs the full
-priced planner (`engine.plan_special_order`) so that one stays a Refresh/
-Compute-button action, same as every other planner-backed view here."""
+no network) so it's loaded on open; compute / compute-combined re-run the
+full priced planner via production_actions (engine.plan_special_order /
+_invention_need_row) so those stay button actions, same as every other
+planner-backed view here. Combine is preview-only: selected orders are
+pooled (shared type_ids summed) and never modified.
+"""
 from __future__ import annotations
 
 import functools
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
+                               QLineEdit, QPushButton, QTableWidget, QTabWidget, QVBoxLayout)
 
+from ...errors import ActionError
 from ...production import actions as production_actions
 from .. import icons
 from .base import BaseView
@@ -59,6 +63,10 @@ def _line_item_row(row) -> list:
     return [row.type_name, f"{row.quantity:,.0f}"]
 
 
+def _line_item_row_from_dict(row: dict) -> list:
+    return [row["type_name"], f"{row['quantity']:,.0f}"]
+
+
 def _build_row(row) -> list:
     return [row.type_name, row.activity, row.job_runs, fmt_isk(row.unit_build_cost), row.job_category]
 
@@ -94,10 +102,12 @@ class SpecialOrdersView(BaseView):
 
         self.orders_table = build_table(_ORDER_COLUMNS, column_widths=_ORDER_WIDTHS)
         self.orders_table.setMaximumHeight(200)
+        self.orders_table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self.orders_table.itemSelectionChanged.connect(self._on_selection_changed)
         self.root_layout.addWidget(self.orders_table)
 
         self.root_layout.addWidget(self._build_action_box())
+        self.root_layout.addWidget(self._build_combine_box())
 
         self.tabs = QTabWidget()
         self.line_items_table = build_table(_LINE_ITEM_COLUMNS, column_widths=_LINE_ITEM_WIDTHS)
@@ -137,33 +147,82 @@ class SpecialOrdersView(BaseView):
 
     def _build_action_box(self) -> QGroupBox:
         box = QGroupBox("Selected Order")
-        outer = QHBoxLayout(box)
-        outer.addWidget(QLabel("Order ID:"))
+        outer = QVBoxLayout(box)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Order ID:"))
         self.order_id_input = QLineEdit()
         self.order_id_input.setPlaceholderText("select a row above, or paste an order id")
-        outer.addWidget(self.order_id_input)
+        row.addWidget(self.order_id_input)
         done_btn = QPushButton(icons.icon("check"), "Mark Done")
         done_btn.clicked.connect(lambda: self._update_status("done"))
-        outer.addWidget(done_btn)
+        row.addWidget(done_btn)
         reopen_btn = QPushButton(icons.icon("undo"), "Reopen")
         reopen_btn.clicked.connect(lambda: self._update_status("open"))
-        outer.addWidget(reopen_btn)
+        row.addWidget(reopen_btn)
         remove_btn = QPushButton(icons.icon("remove"), "Remove")
         remove_btn.clicked.connect(self._remove_order)
-        outer.addWidget(remove_btn)
+        row.addWidget(remove_btn)
         compute_btn = QPushButton(icons.icon("calculate"), "Compute")
         compute_btn.clicked.connect(self._compute_order)
-        outer.addWidget(compute_btn)
+        row.addWidget(compute_btn)
+        row.addStretch(1)
+        outer.addLayout(row)
+
+        edit = QHBoxLayout()
+        edit.addWidget(QLabel("Item:"))
+        self.edit_item_input = QLineEdit()
+        self.edit_item_input.setPlaceholderText("type_id or exact item name")
+        edit.addWidget(self.edit_item_input)
+        edit.addWidget(QLabel("Quantity:"))
+        self.edit_qty_input = QLineEdit()
+        self.edit_qty_input.setPlaceholderText("e.g. 10")
+        self.edit_qty_input.setMaximumWidth(100)
+        edit.addWidget(self.edit_qty_input)
+        set_item_btn = QPushButton(icons.icon("save"), "Set Item")
+        set_item_btn.clicked.connect(self._set_item)
+        edit.addWidget(set_item_btn)
+        edit.addStretch(1)
+        outer.addLayout(edit)
+        return box
+
+    def _build_combine_box(self) -> QGroupBox:
+        box = QGroupBox("Combine Orders (preview only)")
+        outer = QHBoxLayout(box)
+        outer.addWidget(QLabel("Order IDs:"))
+        self.combine_ids_input = QLineEdit()
+        self.combine_ids_input.setPlaceholderText("comma-separated, or select several rows above")
+        outer.addWidget(self.combine_ids_input)
+        self.combine_net_checkbox = QCheckBox("Net against stock")
+        outer.addWidget(self.combine_net_checkbox)
+        combine_btn = QPushButton(icons.icon("calculate"), "Compute Combined")
+        combine_btn.clicked.connect(self._compute_combined)
+        outer.addWidget(combine_btn)
         outer.addStretch(1)
         return box
 
+    def _selected_order_ids(self) -> list[str]:
+        ids = []
+        for index in self.orders_table.selectionModel().selectedRows():
+            item = self.orders_table.item(index.row(), 0)
+            if item is not None:
+                ids.append(item.text())
+        return ids
+
     def _on_selection_changed(self) -> None:
-        rows = self.orders_table.selectionModel().selectedRows()
-        if not rows:
+        ids = self._selected_order_ids()
+        if not ids:
             return
-        order_id_item = self.orders_table.item(rows[0].row(), 0)
-        if order_id_item is not None:
-            self.order_id_input.setText(order_id_item.text())
+        self.order_id_input.setText(ids[0])
+        self.combine_ids_input.setText(", ".join(ids))
+        self._load_line_items(ids[0])
+
+    def _load_line_items(self, order_id: str) -> None:
+        try:
+            detail = production_actions.do_get_special_order(order_id)
+        except ActionError:
+            return
+        populate(self.line_items_table, [_line_item_row_from_dict(r) for r in detail["items"]])
 
     def _load_orders(self) -> None:
         # storage.list_special_orders is a cheap local read (no network).
@@ -251,6 +310,31 @@ class SpecialOrdersView(BaseView):
         self.order_id_input.clear()
         self.show_info(f"Removed special order {result['removed']}.")
 
+    def _set_item(self) -> None:
+        order_id = self.order_id_input.text().strip()
+        if not order_id:
+            self.show_error("Select or enter an order id first.")
+            return
+        item = self.edit_item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        try:
+            quantity = float(self.edit_qty_input.text().strip())
+        except ValueError:
+            self.show_error("Quantity must be a number.")
+            return
+        self.run_action(
+            functools.partial(production_actions.do_set_special_order_item, order_id, item, quantity),
+            self._on_item_set, busy_message="Updating special-order item...")
+
+    def _on_item_set(self, result: dict) -> None:
+        self._load_orders()
+        populate(self.line_items_table, [_line_item_row_from_dict(r) for r in result["items"]])
+        self.tabs.setCurrentWidget(self.line_items_table)
+        names = ", ".join(f"{r['type_name']} x{r['quantity']:,.0f}" for r in result["items"])
+        self.show_info(f"Special order {result['order'].order_id} items: {names}.")
+
     def _compute_order(self) -> None:
         order_id = self.order_id_input.text().strip()
         if not order_id:
@@ -259,13 +343,35 @@ class SpecialOrdersView(BaseView):
         self.run_action(functools.partial(production_actions.do_compute_special_order, order_id),
                         self._on_computed, busy_message="Computing buy/build plan for this order...")
 
-    def _on_computed(self, plan: dict) -> None:
+    def _compute_combined(self) -> None:
+        ids = [part.strip() for part in self.combine_ids_input.text().split(",") if part.strip()]
+        if not ids:
+            self.show_error("Enter or select at least one order id to combine.")
+            return
+        self.run_action(
+            functools.partial(production_actions.do_compute_combined_special_orders, ids,
+                              self.combine_net_checkbox.isChecked()),
+            self._on_combined, busy_message="Computing combined buy/build plan...")
+
+    def _populate_plan(self, plan: dict) -> None:
         populate(self.line_items_table, [_line_item_row(r) for r in plan["line_items"]])
         populate(self.build_table_widget, [_build_row(r) for r in plan["build_list"]], default_sort=_BUILD_SORT)
         populate(self.buy_table, [_buy_row(r) for r in plan["buy_list"]], default_sort=_BUY_SORT)
         populate(self.invention_table, [_invention_row(r) for r in plan["invention_list"]],
                  default_sort=_INVENTION_SORT)
         populate(self.overlap_table, [_overlap_row(r) for r in plan["stock_overlap_warning"]])
+
+    def _on_combined(self, plan: dict) -> None:
+        self._populate_plan(plan)
+        extra = " (net against stock)" if self.combine_net_checkbox.isChecked() else " (from scratch)"
+        self.show_info(
+            f"Combined preview{extra} - {len(plan['line_items'])} line item(s), "
+            f"{len(plan['build_list'])} build job(s), {len(plan['buy_list'])} buy item(s), "
+            f"{len(plan['invention_list'])} invention need(s)."
+        )
+
+    def _on_computed(self, plan: dict) -> None:
+        self._populate_plan(plan)
         self.show_info(f"Computed - {len(plan['build_list'])} build job(s), {len(plan['buy_list'])} "
                        f"buy item(s), {len(plan['invention_list'])} invention need(s), "
                        f"{len(plan['stock_overlap_warning'])} stock overlap warning(s).")
