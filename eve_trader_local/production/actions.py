@@ -736,9 +736,12 @@ def do_remove_special_order(order_id: str) -> dict:
 
 def do_compute_special_order(order_id: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     """Runs engine.plan_special_order for one order's current line items.
-    Raises under the same SDE-cache-empty precondition as do_plan_production
-    - a special order has no stock_targets-equivalent precondition (it
-    always has >=1 item, enforced at creation)."""
+    Returns the same computed plan dict (line_items / buy_list / build_list /
+    invention_list / stock_overlap_warning) - invention_list is a preview,
+    not a stored invention workflow. Raises under the same SDE-cache-empty
+    precondition as do_plan_production - a special order has no
+    stock_targets-equivalent precondition (it always has >=1 item, enforced
+    at creation)."""
     if not storage.sde_row_counts().get("sde_types"):
         raise ActionError(
             "SDE cache is empty. Refresh it via App > Refresh Static Data (SDE)... "

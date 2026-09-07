@@ -183,6 +183,7 @@ def test_compute_special_order_from_scratch(order_sde):
     buy_by_type = {row.type_id: row for row in plan["buy_list"]}
     assert MINERAL in buy_by_type
     assert plan["stock_overlap_warning"] == []
+    assert plan["invention_list"] == []
 
 
 def test_net_against_stock_changes_the_result(order_sde):

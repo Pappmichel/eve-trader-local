@@ -68,6 +68,40 @@ def test_special_orders_view_opens_with_empty_db(qapp, db):
     view = SpecialOrdersView()
     assert view.orders_table.rowCount() == 0
     assert view.line_items_table.rowCount() == 0
+    assert view.invention_table.rowCount() == 0
+
+
+def test_special_orders_invention_needs_preview(qapp, db, monkeypatch):
+    """Compute-preview path: a T2 special order fills the Invention Needs tab
+    without persisting a second invention workflow."""
+    from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
+    from eve_trader_local.production import actions, engine
+    from test_production_invention_needs import JITA, T2_MODULE, _cfg, _seed
+
+    _seed()
+    monkeypatch.setattr(engine.pricing, "home_prices", lambda type_ids, cfg=None, client=None: {})
+    monkeypatch.setattr(engine.pricing, "jita_prices", lambda type_ids, client=None, trading_cfg=None: JITA)
+
+    class _FakeESIClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        def get_adjusted_prices(self):
+            return {}
+
+    import eve_trader_local.esi_client as esi_client_module
+    monkeypatch.setattr(esi_client_module, "ESIClient", _FakeESIClient)
+
+    order_id = actions.do_create_special_order(
+        [{"type_id": T2_MODULE, "quantity": 100.0}])["order_id"]
+    plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+    assert plan["invention_list"]
+
+    view = SpecialOrdersView()
+    view._on_computed(plan)
+    assert view.invention_table.rowCount() == 1
+    assert view.invention_table.item(0, 0).text() == "Damage Control II"
+    assert view.invention_table.item(0, 1).text() == "Damage Control I Blueprint"
 
 
 def test_margins_market_view_opens_with_empty_db(qapp, db):
