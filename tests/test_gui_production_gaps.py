@@ -264,6 +264,47 @@ def test_special_orders_set_item_end_to_end(qapp, db):
 
 
 @pytest.mark.release
+def test_special_orders_remove_item_end_to_end(qapp, db):
+    from eve_trader_local import storage
+    from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
+    from eve_trader_local.production import actions as production_actions
+
+    storage.replace_sde_data(
+        types=[
+            (34, 18, "Tritanium", 0.01, 1, 100, 0, 1, 1),
+            (35, 18, "Pyerite", 0.01, 1, 100, 0, 1, 1),
+        ],
+        groups=[(18, 4, "Mineral")],
+        market_groups=[(100, None, "Manufacture & Research")],
+        blueprint_time=[], blueprint_materials=[], blueprint_products=[],
+        categories=[(4, "Material")],
+    )
+    view = SpecialOrdersView()
+    view.items_input.setText("Tritanium:10, Pyerite:5")
+    view._create_order()
+    _wait_for_threads(qapp, view)
+    order_id = production_actions.do_list_special_orders()[0].order_id
+    view.order_id_input.setText(order_id)
+    view.edit_item_input.setText("Pyerite")
+    view._remove_item()
+    _wait_for_threads(qapp, view)
+
+    assert "Tritanium x10" in view.status_label.text()
+    assert view.line_items_table.rowCount() == 1
+    assert view.line_items_table.item(0, 0).text() == "Tritanium"
+    stored = storage.list_special_order_items(order_id)
+    assert [(row[0], row[1], row[2]) for row in stored] == [(34, "Tritanium", 10.0)]
+    assert view.build_table_widget.rowCount() == 0
+
+    view.edit_item_input.setText("Pyerite")
+    view._remove_item()
+    _wait_for_threads(qapp, view)
+    assert "has no item" in view.status_label.text()
+    assert view.line_items_table.rowCount() == 1
+    assert [(row[0], row[2]) for row in storage.list_special_order_items(order_id)] == [(34, 10.0)]
+
+
+@pytest.mark.release
 def test_special_orders_combine_end_to_end(qapp, db):
     from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
     from eve_trader_local.production import actions as production_actions
