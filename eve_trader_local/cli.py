@@ -792,19 +792,33 @@ def cmd_list_special_order_events(args: argparse.Namespace) -> None:
 
 
 def cmd_set_special_order_item(args: argparse.Namespace) -> None:
-    result = production_actions.do_set_special_order_item(args.order_id, args.item, args.quantity)
+    if getattr(args, "recompute", False):
+        from eve_trader_local.production.preview_refresh import set_item_and_preview
+        result = set_item_and_preview(args.order_id, args.item, args.quantity)
+    else:
+        result = production_actions.do_set_special_order_item(args.order_id, args.item, args.quantity)
     order = result["order"]
     print(f"Special order {order.order_id} now has {order.item_count} item(s):")
     for item in result["items"]:
         print(f"  {item['type_name']:<40} {item['quantity']:>10,.0f}")
+    if "plan" in result:
+        print()
+        _print_special_order_plan(result["plan"])
 
 
 def cmd_remove_special_order_item(args: argparse.Namespace) -> None:
-    result = production_actions.do_remove_special_order_item(args.order_id, args.item)
+    if getattr(args, "recompute", False):
+        from eve_trader_local.production.preview_refresh import remove_item_and_preview
+        result = remove_item_and_preview(args.order_id, args.item)
+    else:
+        result = production_actions.do_remove_special_order_item(args.order_id, args.item)
     order = result["order"]
     print(f"Special order {order.order_id} now has {order.item_count} item(s):")
     for item in result["items"]:
         print(f"  {item['type_name']:<40} {item['quantity']:>10,.0f}")
+    if "plan" in result:
+        print()
+        _print_special_order_plan(result["plan"])
 
 
 def _print_special_order_plan(plan: dict) -> None:
@@ -1481,6 +1495,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_set_item.add_argument("order_id")
     p_set_item.add_argument("item", help="type_id or exact item name")
     p_set_item.add_argument("quantity", type=float)
+    p_set_item.add_argument(
+        "--recompute", action="store_true",
+        help="after a successful set, run compute-special-order (wrapper; Set itself stays preview-pure)",
+    )
     p_set_item.set_defaults(func=cmd_set_special_order_item)
 
     p_remove_item = sub.add_parser(
@@ -1489,6 +1507,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_remove_item.add_argument("order_id")
     p_remove_item.add_argument("item", help="type_id or exact item name")
+    p_remove_item.add_argument(
+        "--recompute", action="store_true",
+        help="after a successful remove, run compute-special-order (wrapper; Remove itself stays preview-pure)",
+    )
     p_remove_item.set_defaults(func=cmd_remove_special_order_item)
 
     p_compute_order = sub.add_parser(
