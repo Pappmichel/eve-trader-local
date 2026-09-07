@@ -363,6 +363,16 @@ def cmd_list_stock_targets(args: argparse.Namespace) -> None:
         print(f"  {type_name:<40} {quantity:>10,.0f} units   sells at {where}")
 
 
+def _print_invention_needs(plan: dict) -> None:
+    if not plan.get("invention_list"):
+        return
+    print("\nInvention Needs:")
+    for row in plan["invention_list"]:
+        print(f"  {row.type_name:<40} T1 {row.t1_blueprint_name:<32} "
+              f"decryptor {row.decryptor:<22} attempts {row.recommended_invention_runs:>6,}   "
+              f"BPCs owned {row.t2_bpc_owned:>6,}   stockpile {row.stockpile_pct:6.1f}%")
+
+
 def cmd_plan_production(args: argparse.Namespace) -> None:
     print("Planning production against configured stock targets (this can take a while)...")
     plan = production_actions.do_plan_production()
@@ -384,11 +394,7 @@ def cmd_plan_production(args: argparse.Namespace) -> None:
                   f"on hand {row.on_hand_pct:5.1f}%")
     if not plan["build_list"] and not plan["buy_list"]:
         print("\nEvery stock target is already fully covered.")
-    if plan["invention_list"]:
-        print("\nInvention Needs:")
-        for row in plan["invention_list"]:
-            print(f"  {row.type_name:<40} attempts {row.recommended_invention_runs:>6,}   "
-                  f"BPCs owned {row.t2_bpc_owned:>6,}   stockpile {row.stockpile_pct:6.1f}%")
+    _print_invention_needs(plan)
 
 
 def cmd_plan_asset_optimized(args: argparse.Namespace) -> None:
@@ -779,6 +785,7 @@ def cmd_compute_special_order(args: argparse.Namespace) -> None:
         print("\nStock overlap warning (shared with configured stock targets):")
         for row in plan["stock_overlap_warning"]:
             print(f"  {row.type_name:<40} {row.current_stock:>10,.0f} units on hand")
+    _print_invention_needs(plan)
 
 
 def cmd_parse_fitting(args: argparse.Namespace) -> None:
@@ -1391,7 +1398,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_update_order.set_defaults(func=cmd_update_special_order)
 
     p_compute_order = sub.add_parser(
-        "compute-special-order", help="run the buy/build planner for one special order's current line items"
+        "compute-special-order",
+        help="run the buy/build/invention-needs planner for one special order's current line items",
     )
     p_compute_order.add_argument("order_id")
     p_compute_order.set_defaults(func=cmd_compute_special_order)

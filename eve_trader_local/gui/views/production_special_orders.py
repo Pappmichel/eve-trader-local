@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
 from ...production import actions as production_actions
 from .. import icons
 from .base import BaseView
-from .production_common import build_table, fmt_isk, populate
+from .production_common import build_table, fmt_isk, fmt_pct, populate
 
 _ORDER_COLUMNS = ["Order ID", "Status", "Items", "Net Against Stock", "Note", "Created At"]
 _ORDER_WIDTHS = [220, 90, None, None, 200, 160]
@@ -42,6 +42,13 @@ _BUY_SORT = (3, Qt.SortOrder.DescendingOrder)
 _OVERLAP_COLUMNS = ["Item", "Current Stock"]
 _OVERLAP_WIDTHS = [220, None]
 
+# Same columns as the Planner Invention Needs tab - plan_special_order
+# returns the same InventionNeedRow shape, sorted by recommended runs desc.
+_INVENTION_COLUMNS = ["Item", "T1 Blueprint", "Decryptor", "Probability", "Attempts",
+                      "BPCs Owned", "Stockpile %"]
+_INVENTION_WIDTHS = [200, 200, 110, None, None, None, None]
+_INVENTION_SORT = (4, Qt.SortOrder.DescendingOrder)
+
 
 def _order_row(order) -> list:
     return [order.order_id, order.status, order.item_count,
@@ -63,6 +70,11 @@ def _buy_row(row) -> list:
 
 def _overlap_row(row) -> list:
     return [row.type_name, f"{row.current_stock:,.0f}"]
+
+
+def _invention_row(row) -> list:
+    return [row.type_name, row.t1_blueprint_name, row.decryptor, fmt_pct(row.probability),
+            row.recommended_invention_runs, row.t2_bpc_owned, f"{row.stockpile_pct:.1f}%"]
 
 
 class SpecialOrdersView(BaseView):
@@ -91,10 +103,12 @@ class SpecialOrdersView(BaseView):
         self.line_items_table = build_table(_LINE_ITEM_COLUMNS, column_widths=_LINE_ITEM_WIDTHS)
         self.build_table_widget = build_table(_BUILD_COLUMNS, column_widths=_BUILD_WIDTHS)
         self.buy_table = build_table(_BUY_COLUMNS, column_widths=_BUY_WIDTHS)
+        self.invention_table = build_table(_INVENTION_COLUMNS, column_widths=_INVENTION_WIDTHS)
         self.overlap_table = build_table(_OVERLAP_COLUMNS, column_widths=_OVERLAP_WIDTHS)
         self.tabs.addTab(self.line_items_table, "Line Items")
         self.tabs.addTab(self.build_table_widget, "Build List")
         self.tabs.addTab(self.buy_table, "Buy List")
+        self.tabs.addTab(self.invention_table, "Invention Needs")
         self.tabs.addTab(self.overlap_table, "Stock Overlap Warning")
         self.root_layout.addWidget(self.tabs)
 
@@ -249,6 +263,9 @@ class SpecialOrdersView(BaseView):
         populate(self.line_items_table, [_line_item_row(r) for r in plan["line_items"]])
         populate(self.build_table_widget, [_build_row(r) for r in plan["build_list"]], default_sort=_BUILD_SORT)
         populate(self.buy_table, [_buy_row(r) for r in plan["buy_list"]], default_sort=_BUY_SORT)
+        populate(self.invention_table, [_invention_row(r) for r in plan["invention_list"]],
+                 default_sort=_INVENTION_SORT)
         populate(self.overlap_table, [_overlap_row(r) for r in plan["stock_overlap_warning"]])
         self.show_info(f"Computed - {len(plan['build_list'])} build job(s), {len(plan['buy_list'])} "
-                       f"buy item(s), {len(plan['stock_overlap_warning'])} stock overlap warning(s).")
+                       f"buy item(s), {len(plan['invention_list'])} invention need(s), "
+                       f"{len(plan['stock_overlap_warning'])} stock overlap warning(s).")

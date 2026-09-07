@@ -120,10 +120,11 @@ class StockOverlapWarningRow:
 
 @dataclass
 class InventionNeedRow:
-    """One row of plan_production's invention-needs list: how many invention
-    runs to queue for a Tech II/III stock target's T1 blueprint (or Tech III
-    relic) so the resulting BPCs cover the manufacturing runs the Bauliste
-    needs - see engine.plan_production's invention_list."""
+    """One row of the computed invention-needs preview (not persisted): how
+    many invention runs to queue for a Tech II/III product's T1 blueprint
+    (or Tech III relic) so the resulting BPCs cover the manufacturing runs
+    a stock target or special order needs - see engine.plan_production /
+    plan_special_order invention_list."""
     type_id: int             # the manufactured (T2/T3) product's own type_id
     type_name: str
     t1_blueprint_type_id: int

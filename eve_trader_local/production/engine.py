@@ -454,6 +454,43 @@ def _material_mult_for(type_id: int, activity: str, bp: tuple[int, int, float],
     return material_mult, job_cost_rate, None
 
 
+def _invention_need_row(type_id: int, type_name: str, activity: str,
+                        bp: Optional[tuple[int, int, float]], missing: float,
+                        stockpile_quantity: float, cfg: ProductionConfig,
+                        home: dict, jita: dict, selected_decryptors: dict[int, str],
+                        t2_memo: dict[int, T2Mods]) -> Optional[InventionNeedRow]:
+    """One InventionNeedRow for a Tech II/III product, or None if it isn't
+    invention-sourced. Reuses `_tech_ii_mods`' chosen InventionResult
+    (decryptor override or cheapest-net-cost Best, including "None").
+    `missing` drives runs_needed; `stockpile_quantity` is the stockpile_pct
+    denominator (a stock target's configured qty, or a special order's
+    ordered qty - parent plan_special_order measures stockpile against the
+    order itself, not a standing backup target)."""
+    if activity != "Tech II" or bp is None:
+        return None
+    blueprint_id, activity_id, product_qty = bp
+    _, _, _, chosen = _tech_ii_mods(type_id, blueprint_id, activity_id, cfg, home, jita,
+                                    selected_decryptors, t2_memo)
+    if chosen is None or chosen.output_runs <= 0 or chosen.probability <= 0:
+        return None
+    t2_bpc_owned = int(storage.available_blueprint_copies(blueprint_id, None))
+    runs_needed = math.ceil(missing / product_qty) if missing > 0 else 0
+    runs_still_needed = max(0, runs_needed - t2_bpc_owned)
+    bpcs_needed = math.ceil(runs_still_needed / chosen.output_runs) if runs_still_needed > 0 else 0
+    recommended_runs = math.ceil(bpcs_needed / chosen.probability) if bpcs_needed > 0 else 0
+    target_stock_runs = math.ceil(stockpile_quantity / product_qty) if stockpile_quantity > 0 else 0
+    stockpile_pct = (max(0.0, t2_bpc_owned / target_stock_runs * 100)
+                     if target_stock_runs > 0 else 0.0)
+    return InventionNeedRow(
+        type_id=type_id, type_name=type_name,
+        t1_blueprint_type_id=chosen.t1_blueprint_type_id, t1_blueprint_name=chosen.t1_blueprint_name,
+        decryptor=chosen.decryptor, probability=chosen.probability, output_runs=chosen.output_runs,
+        runs_needed=runs_needed, bpcs_needed=bpcs_needed,
+        recommended_invention_runs=recommended_runs,
+        t2_bpc_owned=t2_bpc_owned, stockpile_pct=stockpile_pct,
+    )
+
+
 # ------------------------------------------------------------- build cost
 def _haul_volume(type_id: int, cfg: ProductionConfig) -> Optional[float]:
     """Volume to charge haul cost on (cfg.haul_cost_per_m3 x this) - the
@@ -1246,27 +1283,12 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
         # InventionResult (grade x decryptor already optimized there)
         # instead of re-resolving the recipe from scratch - see the parent's
         # own confirmed fix for why that duplicate computation matters.
-        if activity == "Tech II" and bp is not None:
-            blueprint_id, activity_id, product_qty = bp
-            _, _, _, chosen = _tech_ii_mods(type_id, blueprint_id, activity_id, cfg, home, jita,
-                                            selected_decryptors, t2_memo)
-            if chosen is not None and chosen.output_runs > 0 and chosen.probability > 0:
-                t2_bpc_owned = int(storage.available_blueprint_copies(blueprint_id, None))
-                runs_needed = math.ceil(missing / product_qty) if missing > 0 else 0
-                runs_still_needed = max(0, runs_needed - t2_bpc_owned)
-                bpcs_needed = math.ceil(runs_still_needed / chosen.output_runs) if runs_still_needed > 0 else 0
-                recommended_runs = math.ceil(bpcs_needed / chosen.probability) if bpcs_needed > 0 else 0
-                target_stock_runs = math.ceil(quantity / product_qty) if quantity > 0 else 0
-                stockpile_pct = (max(0.0, t2_bpc_owned / target_stock_runs * 100)
-                                 if target_stock_runs > 0 else 0.0)
-                invention_list.append(InventionNeedRow(
-                    type_id=type_id, type_name=type_name,
-                    t1_blueprint_type_id=chosen.t1_blueprint_type_id, t1_blueprint_name=chosen.t1_blueprint_name,
-                    decryptor=chosen.decryptor, probability=chosen.probability, output_runs=chosen.output_runs,
-                    runs_needed=runs_needed, bpcs_needed=bpcs_needed,
-                    recommended_invention_runs=recommended_runs,
-                    t2_bpc_owned=t2_bpc_owned, stockpile_pct=stockpile_pct,
-                ))
+        row = _invention_need_row(
+            type_id, type_name, activity, bp, missing, quantity,
+            cfg, home, jita, selected_decryptors, t2_memo,
+        )
+        if row is not None:
+            invention_list.append(row)
 
         if missing <= 0:
             continue
@@ -1553,11 +1575,14 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
       not a precise "did the regular plan actually consume it" check (that
       would need re-running plan_production itself).
 
-    Deliberately simpler than the parent's version, matching plan_production's
-    own already-documented simplifications: no invention-needs list for a
-    one-off order (there's no fixed steady-state target the way a stock
-    target's own quantity gives plan_production's list a stockpile_pct
-    denominator - see that function's own row in this module)."""
+    Invention needs are the same computed InventionNeedRow preview as
+    plan_production (not a persisted second invention workflow): one row per
+    Tech II/III line item that actually has an invention recipe, using
+    ``selected_decryptors`` / Best / "None" via ``_tech_ii_mods``. The
+    stockpile_pct denominator is this order's own ordered quantity, not a
+    standing stock target. Duplicate ``type_id``s in ``items`` are pooled
+    into one invention row (combined special-order preview) so the list
+    doesn't repeat the same product."""
     manual_stock = storage.load_manual_stock()
     manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
@@ -1595,18 +1620,36 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
 
     seed_missing: dict[int, float] = {}
     gross_demand: dict[int, float] = {}
+    # Pool Tech II/III demand by product so a combined order (or duplicate
+    # line items of the same type_id) yields one invention preview row.
+    invention_qty: dict[int, tuple[str, float]] = {}
 
-    for type_id, _type_name, quantity in items:
+    for type_id, type_name, quantity in items:
         # Always the full ordered quantity - see docstring's "never the line
         # items' own top-level quantity" note.
         missing = quantity
         if missing <= 0:
             continue
+        activity, bp = classify_activity(type_id)
+        if activity == "Tech II":
+            prev_name, prev_qty = invention_qty.get(type_id, (type_name, 0.0))
+            invention_qty[type_id] = (prev_name, prev_qty + quantity)
         _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
         # No margin gate here (see docstring) - every missing quantity feeds
         # the Buy/Build result regardless of cfg.min_margin.
         seed_missing[type_id] = missing
         gross_demand[type_id] = gross_demand.get(type_id, 0.0) + quantity
+
+    invention_list: list[InventionNeedRow] = []
+    for type_id, (type_name, quantity) in invention_qty.items():
+        activity, bp = classify_activity(type_id)
+        row = _invention_need_row(
+            type_id, type_name, activity, bp, quantity, quantity,
+            cfg, home, jita, selected_decryptors, t2_memo,
+        )
+        if row is not None:
+            invention_list.append(row)
+    invention_list.sort(key=lambda e: e.recommended_invention_runs, reverse=True)
 
     buy_totals, build_runs = _expand_all(seed_missing, cfg, home, jita, cost_memo, selected_decryptors,
                                          t2_memo, manual_stock, stock_used, base_runs, gross_demand,
@@ -1631,7 +1674,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
 
     return {
         "line_items": line_items, "buy_list": buy_list, "build_list": build_list,
-        "stock_overlap_warning": stock_overlap_warning,
+        "invention_list": invention_list, "stock_overlap_warning": stock_overlap_warning,
     }
 
 
