@@ -2803,6 +2803,17 @@ def upsert_special_order_item(order_id: str, type_id: int, type_name: str, quant
         )
 
 
+def delete_special_order_item(order_id: str, type_id: int, path: Optional[Path] = None) -> None:
+    """Deletes one line item. Callers must already have checked that the
+    order exists and that this type_id is on it — this is a thin DELETE,
+    not the ActionError boundary."""
+    with connect(path) as conn:
+        conn.execute(
+            "DELETE FROM special_order_items WHERE order_id = ? AND type_id = ?",
+            (order_id, type_id),
+        )
+
+
 def list_special_order_items(order_id: str, path: Optional[Path] = None) -> list[tuple[int, str, float]]:
     """(type_id, type_name, quantity), name-ordered."""
     with connect(path) as conn:
