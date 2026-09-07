@@ -315,7 +315,7 @@ def shopping_list_rows(doctrine_id: Optional[str] = None,
 
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists yet - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
 
     type_ids = [row.type_id for row in aggregated]
     # Bounded, price-agnostic universe to price up front - same reasoning as

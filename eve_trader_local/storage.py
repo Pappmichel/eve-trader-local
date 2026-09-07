@@ -514,15 +514,26 @@ CREATE TABLE IF NOT EXISTS manual_stock (
 -- decide - ported from the parent's manual_build_buy table (storage.
 -- upsert_manual_build_buy/load_manual_build_buy/delete_manual_build_buy)
 -- minus tenant_id. A genuinely separate table from selected_decryptors
--- (which this repo doesn't have either - see SYNC.md): that one picks WHICH
--- decryptor a Tech II/III item uses, this one skips the buy-vs-build cost
--- comparison entirely for a type_id. Consulted by engine.
--- _buy_or_build_decision via a manual_overrides dict built from
+-- below: that one picks WHICH decryptor a Tech II/III item uses, this one
+-- skips the buy-vs-build cost comparison entirely for a type_id. Consulted
+-- by engine._buy_or_build_decision via a manual_overrides dict built from
 -- load_manual_build_buy() - see plan_production/plan_asset_optimized/
 -- discover_build_candidates/discover_ship_margins.
 CREATE TABLE IF NOT EXISTS manual_build_buy (
     type_id  INTEGER PRIMARY KEY,
     decision TEXT NOT NULL CHECK (decision IN ('Build', 'Buy'))
+);
+
+-- Manual decryptor override for a Tech II/III *product* type_id (not the
+-- blueprint's own type_id) - ported from the parent's selected_decryptors
+-- table minus tenant_id. Consulted by engine._tech_ii_mods: a stored name
+-- pins invention.best_recipe_for_decryptor to that decryptor (grade/relic
+-- still auto-optimized); no row means best_recipe_and_decryptor (cheapest
+-- net cost). "None" is a real decryptor key (invent without a decryptor),
+-- distinct from deleting the row (back to automatic).
+CREATE TABLE IF NOT EXISTS selected_decryptors (
+    type_id   INTEGER PRIMARY KEY,
+    decryptor TEXT NOT NULL
 );
 
 -- Structure-name cache: location_id -> human name, resolved once via ESI
@@ -2484,6 +2495,43 @@ def list_manual_build_buy(path: Optional[Path] = None) -> list[tuple[int, str, s
         rows = conn.execute(
             "SELECT b.type_id, COALESCE(t.type_name, '?'), b.decision FROM manual_build_buy b "
             "LEFT JOIN sde_types t ON t.type_id = b.type_id ORDER BY COALESCE(t.type_name, '?')"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+# ------------------------------------------- selected decryptors
+def upsert_selected_decryptor(type_id: int, decryptor: str, path: Optional[Path] = None) -> None:
+    """Pins `type_id` (the invented *product*) to `decryptor`. See
+    selected_decryptors' own schema comment for product-vs-blueprint and
+    "None" vs delete."""
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO selected_decryptors (type_id, decryptor) VALUES (?,?) "
+            "ON CONFLICT(type_id) DO UPDATE SET decryptor=excluded.decryptor",
+            (type_id, decryptor),
+        )
+
+
+def load_selected_decryptors(path: Optional[Path] = None) -> dict[int, str]:
+    """{product_type_id: decryptor_name} - see engine._tech_ii_mods."""
+    with connect(path) as conn:
+        rows = conn.execute("SELECT type_id, decryptor FROM selected_decryptors").fetchall()
+    return {r[0]: r[1] for r in rows}
+
+
+def delete_selected_decryptor(type_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM selected_decryptors WHERE type_id = ?", (type_id,))
+
+
+def list_selected_decryptors(path: Optional[Path] = None) -> list[tuple[int, str, str]]:
+    """(type_id, type_name, decryptor) for every override - CLI/GUI listing.
+    type_name is joined from sde_types at read time (no type_name column on
+    the table itself, same as list_manual_build_buy)."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT d.type_id, COALESCE(t.type_name, '?'), d.decryptor FROM selected_decryptors d "
+            "LEFT JOIN sde_types t ON t.type_id = d.type_id ORDER BY COALESCE(t.type_name, '?')"
         ).fetchall()
     return [tuple(r) for r in rows]
 

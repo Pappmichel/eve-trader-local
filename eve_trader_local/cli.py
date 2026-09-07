@@ -23,6 +23,7 @@
     eve-trader-local estimate-invention <product> [--decryptor]
     eve-trader-local resolve-structure-name <location_id> [--force]
     eve-trader-local set-manual-build-buy <item> <Build|Buy> / clear-manual-build-buy <item> / list-manual-build-buy
+    eve-trader-local set-selected-decryptor <item> <decryptor> / clear-selected-decryptor <item> / list-selected-decryptors
     eve-trader-local list-current-jobs / character-slots
     eve-trader-local list-owned-blueprints
     eve-trader-local set-bpc-cost <item> <purchase_cost> <runs> / list-bpc-costs / remove-bpc-cost <item>
@@ -81,7 +82,7 @@ from .portfolio import portfolio_overview
 from .production import actions as production_actions
 from .production import config as production_config
 from .production import esi_sync
-from .production.constants import JOB_CATEGORIES
+from .production.constants import DECRYPTORS, JOB_CATEGORIES
 from .station_trading import actions as station_trading_actions
 from .station_trading import config as station_trading_config
 from .station_trading import esi_sync as station_trading_esi_sync
@@ -518,6 +519,25 @@ def cmd_list_manual_build_buy(args: argparse.Namespace) -> None:
         return
     for type_id, type_name, decision in rows:
         print(f"  {type_name:<40} always {decision}")
+
+
+def cmd_set_selected_decryptor(args: argparse.Namespace) -> None:
+    result = production_actions.do_set_selected_decryptor(args.item, args.decryptor)
+    print(f"Invention of {result['type_name']} will use decryptor {result['decryptor']}.")
+
+
+def cmd_clear_selected_decryptor(args: argparse.Namespace) -> None:
+    result = production_actions.do_clear_selected_decryptor(args.item)
+    print(f"Decryptor override for {result['type_name']} cleared (auto / Best).")
+
+
+def cmd_list_selected_decryptors(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_selected_decryptors()["rows"]
+    if not rows:
+        print("No decryptor overrides (invention uses Best).")
+        return
+    for type_id, type_name, decryptor in rows:
+        print(f"  {type_name:<40} {decryptor}")
 
 
 def cmd_update_stock_target(args: argparse.Namespace) -> None:
@@ -1227,6 +1247,29 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "list-manual-build-buy", help="list every configured manual Build/Buy override"
     ).set_defaults(func=cmd_list_manual_build_buy)
+
+    p_set_dec = sub.add_parser(
+        "set-selected-decryptor",
+        help="force invention of an item to use a named decryptor instead of Best",
+    )
+    p_set_dec.add_argument("item", help="product type_id or exact item name")
+    p_set_dec.add_argument(
+        "decryptor",
+        choices=tuple(DECRYPTORS),
+        help="decryptor name, including 'None' for inventing without one",
+    )
+    p_set_dec.set_defaults(func=cmd_set_selected_decryptor)
+
+    p_clear_dec = sub.add_parser(
+        "clear-selected-decryptor",
+        help="remove a decryptor override so invention picks the cheapest option",
+    )
+    p_clear_dec.add_argument("item", help="product type_id or exact item name")
+    p_clear_dec.set_defaults(func=cmd_clear_selected_decryptor)
+
+    sub.add_parser(
+        "list-selected-decryptors", help="list products with a forced invention decryptor"
+    ).set_defaults(func=cmd_list_selected_decryptors)
 
     sub.add_parser(
         "list-current-jobs", help="every active/paused/ready character + corp industry job"

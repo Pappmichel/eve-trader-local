@@ -831,7 +831,7 @@ def _scan_build_candidates(cfg: ProductionConfig, client: Optional["GoonmetricsC
     parent's own function."""
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists yet - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
 
     existing_target_ids = {t[0] for t in storage.load_stock_targets()}
     sde_rows = storage.load_sde_types_with_market_group()
@@ -1200,7 +1200,7 @@ def plan_production(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
 
     priced_type_ids = list(structural_material_closure(t[0] for t in stock_targets))
     home = pricing.home_prices(priced_type_ids, cfg)
@@ -1368,7 +1368,7 @@ def plan_asset_optimized(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
     manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
 
     priced_type_ids = list(structural_material_closure(t[0] for t in stock_targets))
     home = pricing.home_prices(priced_type_ids, cfg)
@@ -1562,7 +1562,7 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     manual_overrides = storage.load_manual_build_buy()
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
     line_items: list[SpecialOrderLineItem] = [
         SpecialOrderLineItem(type_id=type_id, type_name=type_name, quantity=quantity)
         for type_id, type_name, quantity in items
@@ -1765,7 +1765,7 @@ def _scan_ship_margins(cfg: ProductionConfig) -> list[dict]:
     at all."""
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
     excluded_market_groups = _descendant_market_group_ids(SPECIAL_EDITION_SHIPS_MARKET_GROUP_ID)
 
     ships = [(type_id, type_name, meta_level)
@@ -1817,7 +1817,7 @@ def item_margin_detail(type_id: int, type_name: str, cfg: ProductionConfig = PRO
     catalog scan."""
     cost_memo: dict[int, Optional[float]] = {}
     t2_memo: dict[int, T2Mods] = {}
-    selected_decryptors: dict[int, str] = {}
+    selected_decryptors = storage.load_selected_decryptors()
 
     priced_type_ids = list(structural_material_closure([type_id]))
     home = pricing.home_prices(priced_type_ids, cfg)
