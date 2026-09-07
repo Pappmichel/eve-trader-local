@@ -34,6 +34,7 @@ def test_production_planner_view_opens_with_empty_db(qapp, db):
     view = ProductionPlannerView()
     assert view.stock_target_table.rowCount() == 0
     assert view.manual_stock_table.rowCount() == 0
+    assert view.decryptor_override_table.rowCount() == 0
     assert view.inventory_table.rowCount() == 0
     assert view.build_table_widget.rowCount() == 0
     assert view.buy_table.rowCount() == 0

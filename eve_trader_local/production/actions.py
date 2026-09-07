@@ -270,7 +270,7 @@ def do_build_material_tree(type_id_or_name: str, quantity: float = 1.0,
     type_ids = list(engine.structural_material_closure([type_id]))
     home = pricing.home_prices(type_ids, cfg)
     jita = pricing.jita_prices(type_ids)
-    selected_decryptors: dict[int, str] = {}  # no manual-decryptor table exists here - see SYNC.md
+    selected_decryptors = storage.load_selected_decryptors()
     t2_memo: dict = {}
     return engine.build_material_tree(type_id, quantity, cfg, home, jita, selected_decryptors, t2_memo)
 
@@ -548,6 +548,37 @@ def do_clear_manual_build_buy(type_id_or_name: str) -> dict:
 
 def do_list_manual_build_buy() -> dict:
     return {"rows": storage.list_manual_build_buy()}
+
+
+# ---------------------------------------------------------- selected decryptors
+def do_set_selected_decryptor(type_id_or_name: str, decryptor: str) -> dict:
+    """Pins invention of `type_id_or_name` (the *product*, not its blueprint)
+    to `decryptor` instead of cheapest-net-cost (Best). `decryptor` must be
+    a key of DECRYPTORS, including "None" (invent without a decryptor) -
+    that is distinct from clearing the row, which returns to automatic.
+    Invalidates the build-candidate cache because T2 unit cost/margin
+    change. Local has no separate ship-margin TTL cache (discover_ship_
+    margins re-reads storage every call), unlike the parent."""
+    if decryptor not in DECRYPTORS:
+        raise ActionError(
+            f"Unknown decryptor '{decryptor}'. Options: {', '.join(DECRYPTORS)}"
+        )
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.upsert_selected_decryptor(type_id, decryptor)
+    engine.invalidate_discover_cache()
+    return {"type_id": type_id, "type_name": type_name, "decryptor": decryptor}
+
+
+def do_clear_selected_decryptor(type_id_or_name: str) -> dict:
+    """Removes the decryptor override so invention picks Best again."""
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.delete_selected_decryptor(type_id)
+    engine.invalidate_discover_cache()
+    return {"type_id": type_id, "type_name": type_name, "decryptor": "Best"}
+
+
+def do_list_selected_decryptors() -> dict:
+    return {"rows": storage.list_selected_decryptors()}
 
 
 # --------------------------------------------------------------- industry jobs
