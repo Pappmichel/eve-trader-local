@@ -51,7 +51,10 @@ in-place stock-target editor, an owned-blueprint browser (every BPO/BPC,
 aggregated by ME/TE/runs), and a current-industry-jobs list with a
 per-character job-slot usage summary (usage counts from synced jobs, plus
 optional manual totals/free via `set-character-job-slots` — still no ESI
-character-skills pull; see `PHASE_E_EXPANSION.md` E.5).
+character-skills pull; see `PHASE_E_EXPANSION.md` E.5). The Special-Order
+core is semantically frozen (SF-1..SF-8 in `PRODUCTION_SEMANTICS.md`) and
+certified as package `0.4.0rc1` (`PHASE_H_RELEASE.md`, `RELEASE_NOTES.md`,
+`KNOWN_LIMITATIONS.md`).
 
 The **Doctrine** tool (fitted-ship contract/stockpile tracking against EFT
 fittings) is fully ported and runnable from the CLI too: paste-and-store EFT
