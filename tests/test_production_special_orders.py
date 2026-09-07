@@ -186,12 +186,13 @@ def test_compute_special_order_from_scratch(order_sde):
 
 
 def test_net_against_stock_changes_the_result(order_sde):
-    """Same order, same synced stock: net_against_stock=False ignores it
-    entirely (plans from scratch), net_against_stock=True nets it off -
-    confirms the flag actually changes plan_special_order's output, not just
-    its bookkeeping."""
+    """Same order, same synced *component* stock: net_against_stock=False
+    ignores it entirely (plans from scratch), net_against_stock=True nets
+    material demand off - confirms the flag actually changes
+    plan_special_order's output, not just its bookkeeping. Top-level
+    quantity is never netted (see the two tests below)."""
     storage.replace_assets("character_assets", [
-        (1, FINISHED_A, 60003760, "Hangar", 6, 0, "Test Character"),
+        (1, COMPONENT, 60003760, "Hangar", 6, 0, "Test Character"),
     ])
 
     order_id_scratch = actions.do_create_special_order(
@@ -199,15 +200,46 @@ def test_net_against_stock_changes_the_result(order_sde):
     order_id_netted = actions.do_create_special_order(
         [{"type_id": FINISHED_A, "quantity": 10.0}], net_against_stock=True)["order_id"]
 
-    plan_scratch = actions.do_compute_special_order(order_id_scratch)
-    plan_netted = actions.do_compute_special_order(order_id_netted)
+    plan_scratch = actions.do_compute_special_order(order_id_scratch, cfg=_cfg())
+    plan_netted = actions.do_compute_special_order(order_id_netted, cfg=_cfg())
 
     scratch_runs = {row.type_id: row.job_runs for row in plan_scratch["build_list"]}
     netted_runs = {row.type_id: row.job_runs for row in plan_netted["build_list"]}
 
-    assert scratch_runs[FINISHED_A] == 10  # ignores the 6 units on hand
-    assert netted_runs[FINISHED_A] == 4    # 10 - 6 on hand = 4 still needed
+    assert scratch_runs[FINISHED_A] == netted_runs[FINISHED_A] == 10
+    assert scratch_runs[COMPONENT] == 18
+    assert netted_runs[COMPONENT] == 12  # 18 needed - 6 on hand
     assert scratch_runs != netted_runs
+
+
+def test_net_against_stock_does_not_net_top_level_quantity(order_sde):
+    """Bestellung 10 + Bestand 6 => weiterhin 10 Runs of the ordered item.
+    Finished hangar stock is never claimed by the order."""
+    storage.replace_assets("character_assets", [
+        (1, FINISHED_A, 60003760, "Hangar", 6, 0, "Test Character"),
+    ])
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], net_against_stock=True)["order_id"]
+
+    plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+    build_by_type = {row.type_id: row for row in plan["build_list"]}
+    assert build_by_type[FINISHED_A].job_runs == 10
+
+
+def test_net_against_stock_still_nets_component_materials(order_sde):
+    """net_against_stock=True still nets materials/components below the seed
+    level against hangar stock - only the ordered top-level quantity is
+    exempt."""
+    storage.replace_assets("character_assets", [
+        (1, COMPONENT, 60003760, "Hangar", 6, 0, "Test Character"),
+    ])
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}], net_against_stock=True)["order_id"]
+
+    plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+    build_by_type = {row.type_id: row for row in plan["build_list"]}
+    assert build_by_type[FINISHED_A].job_runs == 10
+    assert build_by_type[COMPONENT].job_runs == 12
 
 
 def test_net_against_stock_flags_overlap_with_configured_stock_targets(order_sde):

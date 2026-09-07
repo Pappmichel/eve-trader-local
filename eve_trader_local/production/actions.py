@@ -18,7 +18,7 @@ from ..esi_client import ESIClient, ESIError
 from . import engine, esi_sync, invention, jobs, pricing
 from .config import PRODUCTION_CONFIG, ProductionConfig, save_config_overrides
 from .constants import DECRYPTORS, JOB_CATEGORIES
-from .models import AssetLocationRow, BuildCandidate, ShipMarginRow, SpecialOrder
+from .models import AssetLocationRow, BuildCandidate, ManualBlueprintCopyCostRow, ShipMarginRow, SpecialOrder
 
 SYNC_SCOPE = "production"
 
@@ -573,6 +573,59 @@ def do_list_owned_blueprints() -> dict:
     list_owned_blueprints. A BPO is identified by runs == -1 (ESI's
     convention for "original")."""
     return {"rows": engine.list_owned_blueprints()}
+
+
+# ------------------------------------------- manual blueprint-copy costs
+def do_list_manual_blueprint_copy_costs() -> dict:
+    """The Owned Blueprints page's second table: purchase cost + included
+    run count for blueprint copies that must be bought outright (never
+    owned as a BPO, not inventable)."""
+    rows = [
+        ManualBlueprintCopyCostRow(
+            type_id=type_id, type_name=type_name, purchase_cost=purchase_cost, runs=runs,
+            cost_per_run=purchase_cost / runs,
+        )
+        for type_id, type_name, purchase_cost, runs in storage.load_manual_blueprint_copy_costs()
+    ]
+    return {"rows": rows}
+
+
+def do_add_manual_blueprint_copy_cost(type_id_or_name: str, purchase_cost: float, runs: int) -> dict:
+    """Resolves `type_id_or_name` (name or numeric type_id, same lookup
+    do_add_stock_target uses) and registers/updates its manual BPC cost.
+    `type_id_or_name` is the *product* built from the copy, not the
+    blueprint's own name. Upsert: a second add for the same product
+    overwrites the stored purchase_cost/runs."""
+    if purchase_cost <= 0:
+        raise ActionError("Purchase cost must be a positive number.")
+    if runs <= 0:
+        raise ActionError("Runs must be a positive integer.")
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.upsert_manual_blueprint_copy_cost(type_id, type_name, purchase_cost, runs)
+    engine.invalidate_discover_cache()  # build cost feeds directly into build-vs-buy decisions
+    return {"type_id": type_id, "type_name": type_name, "purchase_cost": purchase_cost, "runs": runs}
+
+
+def do_update_manual_blueprint_copy_cost(type_id_or_name: str, purchase_cost: float, runs: int) -> dict:
+    """Edits purchase_cost/runs for an already-registered row. Unlike
+    do_add_*, this requires the row to already exist - raises ActionError
+    otherwise, rather than silently creating one."""
+    if purchase_cost <= 0:
+        raise ActionError("Purchase cost must be a positive number.")
+    if runs <= 0:
+        raise ActionError("Runs must be a positive integer.")
+    type_id, type_name = _resolve_type(type_id_or_name)
+    if not storage.update_manual_blueprint_copy_cost(type_id, purchase_cost, runs):
+        raise ActionError(f"No registered blueprint copy cost found for '{type_name}'.")
+    engine.invalidate_discover_cache()
+    return {"type_id": type_id, "type_name": type_name, "purchase_cost": purchase_cost, "runs": runs}
+
+
+def do_remove_manual_blueprint_copy_cost(type_id_or_name: str) -> dict:
+    type_id, type_name = _resolve_type(type_id_or_name)
+    storage.delete_manual_blueprint_copy_cost(type_id)
+    engine.invalidate_discover_cache()
+    return {"removed": type_id, "type_name": type_name}
 
 
 # ------------------------------------------------------------- Special Orders

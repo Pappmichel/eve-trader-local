@@ -87,7 +87,44 @@ def test_owned_blueprints_view_opens_with_empty_db(qapp, db):
 
     view = OwnedBlueprintsView()
     assert view.table.rowCount() == 0
+    assert view.bpc_cost_table.rowCount() == 0
     assert "No owned blueprints" in view.status_label.text()
+
+
+def test_owned_blueprints_add_remove_bpc_cost_end_to_end(qapp, db):
+    """Exercises the run_action -> success -> table path for Add/Remove Cost
+    on OwnedBlueprintsView, same style as the Planner stock-target e2e."""
+    from eve_trader_local import storage
+    from eve_trader_local.gui.views.production_owned_blueprints import OwnedBlueprintsView
+
+    storage.replace_sde_data(
+        types=[(34, 18, "Tritanium", 0.01, 1, 100, 0, 1, 1)],
+        groups=[(18, 4, "Mineral")],
+        market_groups=[(100, None, "Manufacture & Research")],
+        blueprint_time=[], blueprint_materials=[], blueprint_products=[],
+        categories=[(4, "Material")],
+    )
+
+    view = OwnedBlueprintsView()
+    assert view.bpc_cost_table.rowCount() == 0
+
+    view.bpc_item_input.setText("Tritanium")
+    view.bpc_cost_input.setText("1000000")
+    view.bpc_runs_input.setText("10")
+    view._add_bpc_cost()
+    _wait_for_threads(qapp, view)
+
+    assert "Blueprint copy cost set" in view.status_label.text()
+    assert view.bpc_cost_table.rowCount() == 1
+    rows = storage.load_manual_blueprint_copy_costs()
+    assert rows == [(34, "Tritanium", 1_000_000.0, 10)]
+
+    view._remove_bpc_cost()
+    _wait_for_threads(qapp, view)
+
+    assert "Removed blueprint copy cost" in view.status_label.text()
+    assert view.bpc_cost_table.rowCount() == 0
+    assert storage.load_manual_blueprint_copy_costs() == []
 
 
 def test_jobs_slots_view_opens_with_empty_db(qapp, db):

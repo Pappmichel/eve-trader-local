@@ -25,6 +25,7 @@
     eve-trader-local set-manual-build-buy <item> <Build|Buy> / clear-manual-build-buy <item> / list-manual-build-buy
     eve-trader-local list-current-jobs / character-slots
     eve-trader-local list-owned-blueprints
+    eve-trader-local set-bpc-cost <item> <purchase_cost> <runs> / list-bpc-costs / remove-bpc-cost <item>
     eve-trader-local invention-logistics / t1-bpc-invention-needs
     eve-trader-local logistics-status / distribution-recommendations
     eve-trader-local set-category-location <category> <location_id> / clear-category-location <category>
@@ -554,6 +555,30 @@ def cmd_list_owned_blueprints(args: argparse.Namespace) -> None:
     for row in rows:
         kind = "BPO" if row.is_original else f"BPC ({row.runs} runs left)"
         print(f"  {row.type_name:<40} x{row.quantity:<4} {kind:<20} ME{row.material_efficiency} TE{row.time_efficiency}")
+
+
+def cmd_set_bpc_cost(args: argparse.Namespace) -> None:
+    result = production_actions.do_add_manual_blueprint_copy_cost(
+        args.item, args.purchase_cost, args.runs)
+    per_run = result["purchase_cost"] / result["runs"]
+    print(f"Blueprint copy cost set: {result['type_name']} -> "
+          f"{result['purchase_cost']:,.0f} ISK for {result['runs']} runs "
+          f"({per_run:,.0f} ISK/run).")
+
+
+def cmd_list_bpc_costs(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_manual_blueprint_copy_costs()["rows"]
+    if not rows:
+        print("No blueprint copy costs registered.")
+        return
+    for row in rows:
+        print(f"  {row.type_name:<40} {row.purchase_cost:>14,.0f} ISK / {row.runs:>4} runs  "
+              f"({row.cost_per_run:,.0f} ISK/run)")
+
+
+def cmd_remove_bpc_cost(args: argparse.Namespace) -> None:
+    result = production_actions.do_remove_manual_blueprint_copy_cost(args.item)
+    print(f"Removed blueprint copy cost for {result['type_name']}.")
 
 
 def cmd_invention_logistics(args: argparse.Namespace) -> None:
@@ -1216,6 +1241,23 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "list-owned-blueprints", help="every owned BPO/BPC (character + corp), aggregated by ME/TE/runs"
     ).set_defaults(func=cmd_list_owned_blueprints)
+
+    p_set_bpc = sub.add_parser(
+        "set-bpc-cost",
+        help="register purchase cost + included runs for a blueprint copy that must be bought",
+    )
+    p_set_bpc.add_argument("item", help="type_id or exact item name (the product, not the blueprint)")
+    p_set_bpc.add_argument("purchase_cost", type=float, help="ISK paid for the copy")
+    p_set_bpc.add_argument("runs", type=int, help="runs included on that copy")
+    p_set_bpc.set_defaults(func=cmd_set_bpc_cost)
+
+    sub.add_parser(
+        "list-bpc-costs", help="list every registered blueprint-copy purchase cost"
+    ).set_defaults(func=cmd_list_bpc_costs)
+
+    p_remove_bpc = sub.add_parser("remove-bpc-cost", help="remove a registered blueprint-copy purchase cost")
+    p_remove_bpc.add_argument("item", help="type_id or exact item name")
+    p_remove_bpc.set_defaults(func=cmd_remove_bpc_cost)
 
     sub.add_parser(
         "invention-logistics",

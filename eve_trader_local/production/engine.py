@@ -66,8 +66,9 @@ isolation. Deliberately simpler than the parent's version in two ways
 sync is the only stock source), and stock targets carry one target quantity
 plus a home-vs-Jita sell flag, not the parent's three-way backup/home-
 market/Jita-market split with its own live sell-order-listing nets.
-Still not ported: the logistics/distribution helpers and the bought-
-blueprint-copy cost term `_unit_cost` folds in from a manual BPC cost table.
+The bought-blueprint-copy cost term `_unit_cost`/`unit_cost_detail` fold in
+comes from `storage.manual_blueprint_copy_costs` (GitHub issue #40): a
+manually registered purchase cost amortized over the copy's included runs.
 
 `discover_build_candidates` (below) needs none of the stock-target
 machinery above, only the cost/margin core this module already has - it now
@@ -511,7 +512,13 @@ def _unit_cost(type_id: int, cfg: ProductionConfig, home: dict, jita: dict,
         memo[type_id] = buy
         return buy
 
-    build_cost = (material_cost + eiv * job_cost_rate) / product_qty
+    # GitHub issue #40: some items can only be built from a blueprint *copy*
+    # that must be bought outright (never owned as a BPO, not inventable) -
+    # its purchase cost, amortized over however many runs it came with, is a
+    # real per-run cost of building this item, on top of materials/job fee.
+    bpc_cost_per_run = storage.get_manual_blueprint_copy_cost_per_run(type_id)
+    bpc_cost_per_unit = (bpc_cost_per_run / product_qty) if bpc_cost_per_run is not None else 0.0
+    build_cost = (material_cost + eiv * job_cost_rate) / product_qty + bpc_cost_per_unit
     best = build_cost if buy is None else min(buy, build_cost)
     memo[type_id] = best
     return best
@@ -564,7 +571,10 @@ def unit_cost_detail(type_id: int, cfg: ProductionConfig, home: dict, jita: dict
         cost_indices, adjusted_prices, depth=1)
     if material_cost is None:
         return buy, None, buy
-    build_cost = (material_cost + eiv * job_cost_rate) / product_qty
+    # GitHub issue #40 - see _unit_cost's own comment on this same line.
+    bpc_cost_per_run = storage.get_manual_blueprint_copy_cost_per_run(type_id)
+    bpc_cost_per_unit = (bpc_cost_per_run / product_qty) if bpc_cost_per_run is not None else 0.0
+    build_cost = (material_cost + eiv * job_cost_rate) / product_qty + bpc_cost_per_unit
     best = build_cost if buy is None else min(buy, build_cost)
     return best, build_cost, buy
 
@@ -1527,17 +1537,21 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
       BuildJobEntry, just never used to drop an item from the result.
     - `net_against_stock` (per order, not per line item) picks between two
       whole-order modes: False (default) plans "from scratch", entirely
-      ignoring current stock (_expand_all's ignore_current_stock=True, plus
-      no top-level stock netting on the line items themselves either); True
-      nets against real ESI-synced stock the same way plan_production does.
-      True also triggers a stock_overlap_warning: every item that's both
-      reachable from this order's own material tree AND from the configured
-      stock_targets' own tree AND currently has stock on hand right now - a
-      heads-up that the same physical stock might get "claimed" by both this
-      order and a separately-computed regular Bauliste, which don't
-      otherwise know about each other. This is a structural/currently-in-
-      stock signal, not a precise "did the regular plan actually consume it"
-      check (that would need re-running plan_production itself).
+      ignoring current stock (_expand_all's ignore_current_stock=True);
+      True nets *component/material* demand against real ESI-synced stock
+      the same way plan_production does - but never the line items' own
+      top-level quantity itself (the customer ordered N units, so N units
+      get built/bought fresh regardless of how many finished units happen
+      to already be sitting in the hangar; those existing units aren't
+      reserved/claimed by this order at all). True also triggers a
+      stock_overlap_warning: every item that's both reachable from this
+      order's own material tree AND from the configured stock_targets' own
+      tree AND currently has stock on hand right now - a heads-up that the
+      same physical stock might get "claimed" by both this order and a
+      separately-computed regular Bauliste, which don't otherwise know
+      about each other. This is a structural/currently-in-stock signal,
+      not a precise "did the regular plan actually consume it" check (that
+      would need re-running plan_production itself).
 
     Deliberately simpler than the parent's version, matching plan_production's
     own already-documented simplifications: no invention-needs list for a
@@ -1568,11 +1582,12 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     }
     adjusted_prices = pricing.cached_adjusted_prices()
 
-    # Same pooling ledger _expand_all itself uses (see its own docstring) -
-    # seeded here for the order's own top-level items the same way
-    # plan_production seeds it for top-level stock targets, so a line item
-    # that's *also* a shared material downstream doesn't get the same
-    # physical stock counted against both.
+    # Nothing seeded here for the order's own top-level items (unlike
+    # plan_production's equivalent ledger) - their own current stock is
+    # deliberately never consulted at all (see docstring above), so there's
+    # no risk of double-claiming it against a downstream material's own
+    # netting. _expand_all still threads this through/mutates it normally
+    # for materials *below* the seed level.
     stock_used: dict[int, float] = {}
     synthetic_stock_targets = [(type_id, type_name, quantity, False) for type_id, type_name, quantity in items]
     base_runs = _base_runs(cfg, home, jita, cost_memo, selected_decryptors, t2_memo,
@@ -1582,13 +1597,9 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     gross_demand: dict[int, float] = {}
 
     for type_id, _type_name, quantity in items:
-        _activity, bp = classify_activity(type_id)
-        if net_against_stock:
-            current_stock = _current_stock(type_id, manual_stock, bp)
-            missing = max(0.0, quantity - current_stock)
-            stock_used[type_id] = stock_used.get(type_id, 0.0) + min(current_stock, quantity)
-        else:
-            missing = quantity
+        # Always the full ordered quantity - see docstring's "never the line
+        # items' own top-level quantity" note.
+        missing = quantity
         if missing <= 0:
             continue
         _unit_cost(type_id, cfg, home, jita, cost_memo, selected_decryptors, t2_memo, cost_indices, adjusted_prices)
