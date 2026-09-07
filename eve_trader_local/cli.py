@@ -738,7 +738,7 @@ def cmd_create_special_order(args: argparse.Namespace) -> None:
             quantity = float(qty_str)
         except ValueError:
             raise ActionError(f"Invalid quantity in '{spec}'")
-        items.append({"type_id": _resolve_type_for_cli(name_or_id), "quantity": quantity})
+        items.append({"type_id_or_name": name_or_id.strip(), "quantity": quantity})
     result = production_actions.do_create_special_order(
         items, note=args.note, net_against_stock=args.net_against_stock)
     print(f"Created special order {result['order_id']} with {len(items)} item(s).")

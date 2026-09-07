@@ -672,29 +672,43 @@ def _special_order_to_model(row: tuple, item_count: int) -> SpecialOrder:
                         status=status, created_at=created_at, item_count=item_count)
 
 
-def do_create_special_order(items: list[dict], note: str | None = None,
-                            net_against_stock: bool = False) -> dict:
-    """`items`: [{"type_id": int, "quantity": float}, ...] - at least one,
-    each validated the same way do_add_stock_target validates an existing
-    type_id (storage.get_sde_type(type_id) is not None). Raises on the first
-    invalid item rather than silently skipping it. Duplicate type_ids are
-    summed (one row per type, matching the items PK). Header and items are
-    written in one transaction."""
-    if not items:
-        raise ActionError("A special order needs at least one item.")
-    pooled: dict[int, list] = {}
-    for item in items:
+def _special_order_create_item(item: dict) -> tuple[int, str, float]:
+    """Resolve one create payload row. `type_id` (existing callers) or
+    `type_id_or_name` / `name` (Phase E.3). Quantity must be positive."""
+    if "quantity" not in item:
+        raise ActionError("Each special-order item needs a quantity.")
+    quantity = item["quantity"]
+    if item.get("type_id") is not None:
         type_id = item["type_id"]
-        quantity = item["quantity"]
         if quantity <= 0:
             raise ActionError(f"Quantity for type_id {type_id} must be positive.")
         sde_type = storage.get_sde_type(type_id)
         if sde_type is None:
             raise ActionError(f"Unknown type_id {type_id} - refresh SDE first?")
+        return type_id, sde_type[2], quantity
+    name = item.get("type_id_or_name") or item.get("name")
+    if not name:
+        raise ActionError("Each special-order item needs type_id or type_id_or_name.")
+    if quantity <= 0:
+        raise ActionError(f"Quantity for '{name}' must be positive.")
+    type_id, type_name = _resolve_type(str(name))
+    return type_id, type_name, quantity
+
+
+def do_create_special_order(items: list[dict], note: str | None = None,
+                            net_against_stock: bool = False) -> dict:
+    """`items`: at least one dict with `quantity` and either `type_id` or
+    `type_id_or_name` / `name`. Duplicate type_ids are summed. Header and
+    items are written in one transaction."""
+    if not items:
+        raise ActionError("A special order needs at least one item.")
+    pooled: dict[int, list] = {}
+    for item in items:
+        type_id, type_name, quantity = _special_order_create_item(item)
         if type_id in pooled:
             pooled[type_id][1] += quantity
         else:
-            pooled[type_id] = [sde_type[2], quantity]
+            pooled[type_id] = [type_name, quantity]
     resolved = [(type_id, type_name, quantity) for type_id, (type_name, quantity) in pooled.items()]
     order_id = storage.create_special_order_with_items(note, net_against_stock, resolved)
     return {"order_id": order_id}

@@ -16,7 +16,7 @@ from __future__ import annotations
 import functools
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QGroupBox, QHBoxLayout, QLabel,
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QTableWidget, QTabWidget, QVBoxLayout)
 
 from ...errors import ActionError
@@ -97,6 +97,13 @@ class SpecialOrdersView(BaseView):
         refresh_btn = QPushButton(icons.icon("refresh"), "Refresh List")
         refresh_btn.clicked.connect(self._load_orders)
         toolbar.addWidget(refresh_btn)
+        toolbar.addWidget(QLabel("Status:"))
+        self.status_filter = QComboBox()
+        self.status_filter.addItem("All", None)
+        self.status_filter.addItem("Open", "open")
+        self.status_filter.addItem("Done", "done")
+        self.status_filter.currentIndexChanged.connect(self._load_orders)
+        toolbar.addWidget(self.status_filter)
         toolbar.addStretch(1)
         self.root_layout.addLayout(toolbar)
 
@@ -169,6 +176,20 @@ class SpecialOrdersView(BaseView):
         row.addStretch(1)
         outer.addLayout(row)
 
+        meta = QHBoxLayout()
+        meta.addWidget(QLabel("Note:"))
+        self.selected_note_input = QLineEdit()
+        self.selected_note_input.setPlaceholderText("optional note")
+        meta.addWidget(self.selected_note_input)
+        save_note_btn = QPushButton(icons.icon("save"), "Save Note")
+        save_note_btn.clicked.connect(self._save_note)
+        meta.addWidget(save_note_btn)
+        self.selected_net_checkbox = QCheckBox("Net against stock")
+        self.selected_net_checkbox.clicked.connect(self._save_net_against_stock)
+        meta.addWidget(self.selected_net_checkbox)
+        meta.addStretch(1)
+        outer.addLayout(meta)
+
         edit = QHBoxLayout()
         edit.addWidget(QLabel("Item:"))
         self.edit_item_input = QLineEdit()
@@ -219,6 +240,15 @@ class SpecialOrdersView(BaseView):
         self.order_id_input.setText(ids[0])
         self.combine_ids_input.setText(", ".join(ids))
         self._load_line_items(ids[0])
+        try:
+            detail = production_actions.do_get_special_order(ids[0])
+        except ActionError:
+            return
+        order = detail["order"]
+        self.selected_note_input.setText(order.note or "")
+        self.selected_net_checkbox.blockSignals(True)
+        self.selected_net_checkbox.setChecked(order.net_against_stock)
+        self.selected_net_checkbox.blockSignals(False)
 
     def _load_line_items(self, order_id: str) -> None:
         try:
@@ -229,7 +259,8 @@ class SpecialOrdersView(BaseView):
 
     def _load_orders(self) -> None:
         # storage.list_special_orders is a cheap local read (no network).
-        orders = production_actions.do_list_special_orders()
+        status = self.status_filter.currentData()
+        orders = production_actions.do_list_special_orders(status=status)
         populate(self.orders_table, [_order_row(o) for o in orders], default_sort=_ORDER_SORT)
 
     def _parse_items(self) -> list[dict] | None:
@@ -255,26 +286,8 @@ class SpecialOrdersView(BaseView):
         parsed = self._parse_items()
         if parsed is None:
             return
-        # do_create_special_order needs resolved type_ids up front (unlike
-        # do_add_stock_target, which resolves name-or-id itself via its
-        # module-private _resolve_type) - resolve each item the same way
-        # cli.py's own cmd_create_special_order does, via storage's public
-        # SDE lookup.
-        from ... import storage
-        resolved = []
-        for entry in parsed:
-            name_or_id = entry["name_or_id"]
-            if name_or_id.isdigit():
-                type_id = int(name_or_id)
-            else:
-                matches = storage.search_sde_types(name_or_id, limit=2)
-                exact = [m for m in matches if m[1].lower() == name_or_id.lower()]
-                if not exact:
-                    hint = f" Did you mean: {matches[0][1]}?" if matches else ""
-                    self.show_error(f"No exact match for '{name_or_id}'.{hint}")
-                    return
-                type_id = exact[0][0]
-            resolved.append({"type_id": type_id, "quantity": entry["quantity"]})
+        resolved = [{"type_id_or_name": entry["name_or_id"], "quantity": entry["quantity"]}
+                    for entry in parsed]
         note = self.note_input.text().strip() or None
         self.run_action(
             functools.partial(production_actions.do_create_special_order, resolved, note=note,
@@ -299,6 +312,26 @@ class SpecialOrdersView(BaseView):
     def _on_order_updated(self, result: dict) -> None:
         self._load_orders()
         self.show_info(f"Special order {result['order'].order_id} updated - status: {result['order'].status}.")
+
+    def _save_note(self) -> None:
+        order_id = self.order_id_input.text().strip()
+        if not order_id:
+            self.show_error("Select or enter an order id first.")
+            return
+        note = self.selected_note_input.text().strip() or None
+        self.run_action(
+            functools.partial(production_actions.do_update_special_order, order_id, note=note),
+            self._on_order_updated, busy_message="Saving note...")
+
+    def _save_net_against_stock(self) -> None:
+        order_id = self.order_id_input.text().strip()
+        if not order_id:
+            self.show_error("Select or enter an order id first.")
+            return
+        self.run_action(
+            functools.partial(production_actions.do_update_special_order, order_id,
+                              net_against_stock=self.selected_net_checkbox.isChecked()),
+            self._on_order_updated, busy_message="Updating stock mode...")
 
     def _remove_order(self) -> None:
         order_id = self.order_id_input.text().strip()
@@ -384,17 +417,27 @@ class SpecialOrdersView(BaseView):
                  default_sort=_INVENTION_SORT)
         populate(self.overlap_table, [_overlap_row(r) for r in plan["stock_overlap_warning"]])
 
+    def _buy_total_isk(self, plan: dict) -> float | None:
+        prices = [row.total_price for row in plan["buy_list"] if row.total_price is not None]
+        if not prices:
+            return None
+        return sum(prices)
+
+    def _plan_summary(self, plan: dict, prefix: str) -> str:
+        total = self._buy_total_isk(plan)
+        cost = f", buy total {fmt_isk(total)} ISK" if total is not None else ""
+        return (
+            f"{prefix}{len(plan['line_items'])} line item(s), "
+            f"{len(plan['build_list'])} build job(s), {len(plan['buy_list'])} buy item(s), "
+            f"{len(plan['invention_list'])} invention need(s){cost}."
+        )
+
     def _on_combined(self, plan: dict) -> None:
         self._populate_plan(plan)
         extra = " (net against stock)" if self.combine_net_checkbox.isChecked() else " (from scratch)"
-        self.show_info(
-            f"Combined preview{extra} - {len(plan['line_items'])} line item(s), "
-            f"{len(plan['build_list'])} build job(s), {len(plan['buy_list'])} buy item(s), "
-            f"{len(plan['invention_list'])} invention need(s)."
-        )
+        self.show_info(self._plan_summary(
+            plan, f"Combined preview{extra} - source orders unchanged. "))
 
     def _on_computed(self, plan: dict) -> None:
         self._populate_plan(plan)
-        self.show_info(f"Computed - {len(plan['build_list'])} build job(s), {len(plan['buy_list'])} "
-                       f"buy item(s), {len(plan['invention_list'])} invention need(s), "
-                       f"{len(plan['stock_overlap_warning'])} stock overlap warning(s).")
+        self.show_info(self._plan_summary(plan, "Computed - "))
