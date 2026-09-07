@@ -16,6 +16,8 @@ from eve_trader_local.goonmetrics_client import CurrentPrice
 from eve_trader_local.production import actions, engine
 from eve_trader_local.production.config import ProductionConfig
 
+pytestmark = pytest.mark.release
+
 MINERAL = 34            # Input - no blueprint at all
 COMPONENT = 91201
 FINISHED_A = 91202
