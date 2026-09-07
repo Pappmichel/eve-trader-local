@@ -192,7 +192,20 @@ item_count for list; pool Combined loads in one query. Neither is done here.
 
 ## Integrity notes (G.3)
 
-Pending G.3 suite.
+Recorded with `tests/test_phase_g3_failure_recovery.py`:
+
+- Invalid create (empty, qty ≤ 0, unknown type, mixed good+unknown) writes
+  neither a header nor events.
+- Failed Set/Remove and a failed auto-recompute wrapper leave items and the
+  event log unchanged.
+- An exception after the header `INSERT` inside the same `storage.connect()`
+  transaction rolls back: no leftover header, items, or events (`connect()`
+  already commits only on clean exit).
+- Audit after a failed create still reports a healthy surviving order as
+  clean; header-only rows planted by `create_special_order` remain
+  `empty_order`. Delete keeps events; audit does not flag the deleted id.
+
+No extension-point code change was required.
 
 ---
 
