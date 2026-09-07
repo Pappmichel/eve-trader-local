@@ -783,7 +783,8 @@ def cmd_create_special_order(args: argparse.Namespace) -> None:
         items.append({"type_id_or_name": name_or_id.strip(), "quantity": quantity})
     result = production_actions.do_create_special_order(
         items, note=args.note, net_against_stock=args.net_against_stock)
-    print(f"Created special order {result['order_id']} with {len(items)} item(s).")
+    stored = production_actions.do_get_special_order(result["order_id"])
+    print(f"Created special order {result['order_id']} with {len(stored['items'])} item(s).")
 
 
 def cmd_list_special_orders(args: argparse.Namespace) -> None:

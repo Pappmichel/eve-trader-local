@@ -161,8 +161,11 @@ pytest -m release
 | SF-8 GUI path | `test_gui_compute_combined_only_calls_the_action`, `test_gui_populate_renders_the_action_plan`, `tests/test_gui_production.py` / `tests/test_gui_production_gaps.py` special-order tests |
 | SF-7 Invention | `tests/test_production_invention_needs.py`, `test_inv1_*`, `test_combined_t2_*` |
 | Composed acceptance | `tests/test_phase_d_release_acceptance.py` |
+| Phase E expansions (isolated) | `tests/test_phase_e2_order_persistence.py`, `tests/test_phase_e3_ux.py`, `tests/test_phase_e4_auto_recompute.py`, `tests/test_phase_e5_production_features.py` |
+| Phase F.1 cross-feature | `tests/test_phase_f1_cross_feature.py` (see `PHASE_F_VALIDATION.md`) |
 
 End-to-end workflows (create → upsert → compute; combined pooling; stock
 modes 1==3; T2 invention aggregation) live in
 `tests/test_phase_d_release_acceptance.py` so a release check exercises the
-full path without copying the Phase C attack matrix.
+full path without copying the Phase C attack matrix. Phase F.1 does not
+re-state that matrix; it checks that E.2–E.5 do not interfere.
