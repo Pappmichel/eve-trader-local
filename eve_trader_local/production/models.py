@@ -350,3 +350,15 @@ class OwnedBlueprintRow:
     material_efficiency: int
     time_efficiency: int
     runs: Optional[int]        # None for a BPO (infinite), remaining run count for a BPC
+
+
+@dataclass
+class ManualBlueprintCopyCostRow:
+    """One manually-registered blueprint-copy purchase cost (GitHub issue
+    #40) - the Owned Blueprints page's second table. `type_id` is the
+    *product* built from the copy, not the blueprint's own type_id."""
+    type_id: int
+    type_name: str
+    purchase_cost: float
+    runs: int
+    cost_per_run: float  # purchase_cost / runs, computed for display convenience

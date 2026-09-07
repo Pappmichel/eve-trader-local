@@ -670,14 +670,15 @@ def _items_past_skip_grace_period(rows: list[ShortlistRow], skip_since: dict[int
 
 def _items_beyond_rank(rows: list[ShortlistRow], max_active_items: int) -> list[tuple[int, str]]:
     """Everything past the cap when the still-active rows are ranked by max
-    daily profit (margin x liquidity, not margin alone - a huge margin on an
-    item nobody buys isn't worth a shortlist slot). Rows with no computable
-    figure sort last: never prioritized over rows that do have data, but not
-    pushed out ahead of them either."""
+    daily profit (profit_per_unit x avg_daily_volume, descending - the same
+    market-wide daily-turnover figure Shortlist "Profit / Day" uses, never
+    sell_volume/order-book depth). Rows with no computable profit or
+    avg_daily_volume sort last: never prioritized over rows that do have
+    data, but not pushed out ahead of them either."""
     def _daily_profit(r):
-        if r.profit_per_unit is None or r.sell_volume is None:
+        if r.profit_per_unit is None or r.avg_daily_volume is None:
             return float("-inf")
-        return r.profit_per_unit * r.sell_volume
+        return r.profit_per_unit * r.avg_daily_volume
 
     ranked = sorted(rows, key=_daily_profit, reverse=True)
     return [(r.item_id, r.item) for r in ranked[max_active_items:] if r.item_id]

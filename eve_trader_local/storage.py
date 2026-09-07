@@ -586,6 +586,20 @@ CREATE TABLE IF NOT EXISTS special_order_items (
 );
 CREATE INDEX IF NOT EXISTS idx_special_order_items_order ON special_order_items (order_id);
 
+-- GitHub issue #40: purchase cost + included run count for a blueprint *copy*
+-- that must be bought outright (never owned as a BPO, not inventable) - e.g. a
+-- faction/officer BPC only obtainable from an LP store or the market. type_id
+-- is the *product* built from that BPC, not the blueprint's own type_id - a
+-- blueprint's product is a stable 1:1 lookup (storage.get_blueprint_for_product)
+-- so this is unambiguous either way, and product_type_id is what
+-- production/engine.py's _unit_cost already keys everything else on.
+CREATE TABLE IF NOT EXISTS manual_blueprint_copy_costs (
+    type_id       INTEGER PRIMARY KEY,
+    type_name     TEXT NOT NULL,
+    purchase_cost REAL NOT NULL,
+    runs          INTEGER NOT NULL
+);
+
 -- ------------------------------------------------------------------ Doctrine
 -- Ported from the parent's docs/doctrine_schema.sql minus tenant_id/RLS - see
 -- that file for the full multi-tenant reasoning behind each shape. ids are
@@ -2472,6 +2486,65 @@ def list_manual_build_buy(path: Optional[Path] = None) -> list[tuple[int, str, s
             "LEFT JOIN sde_types t ON t.type_id = b.type_id ORDER BY COALESCE(t.type_name, '?')"
         ).fetchall()
     return [tuple(r) for r in rows]
+
+
+# ------------------------------------------- manual blueprint-copy costs
+def upsert_manual_blueprint_copy_cost(type_id: int, type_name: str, purchase_cost: float,
+                                      runs: int, path: Optional[Path] = None) -> None:
+    """Registers/updates the purchase cost + included run count for a
+    blueprint copy that must be bought outright. `type_id` is the *product*
+    built from that BPC, not the blueprint's own type_id."""
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO manual_blueprint_copy_costs (type_id, type_name, purchase_cost, runs) "
+            "VALUES (?,?,?,?) "
+            "ON CONFLICT(type_id) DO UPDATE SET "
+            "type_name=excluded.type_name, purchase_cost=excluded.purchase_cost, runs=excluded.runs",
+            (type_id, type_name, purchase_cost, runs),
+        )
+
+
+def update_manual_blueprint_copy_cost(type_id: int, purchase_cost: float, runs: int,
+                                      path: Optional[Path] = None) -> bool:
+    """Updates purchase_cost/runs for an already-registered row, leaving
+    type_name untouched. Returns False if no row exists for `type_id` (the
+    caller should raise ActionError, not silently insert a name-less row)."""
+    with connect(path) as conn:
+        cur = conn.execute(
+            "UPDATE manual_blueprint_copy_costs SET purchase_cost=?, runs=? WHERE type_id=?",
+            (purchase_cost, runs, type_id),
+        )
+        return cur.rowcount > 0
+
+
+def load_manual_blueprint_copy_costs(path: Optional[Path] = None) -> list[tuple]:
+    """Returns [(type_id, type_name, purchase_cost, runs), ...] as plain
+    tuples (never sqlite3.Row - connect() sets row_factory)."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT type_id, type_name, purchase_cost, runs FROM manual_blueprint_copy_costs "
+            "ORDER BY type_name"
+        ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def delete_manual_blueprint_copy_cost(type_id: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute("DELETE FROM manual_blueprint_copy_costs WHERE type_id = ?", (type_id,))
+
+
+def get_manual_blueprint_copy_cost_per_run(type_id: int, path: Optional[Path] = None) -> Optional[float]:
+    """Amortized cost per run (purchase_cost / runs) for `type_id` if a
+    manual BPC cost is registered, else None. Used by production/engine.py's
+    _unit_cost to fold a bought-copy's cost into the modeled build cost."""
+    with connect(path) as conn:
+        row = conn.execute(
+            "SELECT purchase_cost, runs FROM manual_blueprint_copy_costs WHERE type_id = ?",
+            (type_id,),
+        ).fetchone()
+    if row is None or not row[1]:
+        return None
+    return row[0] / row[1]
 
 
 # --------------------------------------------------------- structure names

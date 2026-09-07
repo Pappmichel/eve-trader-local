@@ -134,12 +134,12 @@ def sell_order(order_id, type_id, price, volume_remain=10, location_id=STRUCTURE
 
 
 def row(item_id=TRIT, *, decision="Skip", active=True, profit=None, margin=None,
-        sell_volume=None) -> ShortlistRow:
+        sell_volume=None, avg_daily_volume=None) -> ShortlistRow:
     return ShortlistRow(item=f"Item {item_id}", category="Material", landed_cost=100.0,
                         net_sell=110.0, sell_volume=sell_volume, own_orders_remaining=0.0,
                         profit_per_unit=profit, margin=margin, profit_per_m3=None,
                         decision=decision, active=active, item_id=item_id, volume_m3=1.0,
-                        jita_sell=100.0, import_cost=0.0)
+                        jita_sell=100.0, import_cost=0.0, avg_daily_volume=avg_daily_volume)
 
 
 def candidate(type_id=TRIT, item="Tritanium") -> Candidate:
@@ -523,9 +523,27 @@ def test_skip_grace_period_only_deactivates_streaks_old_enough():
 
 
 def test_cap_ranks_by_daily_profit_and_sorts_unknowns_last():
-    rows = [row(1, profit=10.0, sell_volume=10.0), row(2, profit=1.0, sell_volume=1.0),
-            row(3, profit=None, sell_volume=None)]
+    rows = [row(1, profit=10.0, avg_daily_volume=10.0), row(2, profit=1.0, avg_daily_volume=1.0),
+            row(3, profit=None, avg_daily_volume=None)]
     assert actions._items_beyond_rank(rows, 1) == [(2, "Item 2"), (3, "Item 3")]
+
+
+def test_cap_sorts_missing_avg_daily_volume_last():
+    rows = [
+        row(1, profit=10.0, avg_daily_volume=10.0),
+        row(2, profit=10.0, avg_daily_volume=None),
+        row(3, profit=None, avg_daily_volume=10.0),
+    ]
+    beyond = actions._items_beyond_rank(rows, 1)
+    assert {item_id for item_id, _ in beyond} == {2, 3}
+
+
+def test_cap_uses_avg_daily_volume_not_sell_volume():
+    # A parked listing with huge sell_volume (order-book depth) must not
+    # outrank a liquid item whose real market-wide daily turnover is higher.
+    parked = row(1, profit=10.0, sell_volume=100_000, avg_daily_volume=1)
+    liquid = row(2, profit=10.0, sell_volume=5, avg_daily_volume=500)
+    assert actions._items_beyond_rank([parked, liquid], 1) == [(1, "Item 1")]
 
 
 def test_reactivation_needs_volume_profit_and_margin(cfg):
