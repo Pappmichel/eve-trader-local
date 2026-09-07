@@ -166,6 +166,7 @@ pytest -m release
 | Phase F.2 operator workflows | `tests/test_phase_f2_end_to_end.py` |
 | Phase G.1 scale baseline | `tests/test_phase_g1_scale_baseline.py` (see `PHASE_G_SCALE.md`; timings are documentation, not gates) |
 | Phase G.2 reliability | `tests/test_phase_g2_reliability.py` |
+| Phase G.3 failure recovery | `tests/test_phase_g3_failure_recovery.py` |
 
 End-to-end workflows (create → upsert → compute; combined pooling; stock
 modes 1==3; T2 invention aggregation) live in
