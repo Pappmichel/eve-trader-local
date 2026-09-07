@@ -10,7 +10,9 @@ pooling, preview purity, invention single-source, CLI/GUI shared path)
 are frozen in `PRODUCTION_SEMANTICS.md`. Do not change those rules as a
 side effect of a feature or refactor; treat a change as an explicit
 product decision and update the freeze doc plus `pytest -m release` in
-the same change.
+the same change. Isolated expansions after E.1 live in
+`PHASE_E_EXPANSION.md` and must not alter compute, pricing, preview, or
+the SpecialOrder fields.
 
 ## No Claude/Anthropic attribution anywhere (confirmed 2026-09-02)
 

@@ -745,7 +745,7 @@ def cmd_create_special_order(args: argparse.Namespace) -> None:
 
 
 def cmd_list_special_orders(args: argparse.Namespace) -> None:
-    rows = production_actions.do_list_special_orders()
+    rows = production_actions.do_list_special_orders(status=getattr(args, "status", None))
     if not rows:
         print("No special orders.")
         return
@@ -761,8 +761,34 @@ def cmd_remove_special_order(args: argparse.Namespace) -> None:
 
 
 def cmd_update_special_order(args: argparse.Namespace) -> None:
-    result = production_actions.do_update_special_order(args.order_id, status=args.status, note=args.note)
-    print(f"Special order {result['order'].order_id} updated - status: {result['order'].status}.")
+    result = production_actions.do_update_special_order(
+        args.order_id, status=args.status, note=args.note,
+        net_against_stock=getattr(args, "net_against_stock", None),
+    )
+    order = result["order"]
+    net = "nets against stock" if order.net_against_stock else "from scratch"
+    print(f"Special order {order.order_id} updated - status: {order.status} ({net}).")
+
+
+def cmd_audit_special_orders(args: argparse.Namespace) -> None:
+    result = production_actions.do_audit_special_orders()
+    if result["ok"]:
+        print("Special-order integrity: ok.")
+        return
+    print(f"Special-order integrity: {len(result['issues'])} issue(s).")
+    for issue in result["issues"]:
+        print(f"  [{issue['kind']}] {issue['order_id']}  {issue['detail']}")
+
+
+def cmd_list_special_order_events(args: argparse.Namespace) -> None:
+    result = production_actions.do_list_special_order_events(args.order_id)
+    rows = result["rows"]
+    if not rows:
+        print("No special-order events.")
+        return
+    for row in rows:
+        detail = f"  {row['detail']}" if row["detail"] else ""
+        print(f"  {row['at']}  {row['order_id']}  {row['event']}{detail}")
 
 
 def cmd_set_special_order_item(args: argparse.Namespace) -> None:
@@ -1413,9 +1439,11 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="net against current ESI-synced stock instead of planning from scratch")
     p_create_order.set_defaults(func=cmd_create_special_order)
 
-    sub.add_parser(
+    p_list_orders = sub.add_parser(
         "list-special-orders", help="list every special order"
-    ).set_defaults(func=cmd_list_special_orders)
+    )
+    p_list_orders.add_argument("--status", choices=("open", "done"), default=None)
+    p_list_orders.set_defaults(func=cmd_list_special_orders)
 
     p_remove_order = sub.add_parser("remove-special-order", help="delete a special order")
     p_remove_order.add_argument("order_id")
@@ -1425,7 +1453,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_update_order.add_argument("order_id")
     p_update_order.add_argument("--status", choices=("open", "done"), default=None)
     p_update_order.add_argument("--note", default=None)
-    p_update_order.set_defaults(func=cmd_update_special_order)
+    net_group = p_update_order.add_mutually_exclusive_group()
+    net_group.add_argument(
+        "--net-against-stock", dest="net_against_stock", action="store_const", const=True,
+        help="store the per-order net-against-stock flag (compute of this order only)",
+    )
+    net_group.add_argument(
+        "--from-scratch", dest="net_against_stock", action="store_const", const=False,
+        help="clear the per-order net-against-stock flag",
+    )
+    p_update_order.set_defaults(func=cmd_update_special_order, net_against_stock=None)
+
+    sub.add_parser(
+        "audit-special-orders", help="read-only integrity report for special-order tables"
+    ).set_defaults(func=cmd_audit_special_orders)
+
+    p_list_events = sub.add_parser(
+        "list-special-order-events", help="append-only special-order lifecycle log"
+    )
+    p_list_events.add_argument("order_id", nargs="?", default=None)
+    p_list_events.set_defaults(func=cmd_list_special_order_events)
 
     p_set_item = sub.add_parser(
         "set-special-order-item",
