@@ -18,7 +18,7 @@ from __future__ import annotations
 import functools
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QPushButton, QTabWidget
+from PySide6.QtWidgets import QComboBox, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTabWidget
 
 from ...production import actions as production_actions
 from .. import icons
@@ -81,6 +81,27 @@ class MarginsMarketView(BaseView):
         toolbar.addStretch(1)
         self.root_layout.addLayout(toolbar)
 
+        override = QGroupBox("Cost-index overrides")
+        form = QHBoxLayout(override)
+        form.addWidget(QLabel("Kind:"))
+        self.cost_index_kind = QComboBox()
+        for kind in ("reaction", "component", "manufacturing"):
+            self.cost_index_kind.addItem(kind)
+        form.addWidget(self.cost_index_kind)
+        form.addWidget(QLabel("Value (0-1):"))
+        self.cost_index_value = QLineEdit()
+        self.cost_index_value.setPlaceholderText("e.g. 0.05")
+        self.cost_index_value.setMaximumWidth(100)
+        form.addWidget(self.cost_index_value)
+        set_idx = QPushButton(icons.icon("save"), "Set Override")
+        set_idx.clicked.connect(self._set_cost_index_override)
+        form.addWidget(set_idx)
+        clear_idx = QPushButton(icons.icon("remove"), "Clear Override")
+        clear_idx.clicked.connect(self._clear_cost_index_override)
+        form.addWidget(clear_idx)
+        form.addStretch(1)
+        self.root_layout.addWidget(override)
+
         self.tabs = QTabWidget()
         self.margins_table = build_table(_MARGIN_COLUMNS, column_widths=_MARGIN_WIDTHS)
         self.market_status_table = build_table(_MARKET_STATUS_COLUMNS, column_widths=_MARKET_STATUS_WIDTHS)
@@ -132,3 +153,22 @@ class MarginsMarketView(BaseView):
         self._refresh_staleness_label()
         self.show_info(f"{len(rows)} cost index value(s)." if rows else
                        "No cost index data cached yet - run Update Data for Production first.")
+
+    def _set_cost_index_override(self) -> None:
+        kind = self.cost_index_kind.currentText()
+        try:
+            value = float(self.cost_index_value.text().strip())
+        except ValueError:
+            self.show_error("Cost-index override must be a number between 0 and 1.")
+            return
+        self.run_action(
+            functools.partial(production_actions.do_set_cost_index_override, kind, value),
+            lambda _r: self.show_info(f"Cost-index override set: {kind} = {value}."),
+            busy_message="Saving cost-index override...")
+
+    def _clear_cost_index_override(self) -> None:
+        kind = self.cost_index_kind.currentText()
+        self.run_action(
+            functools.partial(production_actions.do_clear_cost_index_override, kind),
+            lambda _r: self.show_info(f"Cost-index override cleared: {kind}."),
+            busy_message="Clearing cost-index override...")

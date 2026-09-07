@@ -576,6 +576,48 @@ def cmd_character_slots(args: argparse.Namespace) -> None:
         print(f"  {row.character_name:<25} {row.job_type:<14} {row.used_slots:>3} in use")
 
 
+def cmd_character_slot_capacity(args: argparse.Namespace) -> None:
+    rows = production_actions.do_character_slot_capacity_overview()["rows"]
+    if not rows:
+        print("No character job-slot usage or totals to show.")
+        return
+    for row in rows:
+        total = f"{row.total_slots:>3}" if row.total_slots is not None else "  -"
+        free = f"{row.free_slots:>3}" if row.free_slots is not None else "  -"
+        print(f"  {row.character_name:<25} {row.job_type:<14} used {row.used_slots:>3}  "
+              f"total {total}  free {free}")
+
+
+def cmd_set_character_job_slots(args: argparse.Namespace) -> None:
+    result = production_actions.do_set_character_job_slot_totals(
+        args.character, args.manufacturing, args.reaction, args.science)
+    print(f"Job-slot totals set for {result['character_name']}: "
+          f"manufacturing {result['manufacturing']}, reaction {result['reaction']}, "
+          f"science {result['science']}.")
+
+
+def cmd_clear_character_job_slots(args: argparse.Namespace) -> None:
+    result = production_actions.do_clear_character_job_slot_totals(args.character)
+    print(f"Cleared job-slot totals for {result['removed']}.")
+
+
+def cmd_set_cost_index_override(args: argparse.Namespace) -> None:
+    production_actions.do_set_cost_index_override(args.kind, args.value)
+    print(f"Cost-index override set: {args.kind} = {args.value}.")
+
+
+def cmd_clear_cost_index_override(args: argparse.Namespace) -> None:
+    production_actions.do_clear_cost_index_override(args.kind)
+    print(f"Cost-index override cleared: {args.kind}.")
+
+
+def cmd_list_cost_index_overrides(args: argparse.Namespace) -> None:
+    rows = production_actions.do_list_cost_index_overrides()
+    for kind, value in rows.items():
+        shown = f"{value}" if value is not None else "(auto / ESI)"
+        print(f"  {kind:<14} {shown}")
+
+
 def cmd_list_owned_blueprints(args: argparse.Namespace) -> None:
     rows = production_actions.do_list_owned_blueprints()["rows"]
     if not rows:
@@ -1357,6 +1399,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="per-character, per-category count of currently-running industry jobs "
              "(usage only - no total/free, see README)",
     ).set_defaults(func=cmd_character_slots)
+
+    sub.add_parser(
+        "character-slot-capacity",
+        help="used job slots plus optional manual totals/free (Phase E.5)",
+    ).set_defaults(func=cmd_character_slot_capacity)
+
+    p_set_slots = sub.add_parser(
+        "set-character-job-slots", help="set manual industry-job-slot totals for a character"
+    )
+    p_set_slots.add_argument("character")
+    p_set_slots.add_argument("manufacturing", type=int)
+    p_set_slots.add_argument("reaction", type=int)
+    p_set_slots.add_argument("science", type=int)
+    p_set_slots.set_defaults(func=cmd_set_character_job_slots)
+
+    p_clear_slots = sub.add_parser(
+        "clear-character-job-slots", help="remove manual job-slot totals for a character"
+    )
+    p_clear_slots.add_argument("character")
+    p_clear_slots.set_defaults(func=cmd_clear_character_job_slots)
+
+    p_set_idx = sub.add_parser(
+        "set-cost-index-override", help="set a production cost-index override (0-1)"
+    )
+    p_set_idx.add_argument("kind", choices=("reaction", "component", "manufacturing"))
+    p_set_idx.add_argument("value", type=float)
+    p_set_idx.set_defaults(func=cmd_set_cost_index_override)
+
+    p_clear_idx = sub.add_parser(
+        "clear-cost-index-override", help="clear a production cost-index override"
+    )
+    p_clear_idx.add_argument("kind", choices=("reaction", "component", "manufacturing"))
+    p_clear_idx.set_defaults(func=cmd_clear_cost_index_override)
+
+    sub.add_parser(
+        "list-cost-index-overrides", help="show reaction/component/manufacturing cost-index overrides"
+    ).set_defaults(func=cmd_list_cost_index_overrides)
 
     sub.add_parser(
         "list-owned-blueprints", help="every owned BPO/BPC (character + corp), aggregated by ME/TE/runs"

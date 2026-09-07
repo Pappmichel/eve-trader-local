@@ -15,7 +15,7 @@ from ..auth import TokenManager
 from ..config import OAUTH_CONFIG, OAuthConfig
 from ..errors import ActionError, ConfigError
 from ..esi_client import ESIClient, ESIError
-from . import engine, esi_sync, invention, jobs, order_integrity, pricing
+from . import engine, esi_sync, invention, job_slot_capacity, jobs, order_integrity, pricing
 from .config import PRODUCTION_CONFIG, ProductionConfig, save_config_overrides
 from .constants import DECRYPTORS, JOB_CATEGORIES
 from .models import AssetLocationRow, BuildCandidate, ManualBlueprintCopyCostRow, ShipMarginRow, SpecialOrder
@@ -595,6 +595,70 @@ def do_character_slot_overview() -> dict:
     and SYNC.md for why: no ESI character-skills scope is synced here to
     derive a real total slot count from)."""
     return {"rows": jobs.character_slot_overview()}
+
+
+def do_set_character_job_slot_totals(character_name: str, manufacturing: int,
+                                     reaction: int, science: int) -> dict:
+    """Manual totals for Phase E.5 capacity overlay. Values must be >= 0.
+    Does not change jobs.character_slot_overview or the planner."""
+    name = character_name.strip()
+    if not name:
+        raise ActionError("Character name is required.")
+    for label, value in (("manufacturing", manufacturing), ("reaction", reaction),
+                         ("science", science)):
+        if value < 0:
+            raise ActionError(f"{label} slot total cannot be negative.")
+    storage.upsert_character_job_slot_totals(name, manufacturing, reaction, science)
+    return {"character_name": name, "manufacturing": manufacturing,
+            "reaction": reaction, "science": science}
+
+
+def do_clear_character_job_slot_totals(character_name: str) -> dict:
+    name = character_name.strip()
+    if not name:
+        raise ActionError("Character name is required.")
+    storage.delete_character_job_slot_totals(name)
+    return {"removed": name}
+
+
+def do_character_slot_capacity_overview() -> dict:
+    return {"rows": job_slot_capacity.overview()}
+
+
+_COST_INDEX_OVERRIDE_FIELDS = {
+    "reaction": "reaction_cost_index_override",
+    "component": "component_cost_index_override",
+    "manufacturing": "manufacturing_cost_index_override",
+}
+
+
+def do_set_cost_index_override(kind: str, value: float,
+                               cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    """Persists one existing ProductionConfig cost-index override field.
+    Does not edit engine._job_cost_rate."""
+    field = _COST_INDEX_OVERRIDE_FIELDS.get(kind)
+    if field is None:
+        raise ActionError(
+            f"Unknown cost-index kind {kind!r}. Options: {', '.join(_COST_INDEX_OVERRIDE_FIELDS)}"
+        )
+    return do_update_settings({field: value}, cfg)
+
+
+def do_clear_cost_index_override(kind: str, cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    field = _COST_INDEX_OVERRIDE_FIELDS.get(kind)
+    if field is None:
+        raise ActionError(
+            f"Unknown cost-index kind {kind!r}. Options: {', '.join(_COST_INDEX_OVERRIDE_FIELDS)}"
+        )
+    return do_update_settings({field: None}, cfg)
+
+
+def do_list_cost_index_overrides(cfg: ProductionConfig = PRODUCTION_CONFIG) -> dict:
+    return {
+        "reaction": cfg.reaction_cost_index_override,
+        "component": cfg.component_cost_index_override,
+        "manufacturing": cfg.manufacturing_cost_index_override,
+    }
 
 
 # ------------------------------------------------------------ owned blueprints
