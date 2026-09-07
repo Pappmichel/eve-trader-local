@@ -164,6 +164,7 @@ pytest -m release
 | Phase E expansions (isolated) | `tests/test_phase_e2_order_persistence.py`, `tests/test_phase_e3_ux.py`, `tests/test_phase_e4_auto_recompute.py`, `tests/test_phase_e5_production_features.py` |
 | Phase F.1 cross-feature | `tests/test_phase_f1_cross_feature.py` (see `PHASE_F_VALIDATION.md`) |
 | Phase F.2 operator workflows | `tests/test_phase_f2_end_to_end.py` |
+| Phase G.1 scale baseline | `tests/test_phase_g1_scale_baseline.py` (see `PHASE_G_SCALE.md`; timings are documentation, not gates) |
 
 End-to-end workflows (create → upsert → compute; combined pooling; stock
 modes 1==3; T2 invention aggregation) live in
