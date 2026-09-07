@@ -1552,6 +1552,9 @@ def plan_special_order(items: list[tuple[int, str, float]], cfg: ProductionConfi
     they price or decide build-vs-buy - only on *what* demand they start from
     and how stock is (or isn't) netted.
 
+    Frozen Special-Order rules (B1, pooling, preview purity, invention via
+    `_invention_need_row` only): PRODUCTION_SEMANTICS.md.
+
     Two deliberate differences from plan_production, matching the parent's
     own confirmed behavior (see SYNC.md):
     - No margin gate: an order must be fulfilled regardless of whether

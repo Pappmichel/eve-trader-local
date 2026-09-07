@@ -660,10 +660,11 @@ def do_remove_manual_blueprint_copy_cost(type_id_or_name: str) -> dict:
 
 
 # ------------------------------------------------------------- Special Orders
-# One-off build orders, tracked separately from the permanent stock_targets
-# list - see engine.plan_special_order's own docstring for the two
-# deliberate differences from plan_production (no margin gate,
-# net_against_stock replacing stock-target-driven netting).
+# Frozen semantics (B1, combined preview, pooling, purity, upsert, invention
+# single-source, CLI/GUI shared path): PRODUCTION_SEMANTICS.md.
+# See engine.plan_special_order's own docstring for the two deliberate
+# differences from plan_production (no margin gate; net_against_stock
+# replacing stock-target-driven netting, never netting top-level qty).
 
 def _special_order_to_model(row: tuple, item_count: int) -> SpecialOrder:
     order_id, note, net_against_stock, status, created_at = row

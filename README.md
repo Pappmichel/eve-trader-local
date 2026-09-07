@@ -163,7 +163,8 @@ What exists:
   `add-category-location-option`, `remove-category-location-option`,
   `list-category-locations`, `set-manual-stock`, `remove-manual-stock`,
   `list-manual-stock`, `create-special-order`, `list-special-orders`,
-  `update-special-order`, `remove-special-order`, `compute-special-order`,
+  `update-special-order`, `remove-special-order`, `set-special-order-item`,
+  `compute-special-order`, `compute-combined-special-orders`,
   `pipeline`,
   `parse-fitting`, `create-doctrine`, `list-doctrines`, `add-fitting`,
   `list-fittings`, `sync-doctrine`, `validate-contracts`, `doctrine-status`,
@@ -177,7 +178,8 @@ What exists:
   `portfolio-overview`.
 
 See `SYNC.md` for exactly what was ported from each parent-repo module, what
-was deliberately left out, and why.
+was deliberately left out, and why. Frozen Production/Special-Order rules
+are in `PRODUCTION_SEMANTICS.md` (`pytest -m release`).
 
 ## Native GUI (started 2026-09-04)
 
@@ -448,7 +450,9 @@ eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--ne
 eve-trader-local list-special-orders                     # show every special order
 eve-trader-local update-special-order <order_id> [--status open|done] [--note]
 eve-trader-local remove-special-order <order_id>         # delete a special order
+eve-trader-local set-special-order-item <order_id> <item> <quantity>  # upsert one line item (no plan)
 eve-trader-local compute-special-order <order_id>        # buy/build plan for one order's line items
+eve-trader-local compute-combined-special-orders <order_id> [<order_id> ...] [--net-against-stock]
 eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile
 eve-trader-local pipeline --rebuild-universe  # also re-crawl the market-group tree first
 
@@ -492,12 +496,14 @@ Special Orders are a one-off build order for an ad-hoc item list, tracked
 separately from the permanent stock-target list above and priced with the
 exact same buy-vs-build engine `plan-production` uses (`create-special-order`
 takes one or more `NAME_OR_TYPE_ID:QUANTITY` pairs). `--net-against-stock`
-nets the order off currently-synced ESI assets/incoming jobs instead of
-planning it entirely from scratch (the default), and also flags any item
-shared with your configured stock targets that already has stock on hand —
-a heads-up that the same physical units might get claimed by both. Unlike
-`plan-production`, an order is never dropped for falling below
-`min_margin` — a special order must be fulfilled regardless of margin.
+on create is stored for that order's own `compute-special-order`. Combined
+preview (`compute-combined-special-orders`) takes a fresh `--net-against-stock`
+for that run only — it does not merge or rewrite stored order flags, and it
+does not save the combined plan. In both modes, the ordered top-level
+quantity is never reduced by hangar stock (B1). Unlike `plan-production`,
+an order is never dropped for falling below `min_margin`. Frozen rules,
+scope boundaries, and the missing-price policy are in
+`PRODUCTION_SEMANTICS.md`.
 
 `parse-fitting` needs `refresh-sde` to have run at least once (it resolves
 every item/hull name and slot against the local SDE cache) and takes a plain

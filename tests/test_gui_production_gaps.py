@@ -237,6 +237,7 @@ def _seed_tritanium():
     )
 
 
+@pytest.mark.release
 def test_special_orders_set_item_end_to_end(qapp, db):
     from eve_trader_local import storage
     from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
@@ -262,6 +263,7 @@ def test_special_orders_set_item_end_to_end(qapp, db):
     assert [(row[0], row[1], row[2]) for row in stored] == [(34, "Tritanium", 25.0)]
 
 
+@pytest.mark.release
 def test_special_orders_combine_end_to_end(qapp, db):
     from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
     from eve_trader_local.production import actions as production_actions

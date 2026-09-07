@@ -15,6 +15,8 @@ from eve_trader_local.production import actions, engine
 from eve_trader_local.production.config import ProductionConfig
 from eve_trader_local.production.constants import DECRYPTORS
 
+pytestmark = pytest.mark.release
+
 T1_BLUEPRINT = 1002
 T2_BLUEPRINT = 1001
 T2_MODULE = 2048

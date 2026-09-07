@@ -27,6 +27,8 @@ from test_production_special_orders import (
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+pytestmark = pytest.mark.release
+
 REPO = Path(__file__).resolve().parents[1] / "eve_trader_local"
 
 # Tech I BOM with _cfg() (ACTIVITY_MODS ME 0.90, overbuild 0):

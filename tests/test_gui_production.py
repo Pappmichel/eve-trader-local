@@ -62,6 +62,7 @@ def test_logistics_view_opens_with_empty_db(qapp, db):
     assert view.t1_bpc_table.rowCount() == 0
 
 
+@pytest.mark.release
 def test_special_orders_view_opens_with_empty_db(qapp, db):
     from eve_trader_local.gui.views.production_special_orders import SpecialOrdersView
 
@@ -73,6 +74,7 @@ def test_special_orders_view_opens_with_empty_db(qapp, db):
     assert view.combine_ids_input.placeholderText()
 
 
+@pytest.mark.release
 def test_special_orders_invention_needs_preview(qapp, db, monkeypatch):
     """Compute-preview path: a T2 special order fills the Invention Needs tab
     without persisting a second invention workflow."""

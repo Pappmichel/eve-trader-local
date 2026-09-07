@@ -37,3 +37,6 @@ include = ["eve_trader_local*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "release: frozen Production/Special-Order semantic-freeze regression (see PRODUCTION_SEMANTICS.md)",
+]
