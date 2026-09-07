@@ -309,6 +309,18 @@ class IndustryJobRow:
 
 
 @dataclass
+class JobSlotCapacityRow:
+    """Used job slots plus optional *manual* totals (Phase E.5). total_slots
+    and free_slots are None until the operator sets a total for that
+    character. Not derived from ESI skills."""
+    character_name: str
+    job_type: str
+    used_slots: int
+    total_slots: Optional[int] = None
+    free_slots: Optional[int] = None
+
+
+@dataclass
 class CharacterSlotRow:
     """Per-character, per-slot-category *usage* only - a deliberate reduction
     from the parent's version (see jobs.character_slot_overview's own

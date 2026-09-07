@@ -49,9 +49,9 @@ estimator, a live system-cost-index display, a manual Build/Buy override
 (force an item to always build or always buy, wired into every planner), an
 in-place stock-target editor, an owned-blueprint browser (every BPO/BPC,
 aggregated by ME/TE/runs), and a current-industry-jobs list with a
-per-character job-slot usage summary (usage counts only — no total/free slot
-count, since that needs a live ESI character-skills pull this repo
-deliberately doesn't request; see SYNC.md).
+per-character job-slot usage summary (usage counts from synced jobs, plus
+optional manual totals/free via `set-character-job-slots` — still no ESI
+character-skills pull; see `PHASE_E_EXPANSION.md` E.5).
 
 The **Doctrine** tool (fitted-ship contract/stockpile tracking against EFT
 fittings) is fully ported and runnable from the CLI too: paste-and-store EFT

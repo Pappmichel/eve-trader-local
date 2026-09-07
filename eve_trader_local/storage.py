@@ -610,6 +610,15 @@ CREATE TABLE IF NOT EXISTS special_order_events (
 );
 CREATE INDEX IF NOT EXISTS idx_special_order_events_order ON special_order_events (order_id);
 
+-- Phase E.5: optional manual industry-job-slot totals (this repo does not
+-- pull esi-skills). Used counts still come from synced industry jobs.
+CREATE TABLE IF NOT EXISTS character_job_slot_totals (
+    character_name TEXT PRIMARY KEY,
+    manufacturing  INTEGER NOT NULL,
+    reaction       INTEGER NOT NULL,
+    science        INTEGER NOT NULL
+);
+
 -- GitHub issue #40: purchase cost + included run count for a blueprint *copy*
 -- that must be bought outright (never owned as a BPO, not inventable) - e.g. a
 -- faction/officer BPC only obtainable from an LP store or the market. type_id
@@ -2902,6 +2911,40 @@ def list_all_special_order_item_rows(path: Optional[Path] = None) -> list[tuple[
             "SELECT order_id, type_id, type_name, quantity FROM special_order_items "
             "ORDER BY order_id, type_name"
         ).fetchall()
+
+
+def upsert_character_job_slot_totals(character_name: str, manufacturing: int, reaction: int,
+                                     science: int, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "INSERT INTO character_job_slot_totals "
+            "(character_name, manufacturing, reaction, science) VALUES (?,?,?,?) "
+            "ON CONFLICT(character_name) DO UPDATE SET "
+            "manufacturing=excluded.manufacturing, reaction=excluded.reaction, "
+            "science=excluded.science",
+            (character_name, manufacturing, reaction, science),
+        )
+
+
+def delete_character_job_slot_totals(character_name: str, path: Optional[Path] = None) -> None:
+    with connect(path) as conn:
+        conn.execute(
+            "DELETE FROM character_job_slot_totals WHERE character_name = ?",
+            (character_name,),
+        )
+
+
+def load_character_job_slot_totals(path: Optional[Path] = None) -> dict[str, dict[str, int]]:
+    """{character_name: {manufacturing, reaction, science}}."""
+    with connect(path) as conn:
+        rows = conn.execute(
+            "SELECT character_name, manufacturing, reaction, science "
+            "FROM character_job_slot_totals ORDER BY character_name"
+        ).fetchall()
+    return {
+        r[0]: {"manufacturing": r[1], "reaction": r[2], "science": r[3]}
+        for r in rows
+    }
 
 
 # -------------------------------------------------------------------- Doctrine
