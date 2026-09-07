@@ -352,6 +352,117 @@ def test_do_set_special_order_item_unknown_order_raises(order_sde):
         actions.do_set_special_order_item("nonexistent", "Finished Widget A", 1.0)
 
 
+def test_do_remove_special_order_item_removes_when_others_remain(order_sde):
+    order_id = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+        {"type_id": COMPONENT, "quantity": 7.0},
+    ], note="keep", net_against_stock=True)["order_id"]
+    result = actions.do_remove_special_order_item(order_id, "Finished Widget B")
+    by_id = {row["type_id"]: row["quantity"] for row in result["items"]}
+    assert by_id == {FINISHED_A: 10.0, COMPONENT: 7.0}
+    assert result["order"].item_count == 2
+    assert result["order"].note == "keep"
+    assert result["order"].net_against_stock is True
+
+
+def test_do_remove_special_order_item_unknown_order_does_not_mutate(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    before = storage.list_special_order_items(order_id)
+    with pytest.raises(ActionError, match="not found"):
+        actions.do_remove_special_order_item("missing", "Finished Widget A")
+    assert storage.list_special_order_items(order_id) == before
+
+
+def test_do_remove_special_order_item_unknown_item_does_not_mutate(order_sde):
+    order_id = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+    ])["order_id"]
+    before = storage.list_special_order_items(order_id)
+    with pytest.raises(ActionError, match="has no item"):
+        actions.do_remove_special_order_item(order_id, "Widget Component")
+    assert storage.list_special_order_items(order_id) == before
+
+
+def test_do_remove_special_order_item_twice_errors_on_second_call(order_sde):
+    order_id = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+    ])["order_id"]
+    actions.do_remove_special_order_item(order_id, "Finished Widget A")
+    with pytest.raises(ActionError, match="has no item"):
+        actions.do_remove_special_order_item(order_id, "Finished Widget A")
+    remaining = storage.list_special_order_items(order_id)
+    assert [(t, q) for t, _n, q in remaining] == [(FINISHED_B, 4.0)]
+
+
+def test_do_remove_special_order_item_refuses_last_item(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    with pytest.raises(ActionError, match="at least one item"):
+        actions.do_remove_special_order_item(order_id, "Finished Widget A")
+    remaining = storage.list_special_order_items(order_id)
+    assert [(t, q) for t, _n, q in remaining] == [(FINISHED_A, 10.0)]
+
+
+def test_do_remove_special_order_item_does_not_touch_other_orders(order_sde):
+    first = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+    ])["order_id"]
+    second = actions.do_create_special_order(
+        [{"type_id": FINISHED_B, "quantity": 8.0}])["order_id"]
+    actions.do_remove_special_order_item(first, "Finished Widget B")
+    assert [(t, q) for t, _n, q in storage.list_special_order_items(second)] == [
+        (FINISHED_B, 8.0)]
+
+
+def test_do_remove_special_order_item_does_not_invoke_the_planner(order_sde, monkeypatch):
+    calls = []
+    monkeypatch.setattr(engine, "plan_special_order", lambda *a, **k: calls.append((a, k)) or {})
+    order_id = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+    ])["order_id"]
+    calls.clear()
+    actions.do_remove_special_order_item(order_id, "Finished Widget B")
+    assert calls == []
+
+
+def test_set_remove_compute_uses_current_items(order_sde):
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    actions.do_set_special_order_item(order_id, "Finished Widget B", 4.0)
+    first_plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+    assert {row.type_id for row in first_plan["line_items"]} == {FINISHED_A, FINISHED_B}
+    actions.do_remove_special_order_item(order_id, "Finished Widget B")
+    second_plan = actions.do_compute_special_order(order_id, cfg=_cfg())
+    assert {row.type_id for row in second_plan["line_items"]} == {FINISHED_A}
+    assert FINISHED_B not in _runs(second_plan)
+
+
+def test_combined_preview_after_remove_uses_current_state(order_sde):
+    first = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+    ])["order_id"]
+    second = actions.do_create_special_order([
+        {"type_id": FINISHED_B, "quantity": 6.0},
+        {"type_id": COMPONENT, "quantity": 2.0},
+    ])["order_id"]
+    before_second = storage.list_special_order_items(second)
+    actions.do_remove_special_order_item(first, "Finished Widget B")
+    plan = actions.do_compute_combined_special_orders(
+        [first, second], net_against_stock=False, cfg=_cfg())
+    by_type = {row.type_id: row.quantity for row in plan["line_items"]}
+    assert by_type == {FINISHED_A: 10.0, FINISHED_B: 6.0, COMPONENT: 2.0}
+    assert storage.list_special_order_items(second) == before_second
+    assert [(t, q) for t, _n, q in storage.list_special_order_items(first)] == [
+        (FINISHED_A, 10.0)]
+
+
 # ------------------------------------------------------------------- combine
 
 
@@ -572,6 +683,39 @@ def test_cli_set_special_order_item_unknown_type_errors(order_sde, capsys):
     assert main(["set-special-order-item", order_id, "Not A Real Item", "1"]) == 1
     err = capsys.readouterr().err
     assert "Not A Real Item" in err or "No type found" in err or "No exact match" in err
+
+
+def test_cli_remove_special_order_item(order_sde, capsys):
+    from eve_trader_local.cli import main
+
+    order_id = actions.do_create_special_order([
+        {"type_id": FINISHED_A, "quantity": 10.0},
+        {"type_id": FINISHED_B, "quantity": 4.0},
+    ])["order_id"]
+    assert main(["remove-special-order-item", order_id, "Finished Widget B"]) == 0
+    out = capsys.readouterr().out
+    assert "Finished Widget A" in out
+    assert "Finished Widget B" not in out
+    items = actions.do_get_special_order(order_id)["items"]
+    assert [(row["type_id"], row["quantity"]) for row in items] == [(FINISHED_A, 10.0)]
+
+
+def test_cli_remove_special_order_item_unknown_order_errors(order_sde, capsys):
+    from eve_trader_local.cli import main
+
+    assert main(["remove-special-order-item", "missing", "Finished Widget A"]) == 1
+    assert "not found" in capsys.readouterr().err
+
+
+def test_cli_remove_special_order_item_unknown_item_errors(order_sde, capsys):
+    from eve_trader_local.cli import main
+
+    order_id = actions.do_create_special_order(
+        [{"type_id": FINISHED_A, "quantity": 10.0},
+         {"type_id": FINISHED_B, "quantity": 4.0}])["order_id"]
+    assert main(["remove-special-order-item", order_id, "Widget Component"]) == 1
+    assert "has no item" in capsys.readouterr().err
+    assert len(actions.do_get_special_order(order_id)["items"]) == 2
 
 
 def test_cli_combine_uses_same_planner_as_actions(order_sde):

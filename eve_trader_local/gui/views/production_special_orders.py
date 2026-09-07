@@ -1,6 +1,6 @@
 """Production's Special Orders tab: one-off build orders, tracked separately
 from the permanent stock_targets list - `create/list/update/remove/set-item/
-compute/compute-combined-special-order`, all grouped into one tab since they
+remove-item/compute/compute-combined-special-order`, all grouped into one tab since they
 all operate on the same underlying list (matching trading_shortlist.py's own
 "several CLI commands, one screen" precedent).
 
@@ -182,6 +182,9 @@ class SpecialOrdersView(BaseView):
         set_item_btn = QPushButton(icons.icon("save"), "Set Item")
         set_item_btn.clicked.connect(self._set_item)
         edit.addWidget(set_item_btn)
+        remove_item_btn = QPushButton(icons.icon("remove"), "Remove Item")
+        remove_item_btn.clicked.connect(self._remove_item)
+        edit.addWidget(remove_item_btn)
         edit.addStretch(1)
         outer.addLayout(edit)
         return box
@@ -329,6 +332,26 @@ class SpecialOrdersView(BaseView):
             self._on_item_set, busy_message="Updating special-order item...")
 
     def _on_item_set(self, result: dict) -> None:
+        self._load_orders()
+        populate(self.line_items_table, [_line_item_row_from_dict(r) for r in result["items"]])
+        self.tabs.setCurrentWidget(self.line_items_table)
+        names = ", ".join(f"{r['type_name']} x{r['quantity']:,.0f}" for r in result["items"])
+        self.show_info(f"Special order {result['order'].order_id} items: {names}.")
+
+    def _remove_item(self) -> None:
+        order_id = self.order_id_input.text().strip()
+        if not order_id:
+            self.show_error("Select or enter an order id first.")
+            return
+        item = self.edit_item_input.text().strip()
+        if not item:
+            self.show_error("Enter an item (type_id or name) first.")
+            return
+        self.run_action(
+            functools.partial(production_actions.do_remove_special_order_item, order_id, item),
+            self._on_item_removed, busy_message="Removing special-order item...")
+
+    def _on_item_removed(self, result: dict) -> None:
         self._load_orders()
         populate(self.line_items_table, [_line_item_row_from_dict(r) for r in result["items"]])
         self.tabs.setCurrentWidget(self.line_items_table)

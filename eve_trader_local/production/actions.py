@@ -660,8 +660,8 @@ def do_remove_manual_blueprint_copy_cost(type_id_or_name: str) -> dict:
 
 
 # ------------------------------------------------------------- Special Orders
-# Frozen semantics (B1, combined preview, pooling, purity, upsert, invention
-# single-source, CLI/GUI shared path): PRODUCTION_SEMANTICS.md.
+# Frozen semantics (B1, combined preview, pooling, purity, upsert, remove,
+# invention single-source, CLI/GUI shared path): PRODUCTION_SEMANTICS.md.
 # See engine.plan_special_order's own docstring for the two deliberate
 # differences from plan_production (no margin gate; net_against_stock
 # replacing stock-target-driven netting, never netting top-level qty).
@@ -748,6 +748,28 @@ def do_set_special_order_item(order_id: str, type_id_or_name: str, quantity: flo
         raise ActionError(f"Quantity for '{type_id_or_name}' must be positive.")
     type_id, type_name = _resolve_type(type_id_or_name)
     storage.upsert_special_order_item(order_id, type_id, type_name, quantity)
+    return do_get_special_order(order_id)
+
+
+def do_remove_special_order_item(order_id: str, type_id_or_name: str) -> dict:
+    """Removes one line item from an existing order. Resolves name or
+    numeric type_id the same way do_set_special_order_item does. Unknown
+    orders and items that are not on the order are errors (no silent
+    no-op). Refuses to delete the last remaining item — same "needs at
+    least one item" rule do_create_special_order enforces, kept for the
+    lifetime of the order; remove the whole order instead. Subsequent
+    compute/combine reads this stored state — nothing is planned here."""
+    if storage.get_special_order(order_id) is None:
+        raise ActionError(f"Special order {order_id} not found.")
+    type_id, type_name = _resolve_type(type_id_or_name)
+    items = storage.list_special_order_items(order_id)
+    if not any(t == type_id for t, _n, _q in items):
+        raise ActionError(f"Special order {order_id} has no item '{type_name}'.")
+    if len(items) <= 1:
+        raise ActionError(
+            "A special order needs at least one item - remove the whole order instead."
+        )
+    storage.delete_special_order_item(order_id, type_id)
     return do_get_special_order(order_id)
 
 

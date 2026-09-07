@@ -36,6 +36,7 @@
     eve-trader-local create-special-order <item:qty> [<item:qty> ...] [--note] [--net-against-stock]
     eve-trader-local list-special-orders / remove-special-order <order_id>
     eve-trader-local set-special-order-item <order_id> <item> <quantity>
+    eve-trader-local remove-special-order-item <order_id> <item>
     eve-trader-local compute-special-order <order_id>
     eve-trader-local compute-combined-special-orders <order_id> [<order_id> ...] [--net-against-stock]
     eve-trader-local pipeline [--rebuild-universe]
@@ -772,6 +773,14 @@ def cmd_set_special_order_item(args: argparse.Namespace) -> None:
         print(f"  {item['type_name']:<40} {item['quantity']:>10,.0f}")
 
 
+def cmd_remove_special_order_item(args: argparse.Namespace) -> None:
+    result = production_actions.do_remove_special_order_item(args.order_id, args.item)
+    order = result["order"]
+    print(f"Special order {order.order_id} now has {order.item_count} item(s):")
+    for item in result["items"]:
+        print(f"  {item['type_name']:<40} {item['quantity']:>10,.0f}")
+
+
 def _print_special_order_plan(plan: dict) -> None:
     print("Line Items:")
     for row in plan["line_items"]:
@@ -1426,6 +1435,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_set_item.add_argument("item", help="type_id or exact item name")
     p_set_item.add_argument("quantity", type=float)
     p_set_item.set_defaults(func=cmd_set_special_order_item)
+
+    p_remove_item = sub.add_parser(
+        "remove-special-order-item",
+        help="remove one line item from an existing special order",
+    )
+    p_remove_item.add_argument("order_id")
+    p_remove_item.add_argument("item", help="type_id or exact item name")
+    p_remove_item.set_defaults(func=cmd_remove_special_order_item)
 
     p_compute_order = sub.add_parser(
         "compute-special-order",

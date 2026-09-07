@@ -164,7 +164,7 @@ What exists:
   `list-category-locations`, `set-manual-stock`, `remove-manual-stock`,
   `list-manual-stock`, `create-special-order`, `list-special-orders`,
   `update-special-order`, `remove-special-order`, `set-special-order-item`,
-  `compute-special-order`, `compute-combined-special-orders`,
+  `remove-special-order-item`, `compute-special-order`, `compute-combined-special-orders`,
   `pipeline`,
   `parse-fitting`, `create-doctrine`, `list-doctrines`, `add-fitting`,
   `list-fittings`, `sync-doctrine`, `validate-contracts`, `doctrine-status`,
@@ -451,6 +451,7 @@ eve-trader-local list-special-orders                     # show every special or
 eve-trader-local update-special-order <order_id> [--status open|done] [--note]
 eve-trader-local remove-special-order <order_id>         # delete a special order
 eve-trader-local set-special-order-item <order_id> <item> <quantity>  # upsert one line item (no plan)
+eve-trader-local remove-special-order-item <order_id> <item>          # delete one line item (no plan)
 eve-trader-local compute-special-order <order_id>        # buy/build plan for one order's line items
 eve-trader-local compute-combined-special-orders <order_id> [<order_id> ...] [--net-against-stock]
 eve-trader-local pipeline                   # the daily workflow: refresh+prune, then reconcile

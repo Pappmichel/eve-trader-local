@@ -16,6 +16,7 @@ CLI / GUI / Special Orders
 production/actions.py
         ↓
 do_set_special_order_item          (upsert only — no plan)
+do_remove_special_order_item       (delete one line — no plan)
 do_compute_special_order           (one stored order)
 do_compute_combined_special_orders (unsaved pooled preview)
         ↓
@@ -88,6 +89,14 @@ A stored per-order flag still exists and is used **only** by
 - quantity `<= 0` → error
 - does not compute a plan; the next Compute / Combined uses the stored items
 
+`do_remove_special_order_item` is the matching delete:
+
+- requires an existing order
+- unknown type or an item not on that order → error (no silent no-op)
+- refuses to delete the last remaining item (remove the whole order instead)
+- does not change other items, order flags, or other orders
+- does not compute a plan
+
 ### SF-7 — Invention single source of truth
 
 `_invention_need_row` is the only place that constructs an `InventionNeedRow`
@@ -120,7 +129,6 @@ decision.
 These are intentionally out of the frozen Special-Order core. Do not
 implement them as a side effect of touching this path:
 
-- `do_remove_special_order_item` (not ported)
 - persisting a combined preview
 - invention logistics on special orders (stays on `plan_production`)
 - auto-recompute after Set Item
@@ -143,7 +151,7 @@ pytest -m release
 | SF-2 Combined = one run | `test_combined_preview_is_a_single_planner_run`, `test_combine_does_not_reschedule_planner_per_order`, `test_single_and_combined_compute_share_plan_special_order` |
 | SF-3 Pooling | `test_scenario_a_*`, `test_scenario_b_*`, `test_scenario_c_*`, `test_combine_pools_shared_top_level_items`, `test_combined_special_order_invention_does_not_duplicate_products` |
 | Shared components | `test_scenario_b_shared_component_stock_claimed_once`, `test_combined_preview_is_not_the_sum_of_isolated_previews` |
-| SF-6 Upsert | `test_do_set_special_order_item_*`, `test_repeated_upsert_does_not_create_silent_duplicates`, `test_set_item_does_not_invoke_the_planner` |
+| SF-6 Upsert / Remove | `test_do_set_special_order_item_*`, `test_do_remove_special_order_item_*`, `test_repeated_upsert_does_not_create_silent_duplicates`, `test_set_item_does_not_invoke_the_planner` |
 | SF-4 Purity / SF-9 repeats | `test_preview_purity_*`, `test_repeated_compute_and_combined_are_stable`, `test_combine_does_not_persist_or_mutate_source_orders` |
 | SF-5 Isolation | `test_net_against_stock_preview_is_isolated_and_repeatable` |
 | Determinism | `test_three_order_permutation_is_semantically_identical`, `test_combine_is_deterministic` |
