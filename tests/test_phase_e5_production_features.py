@@ -9,6 +9,7 @@ from eve_trader_local import storage
 from eve_trader_local.errors import ActionError
 from eve_trader_local.production import actions, engine, jobs
 from eve_trader_local.production.config import PRODUCTION_CONFIG, ProductionConfig
+from eve_trader_local.production.constants import SCC_SURCHARGE_RATE
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -40,7 +41,7 @@ def test_used_only_overview_unchanged_without_totals(db):
     rows = jobs.character_slot_overview()
     assert len(rows) == 1
     assert rows[0].used_slots == 1
-    assert not hasattr(rows[0], "total_slots") or True  # CharacterSlotRow has no totals
+    assert not hasattr(rows[0], "total_slots")  # CharacterSlotRow has no totals field at all
     cap = actions.do_character_slot_capacity_overview()["rows"]
     assert len(cap) == 1
     assert cap[0].total_slots is None
@@ -91,10 +92,14 @@ def test_cost_index_override_unknown_kind(db):
 
 
 def test_cost_index_override_is_used_by_existing_engine_field(db):
-    """E.5 only writes the config field; _job_cost_rate already honors it."""
+    """E.5 only writes the config field; _job_cost_rate already honors it - prove
+    it by actually computing a job-cost rate with the override set and confirming
+    it wins over the flat ACTIVITY_MODS fallback, not just that the field exists."""
     cfg = ProductionConfig(manufacturing_cost_index_override=0.5)
-    assert cfg.manufacturing_cost_index_override == 0.5
-    assert engine._job_cost_rate.__name__ == "_job_cost_rate"
+
+    rate = engine._job_cost_rate("Tech I", FINISHED, cfg, {})
+
+    assert rate == pytest.approx(0.5 + cfg.facility_tax_rate + SCC_SURCHARGE_RATE)
 
 
 def test_cli_slot_totals_and_cost_index(db, capsys):

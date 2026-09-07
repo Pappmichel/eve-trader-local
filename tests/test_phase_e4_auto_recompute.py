@@ -109,7 +109,9 @@ def test_gui_auto_recompute_after_set(qapp, order_sde):
     while view._threads and time.monotonic() < deadline:
         qapp.processEvents()
         time.sleep(0.01)
-    assert view.buy_table.rowCount() >= 0
+    assert view.line_items_table.rowCount() == 1
+    assert view.line_items_table.item(0, 0).text() == "Finished Widget A"
+    assert view.line_items_table.item(0, 1).text() == "8"
     assert "line item" in view.status_label.text()
     assert actions.do_get_special_order(order_id)["items"][0]["quantity"] == 8.0
 
