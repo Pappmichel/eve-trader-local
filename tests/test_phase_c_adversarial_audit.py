@@ -639,15 +639,23 @@ def test_partial_tree_still_buys_the_mineral_leaf(order_sde):
     assert FINISHED_A not in _runs(plan)
 
 
-def test_missing_market_prices_still_plan(order_sde, monkeypatch):
+def test_missing_market_prices_fall_back_to_unpriced_buy(order_sde, monkeypatch):
+    """Defined fallback in `_buy_or_build_decision`: Build only when a
+    modeled build_cost exists. With no market quotes at all, the BOM cannot
+    be costed, so the ordered item is bought unpriced rather than expanded.
+    That is not a silent drop — the line item remains and quantity is kept."""
     monkeypatch.setattr(engine.pricing, "home_prices", lambda type_ids, cfg=None, client=None: {})
     monkeypatch.setattr(engine.pricing, "jita_prices", lambda type_ids, client=None, trading_cfg=None: {})
     order_id = actions.do_create_special_order(
         [{"type_id": FINISHED_A, "quantity": 10.0}])["order_id"]
+    before = _persistent_state()
     plan = actions.do_compute_special_order(order_id, cfg=_cfg())
-    assert _runs(plan)[FINISHED_A] == 10
-    assert _runs(plan)[COMPONENT] == 18
+    assert _lines(plan) == {FINISHED_A: 10.0}
+    assert plan["build_list"] == []
+    assert plan["invention_list"] == []
+    assert _buy_qty(plan) == {FINISHED_A: 10.0}
     assert all(row.unit_price is None for row in plan["buy_list"])
+    assert _persistent_state() == before
 
 
 # ============================================================== Invention combined
