@@ -1,13 +1,21 @@
 """Trading's Candidate Discovery tab: the "find new things to import" setup
-workflow. `do_build_universe`/`do_find_new_candidates` (both live ESI/
-Goonmetrics calls) no longer have buttons here - `do_find_new_candidates`
-runs from App > Update Data...'s Market Prices scope now (see
-esi_update.py's own docstring), and the universe rebuild
-(`do_build_universe`/`do_build_focused`) stays a rare, heavy, CLI-only step
-(`pipeline --rebuild-universe`/`build-universe`) that the routine Market
-Prices sync deliberately doesn't repeat every time - see `actions.
-do_pipeline`'s own docstring. `do_add_to_shortlist` (a purely local promote-
-from-storage step, no network) stays a button here.
+workflow. `do_build_universe`/`do_build_focused`/`do_find_new_candidates`
+(all live ESI/Goonmetrics calls) have no buttons here - they only run via
+App > Update Data..., as its own Candidate Universe and Market Prices scopes
+respectively (see esi_update.py's own docstring for why the universe rebuild
+gets its own separate, much-longer-interval scope rather than being folded
+into the routine Market Prices sync). `do_add_to_shortlist` (a purely local
+promote-from-storage step, no network) stays a button here - it's the one
+step in this whole pipeline that isn't itself an ESI/Goonmetrics call.
+
+A brand new install has nothing in any of the three tables below until App >
+Update Data...'s Candidate Universe scope has run at least once (it's always
+due on a fresh install regardless of its own long default interval - see
+esi_update.is_due) followed by its Market Prices scope, which is what
+actually populates "New Candidates" - `do_add_to_shortlist` (this tab's own
+"Add Recommended To Shortlist" button) raises "No candidate search results
+yet" until both have, and Trading's own Shortlist tab stays "Shortlist is
+empty" until this button has then been clicked at least once.
 
 Three sub-tabs, each a cheap local read (`storage.load_candidate_universe`/
 `storage.latest_new_candidates`, no network) loaded on tab-open so the view

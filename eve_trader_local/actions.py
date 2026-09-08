@@ -213,7 +213,8 @@ def do_build_universe(cfg: TradingConfig = TRADING_CONFIG) -> dict:
 def do_build_focused(cfg: TradingConfig = TRADING_CONFIG) -> dict:
     universe = storage.load_candidate_universe("candidate_universe")
     if not universe:
-        raise ActionError("Candidate universe is empty - run 'build-universe' first.")
+        raise ActionError("Candidate universe is empty - run 'build-universe' (CLI) or "
+                          "App > Update Data...'s Candidate Universe scope (GUI) first.")
     focused = candidate_discovery.build_focused_candidate_universe(universe, cfg)
     storage.save_candidate_universe(focused, now_ts(), table="focused_candidates")
     return {"count": len(focused)}
@@ -227,7 +228,8 @@ def do_find_new_candidates(safe: bool = True, cfg: TradingConfig = TRADING_CONFI
     already computed instead of losing all of it."""
     candidates = storage.load_candidate_universe("focused_candidates")
     if not candidates:
-        raise ActionError("Focused candidates is empty - run 'build-universe' first.")
+        raise ActionError("Focused candidates is empty - run 'build-universe' (CLI) or "
+                          "App > Update Data...'s Candidate Universe scope (GUI) first.")
     existing_ids = {i.item_id for i in storage.load_shortlist() if i.active}
     gm = GoonmetricsClient(cfg)
     run_ts = now_ts()
@@ -260,7 +262,8 @@ def do_add_to_shortlist() -> dict:
     silently re-introduce stale labels (441 of 1305 shortlist items had
     drifted this way in the parent repo)."""
     if not storage.latest_new_candidates():
-        raise ActionError("No candidate search results yet - run 'find-candidates' first.")
+        raise ActionError("No candidate search results yet - run 'find-candidates' (CLI) or "
+                          "App > Update Data...'s Market Prices scope (GUI) first.")
     # A run that recommended nothing is a normal outcome (added: 0), not an
     # error - only a complete absence of any search run is.
     recommended = storage.latest_new_candidates(only_recommended=True)
@@ -460,7 +463,10 @@ def _compute_shortlist_rows(cfg: TradingConfig = TRADING_CONFIG
     do_refresh_shortlist and do_refresh_and_prune_candidates build on this."""
     items = storage.load_shortlist()
     if not items:
-        raise ActionError("Shortlist is empty - run 'add-to-shortlist' first.")
+        raise ActionError("Shortlist is empty - run 'add-to-shortlist' (CLI) or use Trading > "
+                          "Candidate Discovery's 'Add Recommended To Shortlist' button (GUI) first "
+                          "(after App > Update Data...'s Candidate Universe and Market Prices scopes "
+                          "have both run at least once).")
     priced_item_ids = [i.item_id for i in items if i.item_id]
     own_remaining = _load_own_sell_orders()
     buyer_already_covered_ids = _load_buyer_already_covered()

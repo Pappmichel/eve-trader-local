@@ -1,4 +1,4 @@
-"""Tests for esi_update.py - the 9-scope-group sync registry behind the
+"""Tests for esi_update.py - the 10-scope-group sync registry behind the
 "Update Data" dialog. Each SCOPES entry's `run` callable is swapped out via
 monkeypatch (same "replace the real bundle function" pattern the sync-bundle
 tests in test_actions.py/test_production_esi_sync.py/etc. already use for
@@ -20,10 +20,20 @@ def _scope(key: str) -> esi_update.UpdateScope:
 
 
 # --------------------------------------------------------------------- SCOPES
-def test_scopes_match_the_nine_scope_groups():
+def test_scopes_match_the_ten_scope_groups():
     assert {s.key for s in esi_update.SCOPES} == {
         "market_orders", "wallet", "assets", "industry_jobs", "blueprints",
-        "contracts", "skills", "market_prices", "cost_indices"}
+        "contracts", "skills", "market_prices", "cost_indices", "candidate_universe"}
+
+
+def test_sync_candidate_universe_builds_both_universe_and_focused(db, monkeypatch):
+    """The scope a GUI-only user needs to bootstrap Trading's shortlist
+    pipeline (see the module docstring's own "Candidate Universe" paragraph)
+    - must run the same two steps the CLI's build-universe command does."""
+    monkeypatch.setattr(esi_update.actions, "do_build_universe", lambda: {"count": 3})
+    monkeypatch.setattr(esi_update.actions, "do_build_focused", lambda: {"count": 2})
+    assert esi_update._sync_candidate_universe() == {
+        "universe": {"count": 3}, "focused": {"count": 2}}
 
 
 # ------------------------------------------------------------------ intervals
@@ -118,6 +128,31 @@ def test_run_selected_isolates_an_unexpected_exception(db, monkeypatch):
 def test_run_selected_rejects_an_unknown_scope(db):
     results = esi_update.run_selected(["not-a-real-scope"])
     assert "error" in results["not-a-real-scope"]
+
+
+def test_run_selected_dedupes_assets_jobs_blueprints_within_one_run(db, monkeypatch):
+    """assets/industry_jobs/blueprints all back onto the same expensive
+    Production ESI pass (see _cached_sync_assets_jobs_blueprints's own
+    comment) - selecting all three together must trigger it once, not once
+    per scope, and a later run_selected() call must not reuse a stale
+    result left over from an earlier one."""
+    calls = []
+
+    def fake_sync(oauth_cfg=None):
+        calls.append(1)
+        return {"ok": True}
+
+    monkeypatch.setattr(esi_update.production_actions, "_sync_assets_jobs_blueprints", fake_sync)
+    # _sync_assets also touches trading/doctrine - stub those out so this run
+    # only exercises the dedup behavior, not unrelated real ESI calls.
+    monkeypatch.setattr(esi_update.actions, "_cache_buyer_already_covered", lambda: {})
+    monkeypatch.setattr(esi_update.doctrine_esi_sync, "sync_assets", lambda: {})
+
+    esi_update.run_selected(["assets", "industry_jobs", "blueprints"], force=True)
+    assert len(calls) == 1
+
+    esi_update.run_selected(["industry_jobs"], force=True)
+    assert len(calls) == 2
 
 
 def test_run_selected_skips_a_scope_that_is_not_due_yet(db, monkeypatch):

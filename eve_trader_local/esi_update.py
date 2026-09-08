@@ -4,7 +4,7 @@ app, and the single gateway the "Update Data" dialog
 
 Every network call this app makes against ESI or Goonmetrics for game data
 (market orders, wallet, assets, contracts, industry jobs, skills, market
-prices, ...) now happens *only* inside one of the nine scope-group bundle
+prices, ...) now happens *only* inside one of the ten scope-group bundle
 functions wired up in `SCOPES` below. Every other `do_*`/view in the app
 reads back whatever the relevant bundle last cached (`storage.
 order_book_cache`, `storage.result_cache`, or each tool's own snapshot
@@ -40,7 +40,17 @@ Two consequences worth knowing about:
   pre-cache a truly arbitrary future lookup). Goonmetrics-sourced market data
   (candidate discovery, region price history) isn't an ESI scope at all, but
   lives under the "Market Prices" group too, since it's the same kind of
-  external market-data fetch."""
+  external market-data fetch.
+
+"Candidate Universe" is the odd one out: a very long default interval (see
+its own comment below) rather than a fast-moving one, since it rebuilds
+Trading's whole SDE/ESI-derived candidate list from scratch - a heavy, rarely
+-needed operation (new expansion items, market-group reshuffles), not
+something "Market Prices" should silently repeat on every routine sync.
+Distinct from "Market Prices"' own `trading_candidates` step, which just
+re-scores the *existing* focused-candidate list against current prices - it
+needs this scope to have populated that list at least once, but doesn't
+rebuild it itself."""
 from __future__ import annotations
 
 import datetime as dt
@@ -107,6 +117,25 @@ def _sync_wallet() -> dict:
     return result
 
 
+# _sync_assets/_sync_industry_jobs/_sync_blueprints all need Production's one
+# combined assets+blueprints+jobs pass (see _sync_assets_jobs_blueprints's own
+# docstring for why ESI has no cheaper per-scope fetch). Selecting more than
+# one of the three in the same "Update Data" run - a common case, since they
+# tend to fall due around the same time - used to re-run that whole
+# multi-character ESI pass once per scope selected (e.g. 3x when all three
+# are checked). _call_cache memoizes it per run_selected() call (cleared at
+# that function's start/end below) so it still runs exactly once no matter
+# how many of the three are selected together; unrelated to storage-level
+# caching, and not meant to survive past one run_selected() call.
+_call_cache: dict[str, dict] = {}
+
+
+def _cached_sync_assets_jobs_blueprints() -> dict:
+    if "assets_jobs_blueprints" not in _call_cache:
+        _call_cache["assets_jobs_blueprints"] = production_actions._sync_assets_jobs_blueprints()
+    return _call_cache["assets_jobs_blueprints"]
+
+
 def _sync_assets() -> dict:
     """Trading's buyer-side "already covered" check, plus Production's and
     Doctrine's own character/corp asset syncs - three independent token
@@ -117,7 +146,7 @@ def _sync_assets() -> dict:
     except ActionError as e:
         result["trading_buyer_covered"] = {"error": str(e)}
     try:
-        result["production"] = production_actions._sync_assets_jobs_blueprints()
+        result["production"] = _cached_sync_assets_jobs_blueprints()
     except ActionError as e:
         result["production"] = {"error": str(e)}
     try:
@@ -128,11 +157,11 @@ def _sync_assets() -> dict:
 
 
 def _sync_industry_jobs() -> dict:
-    return production_actions._sync_assets_jobs_blueprints()
+    return _cached_sync_assets_jobs_blueprints()
 
 
 def _sync_blueprints() -> dict:
-    return production_actions._sync_assets_jobs_blueprints()
+    return _cached_sync_assets_jobs_blueprints()
 
 
 def _sync_contracts() -> dict:
@@ -180,6 +209,21 @@ def _sync_cost_indices() -> dict:
     return production_actions._sync_cost_indices()
 
 
+def _sync_candidate_universe() -> dict:
+    """Trading's SDE/ESI-derived candidate list and its focused subset - the
+    one-time (well, rare) bootstrap step `do_add_to_shortlist`/`do_find_new_
+    candidates` both need populated at least once before they have anything
+    to work with. Used to be CLI-only (`eve-trader-local build-universe`);
+    now also reachable here so a GUI-only user isn't stuck needing the CLI
+    just to get Trading's shortlist off the ground. Still exactly what the
+    CLI command runs (`cli.py`'s own `cmd_build_universe`): build_universe
+    then build_focused, no per-tool try/except split since it's one tool's
+    one bundle, not several tools sharing a scope."""
+    universe = actions.do_build_universe()
+    focused = actions.do_build_focused()
+    return {"universe": universe, "focused": focused}
+
+
 # Interval defaults: market-driven scopes (Market Orders, Market Prices) get
 # a short window since prices/orders move fast; Wallet is checked about as
 # often for the same reason (a balance/recent-transaction view a user
@@ -187,7 +231,11 @@ def _sync_cost_indices() -> dict:
 # Industry Jobs, Contracts) get a medium window; Blueprints and Skills get
 # the longest since they change the least often. Any of these is
 # overridable per scope via set_interval_seconds (Settings), not a fixed
-# rule.
+# rule. Candidate Universe is the outlier at 30 days - see
+# _sync_candidate_universe's own docstring for why it's rare/heavy rather
+# than routine; "never synced yet" is still always due (is_due's own rule),
+# so a fresh install's first "Update Data" run picks it up regardless of
+# the long interval.
 SCOPES: list[UpdateScope] = [
     UpdateScope("market_orders", "Market Orders", _sync_market_orders, 300),
     UpdateScope("wallet", "Wallet", _sync_wallet, 300),
@@ -198,6 +246,7 @@ SCOPES: list[UpdateScope] = [
     UpdateScope("skills", "Skills", _sync_skills, 3600),
     UpdateScope("market_prices", "Market Prices", _sync_market_prices, 300),
     UpdateScope("cost_indices", "Cost Indices / Adjusted Prices", _sync_cost_indices, 1800),
+    UpdateScope("candidate_universe", "Candidate Universe (Trading)", _sync_candidate_universe, 30 * 24 * 3600),
 ]
 
 _SCOPES_BY_KEY = {s.key: s for s in SCOPES}
@@ -321,22 +370,29 @@ def run_selected(keys: list[str], force: bool = False) -> dict[str, dict]:
     spans several tools (e.g. Assets) isolates each tool's own failure
     internally, so it still counts as "synced" even if one of several
     tools inside it failed; a single-tool scope that raises outright (e.g.
-    Contracts with no structure configured) is not stamped at all."""
+    Contracts with no structure configured) is not stamped at all.
+
+    Cleans up `_call_cache` (see its own comment) on the way out, whether or
+    not a scope raised - a stale cached result from this run must never leak
+    into the next one."""
     results: dict[str, dict] = {}
-    for key in keys:
-        scope = _SCOPES_BY_KEY.get(key)
-        if scope is None:
-            results[key] = {"error": f"Unknown update scope '{key}'."}
-            continue
-        if not force and not is_due(key):
-            results[key] = {"skipped": "not due yet"}
-            continue
-        try:
-            results[key] = scope.run()
-            storage.set_esi_sync_time(key, dt.datetime.utcnow().isoformat(timespec="seconds"))
-        except ActionError as e:
-            results[key] = {"error": str(e)}
-        except Exception as e:  # noqa: BLE001 - one scope's bug must not block the others
-            log.exception("Update scope '%s' failed unexpectedly", key)
-            results[key] = {"error": str(e)}
+    try:
+        for key in keys:
+            scope = _SCOPES_BY_KEY.get(key)
+            if scope is None:
+                results[key] = {"error": f"Unknown update scope '{key}'."}
+                continue
+            if not force and not is_due(key):
+                results[key] = {"skipped": "not due yet"}
+                continue
+            try:
+                results[key] = scope.run()
+                storage.set_esi_sync_time(key, dt.datetime.utcnow().isoformat(timespec="seconds"))
+            except ActionError as e:
+                results[key] = {"error": str(e)}
+            except Exception as e:  # noqa: BLE001 - one scope's bug must not block the others
+                log.exception("Update scope '%s' failed unexpectedly", key)
+                results[key] = {"error": str(e)}
+    finally:
+        _call_cache.clear()
     return results
