@@ -147,9 +147,9 @@ def _invention_need_row_call_sites() -> list[tuple[str, int]]:
                 continue
             func = node.func
             if isinstance(func, ast.Name) and func.id == "InventionNeedRow":
-                hits.append((str(path.relative_to(REPO.parent)), node.lineno))
+                hits.append((path.relative_to(REPO.parent).as_posix(), node.lineno))
             elif isinstance(func, ast.Attribute) and func.attr == "InventionNeedRow":
-                hits.append((str(path.relative_to(REPO.parent)), node.lineno))
+                hits.append((path.relative_to(REPO.parent).as_posix(), node.lineno))
     return hits
 
 
