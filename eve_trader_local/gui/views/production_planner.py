@@ -34,14 +34,24 @@ decryptor (invent without one), not the same as Clear.
 so only the stock targets/manual stock/decryptor lists themselves are
 loaded on open; the planner output tables start empty until "Run Planner"
 is clicked.
+
+Seven tabs on one `QTabWidget` - Stock Targets, Manual Stock Overrides,
+Decryptor Overrides, then the four planner-output tables - rather than the
+three management lists sitting above the output tabs in their own
+fixed-height `QGroupBox`es (this view's previous shape). That old layout
+meant every table on screen fought the others for a sliver of vertical
+space and the three management tables were capped small enough to show
+barely a row at a time regardless of window size - putting every table in
+the same tab strip instead means whichever one is showing gets the view's
+*entire* height, same as any other single-table tab elsewhere in this GUI.
 """
 from __future__ import annotations
 
 import functools
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel,
-                               QLineEdit, QPushButton, QTabWidget, QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QLabel,
+                               QLineEdit, QPushButton, QTabWidget, QVBoxLayout, QWidget)
 
 from ...production import actions as production_actions
 from ...production.constants import DECRYPTORS
@@ -136,11 +146,10 @@ class ProductionPlannerView(BaseView):
         toolbar.addStretch(1)
         self.root_layout.addLayout(toolbar)
 
-        self.root_layout.addWidget(self._build_stock_target_box())
-        self.root_layout.addWidget(self._build_manual_stock_box())
-        self.root_layout.addWidget(self._build_decryptor_override_box())
-
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_stock_target_tab(), "Stock Targets")
+        self.tabs.addTab(self._build_manual_stock_tab(), "Manual Stock Overrides")
+        self.tabs.addTab(self._build_decryptor_override_tab(), "Decryptor Overrides")
         self.inventory_table = build_table(_INVENTORY_COLUMNS, column_widths=_INVENTORY_WIDTHS)
         self.build_table_widget = build_table(_BUILD_COLUMNS, column_widths=_BUILD_WIDTHS)
         self.buy_table = build_table(_BUY_COLUMNS, column_widths=_BUY_WIDTHS)
@@ -156,9 +165,9 @@ class ProductionPlannerView(BaseView):
         self._load_manual_stock()
         self._load_decryptor_overrides()
 
-    def _build_stock_target_box(self) -> QGroupBox:
-        box = QGroupBox("Stock Targets")
-        outer = QVBoxLayout(box)
+    def _build_stock_target_tab(self) -> QWidget:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
 
         form = QHBoxLayout()
         form.addWidget(QLabel("Item:"))
@@ -210,13 +219,12 @@ class ProductionPlannerView(BaseView):
         outer.addLayout(update_form)
 
         self.stock_target_table = build_table(_STOCK_COLUMNS, column_widths=_STOCK_WIDTHS)
-        self.stock_target_table.setMaximumHeight(160)
         outer.addWidget(self.stock_target_table)
-        return box
+        return tab
 
-    def _build_manual_stock_box(self) -> QGroupBox:
-        box = QGroupBox("Manual Stock Overrides")
-        outer = QVBoxLayout(box)
+    def _build_manual_stock_tab(self) -> QWidget:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
 
         form = QHBoxLayout()
         form.addWidget(QLabel("Item:"))
@@ -241,13 +249,12 @@ class ProductionPlannerView(BaseView):
         outer.addLayout(form)
 
         self.manual_stock_table = build_table(_MANUAL_STOCK_COLUMNS, column_widths=_MANUAL_STOCK_WIDTHS)
-        self.manual_stock_table.setMaximumHeight(160)
         outer.addWidget(self.manual_stock_table)
-        return box
+        return tab
 
-    def _build_decryptor_override_box(self) -> QGroupBox:
-        box = QGroupBox("Decryptor Overrides")
-        outer = QVBoxLayout(box)
+    def _build_decryptor_override_tab(self) -> QWidget:
+        tab = QWidget()
+        outer = QVBoxLayout(tab)
 
         form = QHBoxLayout()
         form.addWidget(QLabel("Item:"))
@@ -272,9 +279,8 @@ class ProductionPlannerView(BaseView):
         outer.addLayout(form)
 
         self.decryptor_override_table = build_table(_DECRYPTOR_COLUMNS, column_widths=_DECRYPTOR_WIDTHS)
-        self.decryptor_override_table.setMaximumHeight(160)
         outer.addWidget(self.decryptor_override_table)
-        return box
+        return tab
 
     def _load_stock_targets(self) -> None:
         # storage.load_stock_targets is a cheap local read (no network) -
